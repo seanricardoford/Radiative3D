@@ -202,6 +202,9 @@ protected:
   void ComputeMFPs();
   void ComputeDipoles();
   void ComputeQuads();
+  Real GetDirectionalMeanFreePath(raytype intype,
+                                  const R3::XYZ & incoming,
+                                  const R3::XYZ & vertical) const;
 
 
 public:
@@ -223,8 +226,16 @@ public:
 
   Real GetRandomPathLength(raytype intype, RandomEngine &);
   Real GetRandomPathLength(raytype intype);
+  Real GetRandomPathLength(raytype intype,
+                           const R3::XYZ & incoming,
+                           const R3::XYZ & vertical,
+                           RandomEngine &);
   Phonon GetRandomScatteredRelativePhonon(raytype intype, RandomEngine &);
   Phonon GetRandomScatteredRelativePhonon(raytype intype);
+  Phonon GetRandomScatteredRelativePhonon(raytype intype,
+                                          const R3::XYZ & incoming,
+                                          const R3::XYZ & vertical,
+                                          RandomEngine &);
 
 
   // ::::::::::::::::::::::::::::::::::::::::::

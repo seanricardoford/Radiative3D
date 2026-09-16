@@ -242,6 +242,18 @@ void process_option(CmdOpt & opt, ModelParams & params,
 
 
   ////////////////////////////////////////////////////////////////////
+  case CmdOpt::OPT_SCATTER_HORIZONTAL:
+    params.ScatteringHorizontalLength = opt.PopValue_Real();
+    break;
+
+
+  ////////////////////////////////////////////////////////////////////
+  case CmdOpt::OPT_SCATTER_VERTICAL:
+    params.ScatteringVerticalLength = opt.PopValue_Real();
+    break;
+
+
+  ////////////////////////////////////////////////////////////////////
   case CmdOpt::OPT_REPORTS:     // *** Reports (On or Off):
                                 // ***
     //
@@ -653,4 +665,3 @@ void process_option(CmdOpt & opt, ModelParams & params,
   }
 
 }
-

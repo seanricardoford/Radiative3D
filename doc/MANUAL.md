@@ -83,6 +83,10 @@ Radiative3D models energy propagation through both deterministic and statistical
 
   If specified, scattering deflections are "squashed," meaning that while scattering events still occur, they do not result in any deflection or other modifications (raytype or polarization changes) to the phonon's ray trajectory.  This is commonly used, sometimes in concert with <tt>--overridemfp</tt> for producing videos (which plot scattering events), to easily visualize "clean" (i.e. no scattering) wavefront propagation. Or in other words, this option changes scattering events into mere "checkpoint" events used to illustrate evolving wavefronts.
 
+* <tt>--scatter-horizontal=_L_H_</tt>, <tt>--scatter-vertical=_L_V_</tt>
+
+  Set global horizontal and vertical correlation lengths for an ellipsoidal scattering spectrum. Values use the model's length unit and are measured perpendicular and parallel to the local model vertical/radial direction, respectively. Both options must be supplied together and must be finite and positive. Omitting both preserves the correlation lengths supplied by each model cell.
+
 ##### _Event args:_
 
 * <tt>-L, --source-loc=_X_,_Y_,_Z_</tt>

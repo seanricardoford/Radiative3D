@@ -1,7 +1,9 @@
 // scatparams.cpp
 //
 #include <iostream>
+#include <algorithm>
 #include <cmath>      /* for pow(), sin(), cos(), tgamma() */
+#include <stdexcept>
 #include "scatparams.hpp"
 
 using namespace std;
@@ -27,6 +29,24 @@ Real ScatterParams::cm_omega = 1.0;         // Meaningless default - Actual
 bool ScatterParams::cm_omega_known = false; // value is to be set in the
                                             // Model constructor via a call
                                             // to SetFrequencyHertz()
+Real ScatterParams::cm_horizontal_correlation = 0.0;
+Real ScatterParams::cm_vertical_correlation = 0.0;
+
+void ScatterParams::SetGlobalCorrelationLengths(Real horizontal,
+                                                 Real vertical) {
+  if (horizontal == 0.0 && vertical == 0.0) {
+    cm_horizontal_correlation = 0.0;
+    cm_vertical_correlation = 0.0;
+    return;
+  }
+  if (!std::isfinite(horizontal) || !std::isfinite(vertical)
+      || horizontal <= 0.0 || vertical <= 0.0) {
+    throw(std::invalid_argument(
+        "Anisotropic correlation lengths must be finite and positive."));
+  }
+  cm_horizontal_correlation = horizontal;
+  cm_vertical_correlation = vertical;
+}
 
 //////
 // METHOD:  ScatterParams :: CompareRoughly()
@@ -39,11 +59,13 @@ Real ScatterParams::CompareRoughly(const ScatterParams & other) const {
   Real dnu = (other.nu - nu);
   Real deps = (other.eps - eps);
   Real da = (other.a - a);
+  Real dah = (other.ah - ah);
+  Real dav = (other.av - av);
   Real dkappa = (other.kappa - kappa);
   Real del = (other.el - el);
   Real dgam0 = (other.gam0 - gam0);
   Real sum = dnu*dnu + deps*deps 
-           + da*da + dkappa*dkappa 
+           + da*da + dah*dah + dav*dav + dkappa*dkappa
            + del*del + dgam0*dgam0;
   return sum;
 }
@@ -117,6 +139,51 @@ void ScatterParams::GSATO(S2::S2Point toa,
 
 }
 
+void ScatterParams::GSATO(const R3::XYZ & incoming,
+                          const R3::XYZ & vertical,
+                          S2::S2Point toa,
+                          Real & gpp, Real & gps,
+                          Real & gsp, Real & gss,
+                          Real & spol) const {
+  const Real pi4  = 4. * Geometry::Pi;
+  const Real el4  = pow(el,4);
+  const R3::XYZ in = incoming.UnitElse(R3::XYZ(0,0,1));
+  const R3::XYZ out = R3::OrthoAxes(in.Theta(), in.Phi(), 0.0)
+                        .Express(R3::OrthoAxes(toa.Theta(), toa.Phi(), 0.0))
+                        .E3().UnitElse(in);
+
+  Real xpp, xps, xsp, xss_psi, xss_zeta;
+  XSATO(toa, xpp, xps, xsp, xss_psi, xss_zeta);
+
+  const R3::XYZ qpp = out.ScaledBy(el/gam0)
+                    + in.ScaledBy(-el/gam0);
+  const R3::XYZ qps = out.ScaledBy(el)
+                    + in.ScaledBy(-el/gam0);
+  const R3::XYZ qsp = out.ScaledBy(el/gam0)
+                    + in.ScaledBy(-el);
+  const R3::XYZ qss = out.ScaledBy(el) + in.ScaledBy(-el);
+
+  const Real xpp2 = xpp * xpp;
+  const Real xps2 = xps * xps;
+  const Real xsp2 = xsp * xsp;
+  const Real xss_psi2 = xss_psi * xss_psi;
+  const Real xss_zeta2 = xss_zeta * xss_zeta;
+
+  gpp = (el4/pi4) * xpp2 * PowerSpectralDensity(qpp, vertical);
+  gps = (1./gam0) * (el4/pi4) * xps2
+      * PowerSpectralDensity(qps, vertical);
+  gsp = gam0 * (el4/pi4) * xsp2
+      * PowerSpectralDensity(qsp, vertical);
+  gss = (el4/pi4) * (xss_psi2 + xss_zeta2)
+      * PowerSpectralDensity(qss, vertical);
+
+  if (gpp < 1.e-30) gpp = 0.;
+  if (gps < 1.e-30) gps = 0.;
+  if (gsp < 1.e-30) gsp = 0.;
+  if (gss < 1.e-30) gss = 0.;
+  spol = atan2(xss_zeta, xss_psi);
+}
+
 
 //////
 // METHOD:  ScatterParams :: XSATO()
@@ -182,15 +249,25 @@ void ScatterParams::XSATO(S2::S2Point toa,
 //!    Returns: P(m) =  PSDF (Power Spectral Density Function)
 //!
 Real ScatterParams::PSATO(Real m) const {
-  const Real pi32  = pow(Geometry::Pi,1.5); // pi^(3/2)
+  return PowerSpectralDensity(R3::XYZ(m,0,0));
+}
 
-  const Real numer = (8.*pi32*eps*eps*a*a*a)  
-                   * tgamma(kappa+1.5)
-                   / tgamma(kappa);
+Real ScatterParams::PowerSpectralDensity(const R3::XYZ & q) const {
+  return PowerSpectralDensity(q, R3::XYZ(0,0,1));
+}
 
-  const Real denom = pow((1.+a*a*m*m),(kappa+1.5));
-
-  return numer/denom;
+Real ScatterParams::PowerSpectralDensity(const R3::XYZ & q,
+                                          const R3::XYZ & vertical) const {
+  const Real pi32 = pow(Geometry::Pi, 1.5);
+  const R3::XYZ up = vertical.UnitElse(R3::XYZ(0,0,1));
+  const Real qv = q.Dot(up);
+  const Real qh2 = std::max(static_cast<Real>(0.0),
+                            q.MagSquared() - qv*qv);
+  const Real numerator = (8.*pi32*eps*eps*ah*ah*av)
+                       * tgamma(kappa+1.5) / tgamma(kappa);
+  const Real denominator = pow(1. + ah*ah*qh2 + av*av*qv*qv,
+                               kappa+1.5);
+  return numerator / denominator;
 }
 
 

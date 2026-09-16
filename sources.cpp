@@ -4,7 +4,6 @@
 #include <vector>
 #include <iomanip>
 #include <cmath>
-#include <cstdlib>      /* rand(), srand(), RAND_MAX, exit() */
 #include "sources.hpp"
 #include "phonons.hpp"
 
@@ -171,4 +170,13 @@ Phonon PhononSource::GenerateRandomPhonon(raytype inray, RandomEngine & rng) {
 
 Phonon PhononSource::GenerateRandomPhonon(raytype inray) {
   return GenerateRandomPhonon(inray, RandomEngine::Default());
+}
+
+void PhononSource::PrepareForSimulation() {
+  for (std::size_t i = 0; i < mPDists.size(); ++i) {
+    mPDists[i].GetMagnitude();
+  }
+  for (std::size_t i = 0; i < mWholeProbs.size(); ++i) {
+    mWholeProbs[i].GetMagnitude();
+  }
 }

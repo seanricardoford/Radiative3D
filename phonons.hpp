@@ -18,6 +18,7 @@
 #define PHONONS_H_
 //
 #include <cmath>
+#include <atomic>
 #include "geom.hpp"
 #include "raytype.hpp"
 
@@ -132,7 +133,7 @@ private:
   // ::: Class-Static Member Variables  (Phonon Class) :::
   // :::::::::::::::::::::::::::::::::::::::::::::::::::::
 
-  static unsigned long cm_phonon_counter;  // Keep track inside class
+  static std::atomic<unsigned long> cm_phonon_counter;  // Keep track inside class
                                            // of how many phonons have
                                            // been constructed.
 
@@ -187,7 +188,7 @@ public:
     mType (pol_t == RAY_P ? RAY_P : RAY_S), 
     mpCell (0)
   { 
-    mSID = cm_phonon_counter++;
+    mSID = cm_phonon_counter.fetch_add(1);
     nudge_if_singular();
   }
 
@@ -203,7 +204,7 @@ public:
     mType (pol_t == RAY_P ? RAY_P : RAY_S),
     mpCell (0)
   {
-    mSID = cm_phonon_counter++;
+    mSID = cm_phonon_counter.fetch_add(1);
     nudge_if_singular();
   }
 

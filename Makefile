@@ -17,11 +17,15 @@ objects := $(addprefix $(objdir)/,$(objects))
 .PHONY : default cleanall clean neat anyway directories test .FORCE
 default : directories $(OUT_EXEC)
 
-test : directories tests/test_parallel_features
+test : directories tests/test_parallel_features tests/test_anisotropic_scattering
+	./tests/test_anisotropic_scattering
 	./tests/test_parallel_features
 
 tests/test_parallel_features : tests/test_parallel_features.cpp probability.cpp probability.hpp model.hpp typedefs.hpp
 	$(CPP) $< probability.cpp $(FLAGS) -I. -o $@
+
+tests/test_anisotropic_scattering : tests/test_anisotropic_scattering.cpp scatparams.cpp scatparams.hpp geom_r3.cpp geom_s2.cpp elastic.cpp
+	$(CPP) $< scatparams.cpp geom_r3.cpp geom_s2.cpp elastic.cpp $(FLAGS) -I. -o $@
 
 directories : $(objdir)
 

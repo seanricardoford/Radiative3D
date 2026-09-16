@@ -35,6 +35,8 @@ public:
     OPT_NUMBER,         // Number of Phonons
     OPT_WORKERS,        // Number of simulation workers
     OPT_SEED,           // Base random seed
+    OPT_SCATTER_HORIZONTAL, // Horizontal scattering correlation length
+    OPT_SCATTER_VERTICAL,   // Vertical scattering correlation length
     OPT_TTLIVE,         // Phonon Time-to-Live
     OPT_TOA,            // Take-off angle degree
 
@@ -268,6 +270,10 @@ CmdOpt::OpMap CmdOpt::init_map() {
   map["--workers"] =             OPT_WORKERS; //  ''
   map["--threads"] =             OPT_WORKERS; //  ''
   map["--seed"] =                    OPT_SEED; // Random seed
+  map["--scatter-horizontal"] =      OPT_SCATTER_HORIZONTAL;
+  map["--scattering-horizontal"] =   OPT_SCATTER_HORIZONTAL;
+  map["--scatter-vertical"] =        OPT_SCATTER_VERTICAL;
+  map["--scattering-vertical"] =     OPT_SCATTER_VERTICAL;
   map["-T"] =                    OPT_TTLIVE;  // Phonon Time to Live
   map["--timetolive"] =          OPT_TTLIVE;  //  ''
   map["-A"] =                       OPT_TOA;  // Take-off Angle degree

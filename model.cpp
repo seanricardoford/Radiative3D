@@ -104,6 +104,8 @@ void ModelParams::Output() const
     << ((TOA_Degree==def.TOA_Degree) ? "(default)" : "") << endl
     << "Frequency: " <<  Frequency << setw(31) 
     << ((Frequency == def.Frequency) ? "(default)" : "") << endl
+    << "Scattering horizontal length: " << ScatteringHorizontalLength << endl
+    << "Scattering vertical length: " << ScatteringVerticalLength << endl
     << "Workers: " << WorkerCount << setw(34)
     << ((WorkerCount == def.WorkerCount) ? "(default)" : "") << endl
     << "Random seed: " << RandomSeed << setw(28)
@@ -159,6 +161,12 @@ void ModelParams::OutputOctaveText(std::ostream * out) const {
   *out << "# name: Frequency \n"
        << "# type: scalar \n"
        << Frequency << " \n" << " \n";
+  *out << "# name: ScatteringHorizontalLength \n"
+       << "# type: scalar \n"
+       << ScatteringHorizontalLength << " \n" << " \n";
+  *out << "# name: ScatteringVerticalLength \n"
+       << "# type: scalar \n"
+       << ScatteringVerticalLength << " \n" << " \n";
   *out << "# name: WorkerCount \n"
        << "# type: scalar \n"
        << WorkerCount << " \n" << " \n";
@@ -296,6 +304,18 @@ Model::Model(const ModelParams & par) {
   //
 
   ScatterParams::SetFrequencyHertz(par.Frequency);
+  const bool horizontal_set = par.ScatteringHorizontalLength != 0.0;
+  const bool vertical_set = par.ScatteringVerticalLength != 0.0;
+  if (horizontal_set != vertical_set) {
+    throw(Runtime("Both horizontal and vertical scattering correlation lengths "
+                  "must be provided together."));
+  }
+  if (horizontal_set) {
+    ScatterParams::SetGlobalCorrelationLengths(
+        par.ScatteringHorizontalLength, par.ScatteringVerticalLength);
+  } else {
+    ScatterParams::SetGlobalCorrelationLengths(0.0, 0.0);
+  }
   MediumCell   ::SetFrequencyHertz(par.Frequency);
 
   //
@@ -450,6 +470,7 @@ Model::Model(const ModelParams & par) {
 
   mpEventSource = new ShearDislocation(eventMT, eventLoc);
   mpEventSource->Link(FindCellContainingPoint(eventLoc));
+  mpEventSource->PrepareForSimulation();
                             // Create EventSource and inform it of
                             // the MediumCell in which it resides.
   Seismometer::SetEventParameters(eventLoc, par.EventSourceMT);

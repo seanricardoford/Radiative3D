@@ -2,13 +2,13 @@
 //
 #include <iostream>
 #include <cmath>
-#include <cstdlib>      /* rand(), RAND_MAX */
 #include <cassert>
 #include "phonons.hpp"
 #include "media.hpp"
 #include "rtcoef.hpp"
 #include "scatterers.hpp"
 #include "dataout.hpp"
+#include "ecs.hpp"
 
 //
 // CLASS IMPLEMENTATION:  Phonon
@@ -28,7 +28,7 @@
 // CLASS-STATIC PARAMETERS:
 //
 
-unsigned long Phonon::cm_phonon_counter = 0;
+std::atomic<unsigned long> Phonon::cm_phonon_counter(0);
 unsigned long Phonon::cm_loop_concern = 1048576; // (2^20, ~1M loops)
 Real Phonon::cm_slow_concern = 0.001;
 Real Phonon::cm_min_theta = 0.0000001;
@@ -606,7 +606,10 @@ void Phonon::Propagate(RandomEngine & rng) {
     }
 
 
-    Real scatlen = mpScat->GetRandomPathLength(mType, rng);
+    const R3::XYZ incoming_direction(mDir);
+    const R3::XYZ local_vertical = ECS.GetUp(mLoc);
+    Real scatlen = mpScat->GetRandomPathLength(
+        mType, incoming_direction, local_vertical, rng);
     Real edgelen = travel.PathLength;
 
 
@@ -616,7 +619,8 @@ void Phonon::Propagate(RandomEngine & rng) {
       travel = mpCell->AdvanceLength(mType, scatlen, mLoc, mDir);
       this->Move(travel);     // Move us to the scatterer
 
-      Phonon rph = mpScat->GetRandomScatteredRelativePhonon(mType, rng);
+      Phonon rph = mpScat->GetRandomScatteredRelativePhonon(
+          mType, incoming_direction, local_vertical, rng);
       this->Transform(rph);   // Re-orient and re-raytype us according
                               // the results of the scattering event
                               // (coded in 'rph').

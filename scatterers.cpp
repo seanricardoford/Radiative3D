@@ -6,7 +6,6 @@
 #include "scatterers.hpp"
 #include "phonons.hpp"
 
-                        /* Assume srand() has been called elsewhere */
 
 using namespace std;
 
@@ -103,6 +102,7 @@ Scatterer::Scatterer(ScatterParams par) :
 
   PopulateProbDists(par);   // Populate probability distributions
   PopulateWholeProbs();     //
+  PrepareForSimulation();   // Freeze lazy probability integration before workers.
 
   if (!cm_MFPOverride_b) {  // Populate Mean Free Path values
     ComputeMFPs();          //
@@ -310,6 +310,32 @@ Real Scatterer::GetRandomPathLength(raytype intype) {
   return GetRandomPathLength(intype, RandomEngine::Default());
 }
 
+Real Scatterer::GetDirectionalMeanFreePath(
+    raytype intype, const R3::XYZ & incoming,
+    const R3::XYZ & vertical) const {
+  Real inverse_mfp = 0.0;
+  for (int k = 0; k < nTOA; ++k) {
+    Real gpp, gps, gsp, gss, spol;
+    mParams.GSATO(incoming, vertical, (*pTOA)[k],
+                  gpp, gps, gsp, gss, spol);
+    inverse_mfp += (intype == RAY_P) ? (gpp + gps) : (gsp + gss);
+  }
+  inverse_mfp /= nTOA;
+  return inverse_mfp > 0.0 ? 1.0 / inverse_mfp
+                           : mMeanFreeP[intype];
+}
+
+Real Scatterer::GetRandomPathLength(raytype intype,
+                                     const R3::XYZ & incoming,
+                                     const R3::XYZ & vertical,
+                                     RandomEngine & rng) {
+  if (cm_MFPOverride_b || !mParams.IsAnisotropic()) {
+    return GetRandomPathLength(intype, rng);
+  }
+  Real r = 1.0 - rng.Uniform01();
+  return -std::log(r) * GetDirectionalMeanFreePath(intype, incoming, vertical);
+}
+
 
 //////
 // METHOD:  Scatterer :: GetRandomScatteredRelativePhonon()
@@ -370,6 +396,84 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype,
 
 Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
   return GetRandomScatteredRelativePhonon(intype, RandomEngine::Default());
+}
+
+Phonon Scatterer::GetRandomScatteredRelativePhonon(
+    raytype intype, const R3::XYZ & incoming,
+    const R3::XYZ & vertical, RandomEngine & rng) {
+  if (!mParams.IsAnisotropic()) {
+    return GetRandomScatteredRelativePhonon(intype, rng);
+  }
+
+  if (cm_NoDeflect_b) {
+    Phonon nodeflect(S2::ThetaPhi(0,0), intype);
+    nodeflect.SetPolarization(0);
+    return nodeflect;
+  }
+
+  std::vector<Real> totals(NUM_OUTTYPES, 0.0);
+  std::vector< std::vector<Real> > weights(
+      NUM_OUTTYPES, std::vector<Real>(nTOA, 0.0));
+  for (int k = 0; k < nTOA; ++k) {
+    Real gpp, gps, gsp, gss, spol;
+    mParams.GSATO(incoming, vertical, (*pTOA)[k],
+                  gpp, gps, gsp, gss, spol);
+    weights[GPP][k] = gpp;
+    weights[GPS][k] = gps;
+    weights[GSP][k] = gsp;
+    weights[GSS][k] = gss;
+    totals[GPP] += gpp;
+    totals[GPS] += gps;
+    totals[GSP] += gsp;
+    totals[GSS] += gss;
+  }
+
+  if (intype == RAY_P) {
+    totals[GSP] = 0.0;
+    totals[GSS] = 0.0;
+  } else {
+    totals[GPP] = 0.0;
+    totals[GPS] = 0.0;
+  }
+
+  Real total = 0.0;
+  for (int conv = 0; conv < NUM_OUTTYPES; ++conv) total += totals[conv];
+  if (total <= 0.0) {
+    return GetRandomScatteredRelativePhonon(intype, rng);
+  }
+  Real selection = rng.Uniform01() * total;
+  out_types_e conv = GSS;
+  Real cumulative = 0.0;
+  for (int candidate = 0; candidate < NUM_OUTTYPES; ++candidate) {
+    cumulative += totals[candidate];
+    if (selection <= cumulative) {
+      conv = static_cast<out_types_e>(candidate);
+      break;
+    }
+  }
+
+  Real direction_selection = rng.Uniform01() * totals[conv];
+  cumulative = 0.0;
+  Index toa_index = nTOA - 1;
+  for (int k = 0; k < nTOA; ++k) {
+    cumulative += weights[conv][k];
+    if (direction_selection <= cumulative) {
+      toa_index = k;
+      break;
+    }
+  }
+
+  raytype out_types[NUM_OUTTYPES] = {RAY_P, RAY_S, RAY_P, RAY_S};
+  Real pol = 0.0;
+  if (conv == GSS) {
+    Real gpp, gps, gsp, gss, spol;
+    mParams.GSATO(incoming, vertical, (*pTOA)[toa_index],
+                  gpp, gps, gsp, gss, spol);
+    pol = spol;
+  }
+  Phonon result((*pTOA)[toa_index], out_types[conv]);
+  result.SetPolarization(pol);
+  return result;
 }
 
 
@@ -438,10 +542,10 @@ void Scatterer::PrintAllScatteringStats() {     // STATIC METHOD
            ((cm_NoDeflect_b) ? "Deflections" : "None"))
        << std::endl;
   cout << "#  "
-       << "    nu    eps        a    kappa         el       gam0    "
+       << "    nu    eps       ah       av    kappa         el       gam0    "
        << "     address      MFP (P)    MFP (S)      DM (P)    DM (S)\n";
   cout << "#  "
-       << "====== ====== ======== ======== ========== ==========    "
+       << "====== ====== ======== ======== ======== ========== ==========    "
        << "============    =========  =========    ========  ========\n";
 
   while (next != 0) {
@@ -473,7 +577,8 @@ void Scatterer::PrintStats() {
        << setprecision(6)
        << setw(width1-2) << mParams.GetNu() << " "
        << setw(width1-2) << mParams.GetEps() << " "
-       << setw(width1)   << mParams.GetA() << " "
+       << setw(width1)   << mParams.GetHorizontalCorrelationLength() << " "
+       << setw(width1)   << mParams.GetVerticalCorrelationLength() << " "
        << setw(width1)   << mParams.GetKappa() << " "
        << setw(width1+2) << mParams.GetL() << " "
        << setw(width1+2) << mParams.GetGam0() << "    "

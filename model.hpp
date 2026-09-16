@@ -124,6 +124,8 @@ public:
                                  //  max propagation sim-time before a
                                  //  phonon is to be abandoned
   Real               Frequency;  // Phonon frequency in Hertz
+  Real               ScatteringHorizontalLength;
+  Real               ScatteringVerticalLength;
   unsigned           WorkerCount; // Number of simulation workers
   std::uint64_t      RandomSeed;  // Base seed for deterministic streams
   Real        TimeBinsPerCycle;  // Establishes bin-width for the
@@ -174,6 +176,8 @@ public:
     NumPhonons       ( 10                  ), // 
     PhononTTL        ( 60.0                ), // Seconds
     Frequency        ( 4.0                 ), // Hertz
+    ScatteringHorizontalLength ( 0.0       ), // Use model isotropic length
+    ScatteringVerticalLength   ( 0.0       ), // Use model isotropic length
     WorkerCount      ( std::thread::hardware_concurrency() == 0
                        ? 1 : std::thread::hardware_concurrency() ),
     RandomSeed       ( 0x72616433645f7365ULL ),

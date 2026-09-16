@@ -164,6 +164,8 @@ public:
   Phonon GenerateRandomPhonon(raytype inray, RandomEngine &);
   Phonon GenerateRandomPhonon(raytype inray);
 
+  void PrepareForSimulation();
+
   // ::::::::::::::::::::::::::::::::::::::::::::
   // ::: Output Methods  (PhononSource Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::::

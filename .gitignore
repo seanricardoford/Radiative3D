@@ -14,3 +14,5 @@ data/
 # Focused test executable artifacts
 tests/test_parallel_features
 tests/test_parallel_features.dSYM/
+tests/test_anisotropic_scattering
+tests/test_anisotropic_scattering.dSYM/

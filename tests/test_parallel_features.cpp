@@ -9,6 +9,8 @@ int main() {
   const ModelParams defaults;
   assert(defaults.WorkerCount >= 1);
   assert(defaults.RandomSeed != 0);
+  assert(defaults.ScatteringHorizontalLength == 0.0);
+  assert(defaults.ScatteringVerticalLength == 0.0);
 
   const std::uint64_t seed = 0x123456789abcdef0ULL;
 

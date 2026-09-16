@@ -51,6 +51,8 @@ private:
   Real  nu;         // density vs. velocity pert. scaling (see 4.48)
   Real  eps;        // RMS velocity perturbation (fractional)
   Real  a;          // correlation distance
+  Real  ah;         // horizontal correlation distance
+  Real  av;         // vertical correlation distance
   Real  kappa;      // von Karman parameter for PSDF
 
   // Values for the following are computed during construction from
@@ -72,6 +74,8 @@ private:
                               // be computed. Ideally, this should be
                               // set prior to constructing any
                               // ScatterParams object.
+  static Real cm_horizontal_correlation;
+  static Real cm_vertical_correlation;
 
 public:
 
@@ -83,6 +87,8 @@ public:
     cm_omega = 2.0 * freq * Geometry::Pi;       // cm_omega member
     cm_omega_known = true;
   }
+
+  static void SetGlobalCorrelationLengths(Real horizontal, Real vertical);
 
 
 public:
@@ -126,6 +132,10 @@ public:
     nu    ( hs.nu()    ),
     eps   ( hs.eps()   ),
     a     ( hs.a()     ),
+    ah    ( cm_horizontal_correlation > 0
+             ? cm_horizontal_correlation : hs.a() ),
+    av    ( cm_vertical_correlation > 0
+             ? cm_vertical_correlation : hs.a() ),
     kappa ( hs.kappa() ),
     el    ( cm_omega/vpvs.Vs() ),   // Depends on frequency
     gam0  ( vpvs.Vp()/vpvs.Vs()) {
@@ -144,20 +154,37 @@ public:
     nu    ( hs.nu()    ),
     eps   ( hs.eps()   ),
     a     ( hs.a()     ),
+    ah    ( hs.a()     ),
+    av    ( hs.a()     ),
     kappa ( hs.kappa() ),
     el    ( el   ),
     gam0  ( gam0 )
+  {}
+
+  ScatterParams(Elastic::HetSpec hs,
+                Real el, Real gam0,
+                Real horizontal, Real vertical) :
+    nu    ( hs.nu()    ),
+    eps   ( hs.eps()   ),
+    a     ( hs.a()     ),
+    ah    ( horizontal ),
+    av    ( vertical   ),
+    kappa ( hs.kappa() ),
+    el    ( el         ),
+    gam0  ( gam0       )
   {}
 
   // These ones represent special test cases:
 
   ScatterParams(SATO_TEST_e dummy) :  // Params intended to replicate
     nu(0.8), eps(1.0), a(0.1),        // figure 4.8 in Sato & Fehler.
+    ah(0.1), av(0.1),
     kappa(0.5), el(1.0), gam0(1.7321)
   {}
 
   ScatterParams(SHEARER_TEST_e dummy) : // Params intended to be
     nu(0.8), eps(1.0), a(1.0),          // similar to those used by
+    ah(1.0), av(1.0),
     kappa(0.5), el(1.0),                // Shearer and Earle, 2004
     gam0(1.7321)                        // (TODO: Find out what those
   {}                                    // parameters would be - these
@@ -166,6 +193,7 @@ public:
 
   ScatterParams(SP_FORWARD_200_e dummy) : // Results in strong
     nu(0.8), eps(0.01), a(4.0),           // forward scattering and
+    ah(4.0), av(4.0),
     kappa(0.8), el(2.17411),              // MFP's (P,S) of ~600,
     gam0(1.7301)                          // ~200.
   {}
@@ -180,6 +208,9 @@ public:
   Real GetNu() const {return nu;}
   Real GetEps() const {return eps;}
   Real GetA() const {return a;}
+  Real GetHorizontalCorrelationLength() const {return ah;}
+  Real GetVerticalCorrelationLength() const {return av;}
+  bool IsAnisotropic() const {return ah != av;}
   Real GetKappa() const {return kappa;}
   Real GetL() const {return el;}
   Real GetGam0() const {return gam0;}
@@ -227,6 +258,13 @@ public:
               Real & gsp, Real & gss, 
               Real & spol) const;
 
+  void GSATO (const R3::XYZ & incoming,
+              const R3::XYZ & vertical,
+              S2::S2Point toa,
+              Real & gpp, Real & gps,
+              Real & gsp, Real & gss,
+              Real & spol) const;
+
   void XSATO (S2::S2Point toa,          // (A`la PSPhonon)
               Real & xpp, Real & xps,
               Real & xsp, Real & xss_psi, 
@@ -235,6 +273,10 @@ public:
   Real PSATO (Real m) const;            // Sato P function, kinda like
                                         // EXPSATO in PSPhonon, but we
                                         // use von Karman autocor
+
+  Real PowerSpectralDensity(const R3::XYZ & q) const;
+  Real PowerSpectralDensity(const R3::XYZ & q,
+                            const R3::XYZ & vertical) const;
 
 
 private:
