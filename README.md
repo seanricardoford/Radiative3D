@@ -25,6 +25,7 @@ Radiative3D builds with GCC on MacOS (OS X), Linux, and Raspbian.  (And perhaps 
 $ git clone https://github.com/christophersanborn/Radiative3D.git
 $ cd Radiative3D
 $ make
+$ make test
 ```
 
 Results in a binary named `main`.
@@ -37,4 +38,20 @@ $ ./main [args]
 
 User Manual here: [Radiative3D Manual Page](doc/MANUAL.md)
 
-There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data.  The "do-scripts" are writtin in BASH and may depend on the installation of additional command line tools.  (See Manual Page.)
+There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data.  The "do-scripts" are written in BASH and may depend on the installation of additional command line tools.  (See Manual Page.)
+
+## Current capabilities
+
+- Shared-memory simulation workers are selected with `--workers=N` or
+  `--threads=N`; use `--workers=1` for a serial reference run.
+- Reproducible per-phonon random streams are selected with `--seed=VALUE`.
+- Ellipsoidal anisotropic scattering is configured with paired
+  `--scatter-horizontal=L_H` and `--scatter-vertical=L_V` options.
+- The focused regression suite is available through `make test`.
+
+## Development handoff
+
+The current development state, architecture, reproducibility rules, testing
+workflow, and follow-up roadmap are documented in
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md), [`AGENTS.md`](AGENTS.md), and
+[`PLANS.md`](PLANS.md).

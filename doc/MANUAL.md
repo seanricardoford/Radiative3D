@@ -85,7 +85,7 @@ Radiative3D models energy propagation through both deterministic and statistical
 
 * <tt>--scatter-horizontal=_L_H_</tt>, <tt>--scatter-vertical=_L_V_</tt>
 
-  Set global horizontal and vertical correlation lengths for an ellipsoidal scattering spectrum. Values use the model's length unit and are measured perpendicular and parallel to the local model vertical/radial direction, respectively. Both options must be supplied together and must be finite and positive. Omitting both preserves the correlation lengths supplied by each model cell.
+  Set global horizontal and vertical correlation lengths for an ellipsoidal scattering spectrum. Values use the model's length unit and are measured perpendicular and parallel to the local model vertical/radial direction, respectively. Both options must be supplied together for a nonzero override and must be finite and positive. An explicit `0,0` pair is equivalent to omitting both options and preserves the correlation lengths supplied by each model cell.
 
 ##### _Event args:_
 
