@@ -7,7 +7,7 @@ Before changing code, read these files in order:
 1. `AGENTS.md` — repository rules.
 2. `PLANS.md` — current baseline, completed work, and prioritized follow-up.
 3. `docs/DEVELOPMENT.md` — architecture, runtime behavior, test coverage, and known limitations.
-4. `doc/MANUAL.md` — user-facing command-line semantics.
+4. `docs/MANUAL.md` — user-facing command-line semantics.
 
 Then inspect the worktree and branch before making assumptions:
 
@@ -47,7 +47,7 @@ user explicitly requests it. Create a new feature branch from the current
   propagation code. Per-phonon stochastic results are intended to be stable;
   report-line ordering is not guaranteed when multiple workers are active.
 - Preserve documented defaults unless a behavior change is intentional, tested,
-  and documented in `doc/MANUAL.md`.
+  and documented in `docs/MANUAL.md`.
 
 ## Parallel execution rules
 
@@ -94,7 +94,7 @@ user explicitly requests it. Create a new feature branch from the current
 
 ## Documentation and scripts
 
-- Update `doc/MANUAL.md` for every user-visible option or behavior change.
+- Update `docs/MANUAL.md` for every user-visible option or behavior change.
 - Update `docs/DEVELOPMENT.md` when architecture, testing, limitations, or
   integration state changes.
 - Keep `PLANS.md` current after completing or superseding roadmap work.

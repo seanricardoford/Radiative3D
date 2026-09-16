@@ -22,7 +22,7 @@ make test
 ```
 
 The executable is `main`. Build artifacts and focused test executables are
-ignored by Git. `doc/MANUAL.md` is the authoritative user-facing option
+ignored by Git. `docs/MANUAL.md` is the authoritative user-facing option
 reference; the scripts beginning with `do-` are larger experiment recipes and
 may require Bash, Octave, GMT, SAC, or other local tools.
 
@@ -39,7 +39,7 @@ may require Bash, Octave, GMT, SAC, or other local tools.
 | Output | `dataout.*` | Micro-reports, counters, seismometer bins, post-simulation traces and metadata. |
 | User models | `user.cpp`, `user_*_inc.cpp` | Compiled-in model constructors and model-selection logic. |
 | Tests | `tests/test_parallel_features.cpp`, `tests/test_anisotropic_scattering.cpp` | Focused assertion-based regression executables invoked by `make test`. |
-| User docs and recipes | `README.md`, `doc/MANUAL.md`, `do-*.sh`, `scripts/`, `vis/` | Usage, experiment setup, post-processing, and visualization. |
+| User docs and recipes | `README.md`, `docs/MANUAL.md`, `do-*.sh`, `scripts/`, `vis/` | Usage, experiment setup, post-processing, and visualization. |
 
 ## Execution flow
 
@@ -136,7 +136,7 @@ yet validate a full propagated model statistically.
 
 ## Command-line and experiment workflow
 
-For the complete option list, read `doc/MANUAL.md` or run:
+For the complete option list, read `docs/MANUAL.md` or run:
 
 ```bash
 make -j2

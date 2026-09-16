@@ -36,7 +36,7 @@ Run with:
 $ ./main [args]
 ```
 
-User Manual here: [Radiative3D Manual Page](doc/MANUAL.md)
+User Manual here: [Radiative3D Manual Page](docs/MANUAL.md)
 
 There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data.  The "do-scripts" are written in BASH and may depend on the installation of additional command line tools.  (See Manual Page.)
 

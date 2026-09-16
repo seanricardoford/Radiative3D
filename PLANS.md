@@ -17,7 +17,7 @@
 - Use explicit seeded random streams for stochastic tests and comparisons.
 - Keep model units and local vertical/radial coordinate conventions explicit.
 - Run `make -j2` and `make test` after simulation or build changes.
-- Update `doc/MANUAL.md`, `docs/DEVELOPMENT.md`, and this file when public behavior or project state changes.
+- Update `docs/MANUAL.md`, `docs/DEVELOPMENT.md`, and this file when public behavior or project state changes.
 
 ---
 
@@ -80,7 +80,7 @@ Primary files: `model.cpp`, `model.hpp`, `probability.cpp`, `probability.hpp`,
 
 Primary files: `scatparams.cpp`, `scatparams.hpp`, `scatterers.cpp`,
 `scatterers.hpp`, `model.cpp`, `model.hpp`, `cmdline.cpp`, `cmdline.hpp`, and
-`doc/MANUAL.md`.
+`docs/MANUAL.md`.
 
 ## Verification baseline
 
@@ -128,7 +128,7 @@ stable simulation outputs or counters and does not depend on scheduling order.
 **Files:**
 - Create or extend: a focused command-line regression test.
 - Modify: `cmdline.cpp`, `main.cpp`, or `Makefile` only if the test reveals an actual parsing/validation gap.
-- Modify: `doc/MANUAL.md` for any corrected behavior.
+- Modify: `docs/MANUAL.md` for any corrected behavior.
 
 **Cases:** `--workers=0`, a negative worker count, only one anisotropic length,
 zero/negative/NaN/Infinity anisotropic lengths, equal anisotropic lengths, and

@@ -179,7 +179,7 @@ void print_help() {
   std::ostream * out = &std::cout;
 
   *out << "\nRadiative3D Manual Page is available at:\n"
-       << "https://github.com/christophersanborn/Radiative3D/blob/master/doc/MANUAL.md\n\n";
+       << "https://github.com/christophersanborn/Radiative3D/blob/master/docs/MANUAL.md\n\n";
 
   *out << "Recognized command-line options:\n\n";
 
