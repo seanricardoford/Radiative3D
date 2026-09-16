@@ -161,6 +161,7 @@ public:
   // ::: Produce-Something Methods  (PhononSource) :::
   // :::::::::::::::::::::::::::::::::::::::::::::::::
 
+  Phonon GenerateRandomPhonon(raytype inray, RandomEngine &);
   Phonon GenerateRandomPhonon(raytype inray);
 
   // ::::::::::::::::::::::::::::::::::::::::::::

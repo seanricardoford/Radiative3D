@@ -221,6 +221,27 @@ void process_option(CmdOpt & opt, ModelParams & params,
 
 
   ////////////////////////////////////////////////////////////////////
+  case CmdOpt::OPT_WORKERS:     // *** Simulation workers:
+                                // ***
+    {
+      int workers = opt.PopValue_Integer();
+      if (workers <= 0) {
+        throw(Runtime("Worker count must be greater than zero."));
+      }
+      params.WorkerCount = static_cast<unsigned>(workers);
+    }
+    break;
+
+
+  ////////////////////////////////////////////////////////////////////
+  case CmdOpt::OPT_SEED:        // *** Random seed:
+                                // ***
+    params.RandomSeed = static_cast<std::uint64_t>(
+        opt.PopValue_UnsignedLongLong());
+    break;
+
+
+  ////////////////////////////////////////////////////////////////////
   case CmdOpt::OPT_REPORTS:     // *** Reports (On or Off):
                                 // ***
     //
@@ -632,5 +653,4 @@ void process_option(CmdOpt & opt, ModelParams & params,
   }
 
 }
-
 

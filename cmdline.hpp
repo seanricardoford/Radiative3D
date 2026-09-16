@@ -33,6 +33,8 @@ public:
     OPT_UNK,            // Unknown tokens
     OPT_FREQ,           // Frequency
     OPT_NUMBER,         // Number of Phonons
+    OPT_WORKERS,        // Number of simulation workers
+    OPT_SEED,           // Base random seed
     OPT_TTLIVE,         // Phonon Time-to-Live
     OPT_TOA,            // Take-off angle degree
 
@@ -214,6 +216,7 @@ public:
   Real PopValue_Real(Real defval)  {return PopValue_Real(false,defval);}
   Text PopValue_Text(Text defval)  {return PopValue_Text(false,defval);}
   int PopValue_Integer(bool required=true, int defval=0);
+  unsigned long long PopValue_UnsignedLongLong();
   Real PopValue_Real(bool required=true, Real defval=0);
   Text PopValue_Text(bool required=true, Text defval="");
   R3::XYZ PopValue_XYZ();
@@ -261,6 +264,10 @@ CmdOpt::OpMap CmdOpt::init_map() {
   map["--frequency"] =             OPT_FREQ;  //  ''
   map["-N"] =                    OPT_NUMBER;  // Number of Phonons
   map["--num-phonons"] =         OPT_NUMBER;  //  ''
+  map["-W"] =                    OPT_WORKERS; // Simulation workers
+  map["--workers"] =             OPT_WORKERS; //  ''
+  map["--threads"] =             OPT_WORKERS; //  ''
+  map["--seed"] =                    OPT_SEED; // Random seed
   map["-T"] =                    OPT_TTLIVE;  // Phonon Time to Live
   map["--timetolive"] =          OPT_TTLIVE;  //  ''
   map["-A"] =                       OPT_TOA;  // Take-off Angle degree

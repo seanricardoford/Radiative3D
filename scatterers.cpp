@@ -2,7 +2,7 @@
 //
 #include <cmath>        /* log(), sqrt() */
 #include <iomanip>      /* setw() */
-#include <cstdlib>      /* rand(), RAND_MAX */
+#include <cstdlib>
 #include "scatterers.hpp"
 #include "phonons.hpp"
 
@@ -294,9 +294,9 @@ void Scatterer::SetMeanFreePathsPS(Real mfpP, Real mfpS) {
 //          function will tend towards the values stored in
 //          MeanFreePath[].
 //
-Real Scatterer::GetRandomPathLength(raytype intype) {
+Real Scatterer::GetRandomPathLength(raytype intype, RandomEngine & rng) {
 
-  Real r = ((Real) rand()) / ((Real) RAND_MAX + 1); 
+  Real r = rng.Uniform01();
                 // A double in the range [0,1)
   r = 1.0 - r;  // A double in the range (0,1]
                 // TODO: This is a little ugly. Maybe compute r like
@@ -304,6 +304,10 @@ Real Scatterer::GetRandomPathLength(raytype intype) {
 
   return -log(r) * mMeanFreeP[intype];
 
+}
+
+Real Scatterer::GetRandomPathLength(raytype intype) {
+  return GetRandomPathLength(intype, RandomEngine::Default());
 }
 
 
@@ -315,7 +319,8 @@ Real Scatterer::GetRandomPathLength(raytype intype) {
 //          phonon can be used to "bend and rotate" the path of the
 //          incoming phonon.
 //
-Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
+Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype,
+                                                   RandomEngine & rng) {
   S2::S2Set & toa = (*pTOA);             // Alias
   raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
                           RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
@@ -329,11 +334,12 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
   }                               // Otherwise, continue:
 
   // Get output conversion type and corresponding output ray type:
-  out_types_e conv = (out_types_e) mWholeProbs[intype].GetRandomIndex();
+  out_types_e conv =
+      (out_types_e) mWholeProbs[intype].GetRandomIndex(rng);
   raytype ort = out_types[conv];
 
   // Get take-off-angle index for output ray:
-  Index toa_index = mPDists[conv].GetRandomIndex();
+  Index toa_index = mPDists[conv].GetRandomIndex(rng);
 
   // Ray polariztion depends on conversion type:
   Real pol = 0;
@@ -360,6 +366,10 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
 
   return phon;
 
+}
+
+Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
+  return GetRandomScatteredRelativePhonon(intype, RandomEngine::Default());
 }
 
 

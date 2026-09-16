@@ -22,6 +22,7 @@
 #include "geom.hpp"
 #include "raytype.hpp"
 #include "complex.hpp"
+#include "probability.hpp"
 
 //////
 // CLASSES: Definitions
@@ -282,11 +283,13 @@ public:
   //                generation.
   //
 
+  raytype ChooseSPolType(const R3::XYZ & pdom, RandomEngine &) const;
   raytype ChooseSPolType(const R3::XYZ & pdom) const;
                     // Given a polarization direction, choose SH or SV
                     // based on fractional representation.
 
-  void Choose();    // Select an outcome based on the relative
+  void Choose(RandomEngine &); // Select using the supplied random stream.
+  void Choose();    // Diagnostic convenience overload.
                     // probabilities coded in mProb[].
 
   raytype GetChosenRaytype() const;   // Reveal the raytype of the

@@ -84,6 +84,7 @@ public:
   // ::: Do-Something Methods  (ShearDislocation Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
+  Phonon GenerateEventPhonon(RandomEngine &);
   Phonon GenerateEventPhonon();
 
 };

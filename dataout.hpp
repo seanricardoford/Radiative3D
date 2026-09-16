@@ -23,6 +23,7 @@
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <mutex>
 #include <atomic>
 #include "geom.hpp"
 #include "tensors.hpp"
@@ -295,6 +296,8 @@ protected:
             // is responsible for allocating Seismometers with "new".
             // We shrink it in the destructor, which deletes the
             // Seismometers.)
+
+  std::mutex mReportMutex; // Protects report streams and accumulators.
 
 
 public:

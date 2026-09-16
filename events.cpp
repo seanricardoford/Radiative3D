@@ -108,9 +108,9 @@ ShearDislocation::ShearDislocation(Tensor::Tensor MT, R3::XYZ Loc) :
 //
 
 
-Phonon ShearDislocation::GenerateEventPhonon() {
+Phonon ShearDislocation::GenerateEventPhonon(RandomEngine & rng) {
 
-  Phonon P = GenerateRandomPhonon(RAY_NA);
+  Phonon P = GenerateRandomPhonon(RAY_NA, rng);
 
   P.SetLocation(mLoc);    // Inform phonon of its location
   P.InsertInto(mpCell);   // And in which cell it is
@@ -123,3 +123,6 @@ Phonon ShearDislocation::GenerateEventPhonon() {
 
 }
 
+Phonon ShearDislocation::GenerateEventPhonon() {
+  return GenerateEventPhonon(RandomEngine::Default());
+}

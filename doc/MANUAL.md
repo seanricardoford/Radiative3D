@@ -25,6 +25,14 @@ Radiative3D models energy propagation through both deterministic and statistical
 
   Number of phonons to emit from source before exiting.  Can take a multiplier suffix of `K`, `M`, or `B` for thousand, million, and billion, respectively.  E.g., use `--num-phonons=10M` for ten million phonons.
 
+* <tt>-W, --workers=_N_</tt> (alias: <tt>--threads=_N_</tt>)
+
+  Number of shared-memory simulation workers. The default is the detected hardware concurrency. Use `--workers=1` for a serial run. Worker counts must be positive.
+
+* <tt>--seed=_SEED_</tt>
+
+  Base random seed. Each phonon derives an independent deterministic stream from this seed and its stable phonon index, so changing worker count does not change the random sequence assigned to a phonon. Decimal and `0x`-prefixed hexadecimal values are accepted.
+
 * <tt>-T, --timetolive=_time_</tt>
 
   Sets the time to live for each phonon, or in other words the amount of sim-time to model.

@@ -1,5 +1,6 @@
 // cmdline.cpp
 //
+#include <cerrno>
 #include <cstdlib>
 #include "cmdline.hpp"
 
@@ -346,6 +347,23 @@ int CmdOpt::PopValue_Integer(bool required, int retval) {
   return retval;
 }//
 //
+unsigned long long CmdOpt::PopValue_UnsignedLongLong() {
+  Text value = GetValueBeforeSep();
+  if (value.empty()) {
+    throw(Runtime("Required value not provided; expected unsigned integer value."));
+  }
+
+  errno = 0;
+  char *end = 0;
+  unsigned long long result = strtoull(value.c_str(), &end, 0);
+  if (errno != 0 || end == value.c_str() || *end != '\0') {
+    throw(Runtime("Invalid value: cannot interpret '" + value
+                  + "' as an unsigned integer."));
+  }
+  KillValueThroughSep();
+  return result;
+}
+
 bool CmdOpt::PeekValue_IsInteger() const {
   try {PeekValue_Integer(true,0);}
   catch(...) {return false;}
@@ -377,7 +395,8 @@ int CmdOpt::PeekValue_Integer(bool required,  // Should empty mValue throw?
     default:
       peektxt.append(1,suffix);         // Restore last char if not a suffix
       break;
-    }
+}
+
     if (ValidInteger(peektxt)) {        // Check validity of peektxt as int
       defval = atoi(peektxt.c_str());   // Use as return val if valid
     } else {                            // Else throw exception.

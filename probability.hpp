@@ -8,6 +8,8 @@
 #ifndef PROBABILITY_H_
 #define PROBABILITY_H_
 //
+#include <cstdint>
+#include <random>
 #include <vector>
 #include "typedefs.hpp"  // CHECK!!!
 
@@ -18,6 +20,39 @@
 //////
 // *** CLASSES:
 //
+
+//////
+// CLASS: RandomEngine
+//
+//   Deterministic random stream used by stochastic simulation code.
+//
+class RandomEngine {
+public:
+  explicit RandomEngine(std::uint64_t seed) : mEngine(seed) {}
+
+  std::uint64_t NextUInt64() { return mEngine(); }
+
+  Real Uniform01() {
+    return std::uniform_real_distribution<Real>(0.0, 1.0)(mEngine);
+  }
+
+  static std::uint64_t SeedForStream(std::uint64_t seed,
+                                     std::uint64_t stream) {
+    std::uint64_t value = seed + 0x9e3779b97f4a7c15ULL * (stream + 1);
+    value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+    return value ^ (value >> 31);
+  }
+
+  static RandomEngine &Default() {
+    static thread_local RandomEngine engine(
+        SeedForStream(0x72616433645f6469ULL, 0));
+    return engine;
+  }
+
+private:
+  std::mt19937_64 mEngine;
+};
 
 //////
 // CLASS:   ProbDist
@@ -156,9 +191,8 @@ public:
   // ::: Generate Result Methods  (ProbDist Class) :::
   // :::::::::::::::::::::::::::::::::::::::::::::::::
 
-  Index GetRandomIndex();   // Return a randomly-generated (based on
-                            // based Probability Weights) index into
-                            // the distribution.
+  Index GetRandomIndex(RandomEngine &); // Use the supplied random stream.
+  Index GetRandomIndex();               // Diagnostic convenience overload.
 
 protected:
 

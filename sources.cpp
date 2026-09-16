@@ -153,13 +153,13 @@ void PhononSource::output_random_rayset(int nrays, raytype inray) {
 //////
 // METHOD: PhononSource::GenerateRandomPhonon()
 //
-Phonon PhononSource::GenerateRandomPhonon(raytype inray) {
+Phonon PhononSource::GenerateRandomPhonon(raytype inray, RandomEngine & rng) {
   
   // Determine output raytype:
-  raytype rt = (raytype) mWholeProbs[inray].GetRandomIndex();
+  raytype rt = (raytype) mWholeProbs[inray].GetRandomIndex(rng);
 
   // Get a Take-off Angle (TOA) index:
-  Index toa_index = mPDists[rt].GetRandomIndex();
+  Index toa_index = mPDists[rt].GetRandomIndex(rng);
 
   // Resolve TOA index to a ThetaPhi direction:
   S2::ThetaPhi dir = (*pTOA)[toa_index];
@@ -167,4 +167,8 @@ Phonon PhononSource::GenerateRandomPhonon(raytype inray) {
   // Return a Phonon constructed from direction and raytype:
   return Phonon(dir, rt);
 
+}
+
+Phonon PhononSource::GenerateRandomPhonon(raytype inray) {
+  return GenerateRandomPhonon(inray, RandomEngine::Default());
 }

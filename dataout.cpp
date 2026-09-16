@@ -524,6 +524,7 @@ inline void DataReporter
 // METHOD:  ReportNewEventPhonon()
 //
 void DataReporter::ReportNewEventPhonon(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportGenerate) {
     output_phonon_dataline(mposReports, mIDGenerate, phon);
   }
@@ -533,6 +534,7 @@ void DataReporter::ReportNewEventPhonon(const Phonon & phon) {
 // METHOD:  ReportScatterEvent()
 //
 void DataReporter::ReportScatterEvent(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportScatter) {
     output_phonon_dataline(mposReports, mIDScatter, phon);
   }
@@ -543,6 +545,7 @@ void DataReporter::ReportScatterEvent(const Phonon & phon) {
 // METHOD:  ReportPhononCollected()
 //
 void DataReporter::ReportPhononCollected(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
 
   // ::::
   // ::     Output immediate report of
@@ -571,6 +574,7 @@ void DataReporter::ReportPhononCollected(const Phonon & phon) {
 // METHOD:  ReportReflection()
 //
 void DataReporter::ReportReflection(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportReflect) {
     output_phonon_dataline(mposReports, mIDReflect, phon);
   }
@@ -580,6 +584,7 @@ void DataReporter::ReportReflection(const Phonon & phon) {
 // METHOD:  ReportCellToCell()
 //
 void DataReporter::ReportCellToCell(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportTransfer) {
     output_phonon_dataline(mposReports, mIDTransfer, phon);
   }
@@ -589,6 +594,7 @@ void DataReporter::ReportCellToCell(const Phonon & phon) {
 // METHOD:  ReportLostPhonon()
 //
 void DataReporter::ReportLostPhonon(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportLost) {
     output_phonon_dataline(mposReports, mIDLost, phon);
   }
@@ -599,6 +605,7 @@ void DataReporter::ReportLostPhonon(const Phonon & phon) {
 // METHOD:  ReportPhononTimeout()
 //
 void DataReporter::ReportPhononTimeout(const Phonon & phon) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportTimeout) {
     output_phonon_dataline(mposReports, mIDTimeout, phon);
   }
@@ -609,6 +616,7 @@ void DataReporter::ReportPhononTimeout(const Phonon & phon) {
 // METHOD:  ReportInvalidPhonon()
 //
 void DataReporter::ReportInvalidPhonon(const Phonon & phon, invalid_reason_e reason) {
+  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportInvalid) {
     output_phonon_dataline(mposReports, mIDInvalid, phon);
   }

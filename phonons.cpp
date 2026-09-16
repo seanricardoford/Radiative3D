@@ -222,7 +222,7 @@ R3::XYZ Phonon::DirectionOfMotion() const {
 //   On the macro level, this function handles the transmission of
 //   phonons from one cell into a neighbor cell across an interface.
 //
-void Phonon::Refract(const CellFace * pFace) {
+void Phonon::Refract(const CellFace * pFace, RandomEngine & rng) {
 
   Real vel_eps = 0.00001;   // Threshold below which we don't bother
                             // with Snell's law. (Basically, this
@@ -241,7 +241,7 @@ void Phonon::Refract(const CellFace * pFace) {
                             //
 
   if (pFace->GridDiscontinuity()) {  // If the grid asked for a 1st-
-    Refraction_FullRT(pFace);        // order discontinuity here, then
+    Refraction_FullRT(pFace, rng);   // order discontinuity here, then
   }                                  // do full R/T
   else {
     if (pFace->VelocityJump(mLoc) > vel_eps) {  // Else ray-bend only,
@@ -252,6 +252,10 @@ void Phonon::Refract(const CellFace * pFace) {
   } //
   //
 
+}
+
+void Phonon::Refract(const CellFace * pFace) {
+  Refract(pFace, RandomEngine::Default());
 }
 
 
@@ -426,7 +430,7 @@ void Phonon::Refraction_Bend(const CellFace * pFace) {
 //   treatment on a particular interface, the user must request this
 //   via a double-valued grid layer.
 //
-void Phonon::Refraction_FullRT(const CellFace * pFace) {
+void Phonon::Refraction_FullRT(const CellFace * pFace, RandomEngine & rng) {
 
   RTCoef rt = pFace->GetRTBasis(mLoc, mDir);  
                       // Gets basis vectors for scattered
@@ -434,7 +438,7 @@ void Phonon::Refraction_FullRT(const CellFace * pFace) {
 
   raytype intype = RAY_P;
   if (mType == RAY_S) {
-    intype = rt.ChooseSPolType(DirectionOfMotion());
+    intype = rt.ChooseSPolType(DirectionOfMotion(), rng);
   }//
   //    We are now either RAY_P, RAY_SH, or RAY_SV.
   //
@@ -443,7 +447,7 @@ void Phonon::Refraction_FullRT(const CellFace * pFace) {
                         // all cases allowed by the incident raytype.
                         // (Results stored internally to rt)
 
-  rt.Choose();          // Pick an outcome from the allowed set.
+  rt.Choose(rng);       // Pick an outcome from the allowed set.
 
   // ::::
   // :: Update internal state for new phonon trajectory:
@@ -473,6 +477,10 @@ void Phonon::Refraction_FullRT(const CellFace * pFace) {
   // :                        Done.
   //       In the beginning, there was the Word,
   //         And the Word was God.
+}
+
+void Phonon::Refraction_FullRT(const CellFace * pFace) {
+  Refraction_FullRT(pFace, RandomEngine::Default());
 }
 
 
@@ -537,7 +545,7 @@ void Phonon::InsertInto(MediumCell * pCell) {
 //   etc., are reported to the outside world through method calls to
 //   the global DataOut object.
 //
-void Phonon::Propagate() {
+void Phonon::Propagate(RandomEngine & rng) {
 
   while (true) {    // ===========================
                     //   PROPAGATION INNER LOOP:
@@ -598,7 +606,7 @@ void Phonon::Propagate() {
     }
 
 
-    Real scatlen = mpScat->GetRandomPathLength(mType);
+    Real scatlen = mpScat->GetRandomPathLength(mType, rng);
     Real edgelen = travel.PathLength;
 
 
@@ -608,7 +616,7 @@ void Phonon::Propagate() {
       travel = mpCell->AdvanceLength(mType, scatlen, mLoc, mDir);
       this->Move(travel);     // Move us to the scatterer
 
-      Phonon rph = mpScat->GetRandomScatteredRelativePhonon(mType);
+      Phonon rph = mpScat->GetRandomScatteredRelativePhonon(mType, rng);
       this->Transform(rph);   // Re-orient and re-raytype us according
                               // the results of the scattering event
                               // (coded in 'rph').
@@ -639,7 +647,7 @@ void Phonon::Propagate() {
 
     if (travel.pFace->IsReflectionFace()) { // Use R/T coefficient treatment
                                             // to handle reflection with P/S
-      Refraction_FullRT(travel.pFace);      // conversion. Note: Unexpected
+      Refraction_FullRT(travel.pFace, rng); // conversion. Note: Unexpected
       dataout.ReportReflection(*this);      // behavior may result if
       continue;                             // reflection face is not a
                                             // free-surface face.
@@ -654,7 +662,7 @@ void Phonon::Propagate() {
 
     if (travel.pFace->HasNeighbor()) {
       MediumCell * oldcell = mpCell;  // Remember where we were
-      Refract(travel.pFace);          // Reflect or Refract into next cell 
+      Refract(travel.pFace, rng);     // Reflect or Refract into next cell
       if (mpCell == oldcell) {            // If mpCell hasn't changed
         dataout.ReportReflection(*this);  // then we reflected
       } else {
@@ -681,3 +689,7 @@ void Phonon::Propagate() {
 ////
 }// END: Phonon::Propagate()
 //
+
+void Phonon::Propagate() {
+  Propagate(RandomEngine::Default());
+}

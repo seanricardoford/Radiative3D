@@ -221,7 +221,9 @@ public:
   // ::: Compute Methods  (Scatterer Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::
 
+  Real GetRandomPathLength(raytype intype, RandomEngine &);
   Real GetRandomPathLength(raytype intype);
+  Phonon GetRandomScatteredRelativePhonon(raytype intype, RandomEngine &);
   Phonon GetRandomScatteredRelativePhonon(raytype intype);
 
 

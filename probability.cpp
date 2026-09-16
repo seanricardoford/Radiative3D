@@ -1,7 +1,7 @@
 // probability.cpp
 //
 #include <iostream>
-#include <cstdlib>      /* rand(), srand(), RAND_MAX, exit() */
+#include <cstdlib>      /* exit() */
 #include "probability.hpp"
 using namespace std;
 
@@ -90,25 +90,14 @@ Real ProbDist::GetDiffProb(Index idx) {
 //
 //   Return a randomly-generated index into the distribution.
 //
-//   RANDOMNESS: Uses rand(), srand(), and RAND_MAX from stdlib.h,
-//   necessitating #include <cstdlib>.  TODO: Consider looking into
-//   C++'s random library from #include <random> as a possible
-//   alternative.  Particularly as regards giving better
-//   fineness. (b/c even the current version of g++ on a 64-bit intel
-//   machine still only gives 31 bits of randomness with a call to
-//   rand(); RAND_MAX is 2^31-1)
-//
-//   RANDOM SEED: It is presumed that the random number generator has
-//   been properly seeded before this function is called.
-//
-Index ProbDist::GetRandomIndex() {
+Index ProbDist::GetRandomIndex(RandomEngine & rng) {
 
   if (!mbIntegrated) {Integrate();}  // Needs integral representation
 
   Index k1 = 0;                 // Initial lower bound for search
   Index k2 = mDist.size() - 1;  // Initial upper bound
   Index k;
-  Real r = mDist[k2] * ((Real) rand() / RAND_MAX); 
+  Real r = mDist[k2] * rng.Uniform01();
              // A value between 0.0 and the final (and presumably
              // maximum) value of mDist.
 
@@ -127,6 +116,11 @@ Index ProbDist::GetRandomIndex() {
   return k2;
 
 }//
+
+Index ProbDist::GetRandomIndex() {
+  return GetRandomIndex(RandomEngine::Default());
+}
+
 //
 
 

@@ -16,6 +16,8 @@
 #define MODEL_H_
 //
 #include <iostream>
+#include <cstdint>
+#include <thread>
 #include <vector>
 #include <atomic>
 #include "events.hpp"
@@ -122,6 +124,8 @@ public:
                                  //  max propagation sim-time before a
                                  //  phonon is to be abandoned
   Real               Frequency;  // Phonon frequency in Hertz
+  unsigned           WorkerCount; // Number of simulation workers
+  std::uint64_t      RandomSeed;  // Base seed for deterministic streams
   Real        TimeBinsPerCycle;  // Establishes bin-width for the
                                  //  seismometer objects relative to
                                  //  the Phonon frequency.
@@ -170,6 +174,9 @@ public:
     NumPhonons       ( 10                  ), // 
     PhononTTL        ( 60.0                ), // Seconds
     Frequency        ( 4.0                 ), // Hertz
+    WorkerCount      ( std::thread::hardware_concurrency() == 0
+                       ? 1 : std::thread::hardware_concurrency() ),
+    RandomSeed       ( 0x72616433645f7365ULL ),
     TimeBinsPerCycle ( 0.0                 ), // Zero signals unset
     TimeBinSize      ( 2.0                 ), //
     GridSource       ( GRID_UNSPEC         ),
@@ -340,6 +347,8 @@ private:;
 
   std::atomic<long> mPhononsRemain; // Threads deduct from this counter
                                     // until all phonons simulated.
+  unsigned           mWorkerCount;
+  std::uint64_t      mRandomSeed;
   void SimulationThread();
 
 

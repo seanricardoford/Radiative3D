@@ -2,7 +2,6 @@
 //
 #include <iostream>
 #include <iomanip>
-#include <cstdlib>      /* rand(), RAND_MAX */
 #include "rtcoef.hpp"
 
 //////
@@ -403,7 +402,8 @@ void RTCoef::GetProbabilitiesFromAmplitudesPSV() {
 //   polarization) against fparash, which is assumed to have been
 //   previously initialized prior to this function being called.
 //
-raytype RTCoef::ChooseSPolType(const R3::XYZ & pdom) const {
+raytype RTCoef::ChooseSPolType(const R3::XYZ & pdom,
+                               RandomEngine & rng) const {
 
   raytype  stype;   // Will be either RAY_SH or RAY_SV
   Real    shfrac;   // Fraction of ray energy that is SH wrt interface
@@ -411,7 +411,7 @@ raytype RTCoef::ChooseSPolType(const R3::XYZ & pdom) const {
   shfrac = pdom.Dot(fparash);
   shfrac *= shfrac;
 
-  Real ran = ((Real) rand() / RAND_MAX);  // 0.0 < ran <= 1.0
+  Real ran = rng.Uniform01();
   if (ran <= shfrac)
      { stype = RAY_SH; }
   else
@@ -419,6 +419,10 @@ raytype RTCoef::ChooseSPolType(const R3::XYZ & pdom) const {
 
   return stype;
 
+}
+
+raytype RTCoef::ChooseSPolType(const R3::XYZ & pdom) const {
+  return ChooseSPolType(pdom, RandomEngine::Default());
 }
 
 
@@ -433,7 +437,7 @@ raytype RTCoef::ChooseSPolType(const R3::XYZ & pdom) const {
 //   It is assumed that the mProb[] member has already been populated
 //   by a call to the public GetCoefs() method.
 //
-void RTCoef::Choose() {
+void RTCoef::Choose(RandomEngine & rng) {
 
   Real PI[RT_NUM];        // Integrated Probability
   Real TotalP;
@@ -444,9 +448,7 @@ void RTCoef::Choose() {
   }
   TotalP = PI[RT_NUM-1];
 
-  int iran = rand();      // Generate an int in range: [0,RAND_MAX]
-  if (iran==0) {iran=1;}  // Now we are in the range:  (0,RAND_MAX]
-  Real ran = ((Real) iran / RAND_MAX) * TotalP; // Range: (0.0, TotalP]
+  Real ran = rng.Uniform01() * TotalP;
 
   Index choice = RT_NUM-1;
   for (Index i = 0; i < (RT_NUM-1); i++) {
@@ -472,6 +474,10 @@ void RTCoef::Choose() {
   mChoice = (rt_result_e) choice;   // Save result so the reporting
                                     // methods can report on it.
 
+}
+
+void RTCoef::Choose() {
+  Choose(RandomEngine::Default());
 }
 
 

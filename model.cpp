@@ -1,8 +1,8 @@
 // model.cpp
 //
-#include <cstdlib>      /* rand(), srand(), RAND_MAX */
-#include <ctime>        /* time() */
+#include <cstdlib>
 #include <iomanip>
+#include <vector>
 #include <thread>
 #include "model.hpp"
 #include "phonons.hpp"
@@ -104,6 +104,10 @@ void ModelParams::Output() const
     << ((TOA_Degree==def.TOA_Degree) ? "(default)" : "") << endl
     << "Frequency: " <<  Frequency << setw(31) 
     << ((Frequency == def.Frequency) ? "(default)" : "") << endl
+    << "Workers: " << WorkerCount << setw(34)
+    << ((WorkerCount == def.WorkerCount) ? "(default)" : "") << endl
+    << "Random seed: " << RandomSeed << setw(28)
+    << ((RandomSeed == def.RandomSeed) ? "(default)" : "") << endl
     << "Number of Phonons: " << NumPhonons << setw(22)
     << ((NumPhonons == def.NumPhonons) ? "(default)" : "") << endl
     << "Time to Live: " << PhononTTL << setw(27)
@@ -155,6 +159,12 @@ void ModelParams::OutputOctaveText(std::ostream * out) const {
   *out << "# name: Frequency \n"
        << "# type: scalar \n"
        << Frequency << " \n" << " \n";
+  *out << "# name: WorkerCount \n"
+       << "# type: scalar \n"
+       << WorkerCount << " \n" << " \n";
+  *out << "# name: RandomSeed \n"
+       << "# type: scalar \n"
+       << RandomSeed << " \n" << " \n";
   *out << "# name: PhononTTL \n"
        << "# type: scalar \n"
        << PhononTTL << " \n" << " \n";
@@ -227,17 +237,16 @@ Model::Model(const ModelParams & par) {
   // :
 
   mNumPhonons = par.NumPhonons;
+  if (par.WorkerCount == 0) {
+    throw(Runtime("Worker count must be greater than zero."));
+  }
+  mWorkerCount = par.WorkerCount;
+  mRandomSeed = par.RandomSeed;
 
 
   // ::::::
   // :: Initialize global standard-lib objects:
   // :
-
-  srand(time(NULL));  // Seed the random number generator.
-                      // (TODO: Look into better random number
-                      // implementations than the standard library
-                      // RNG.)
-
 
   // ::::::
   // :: Create objects that will be used/needed by other classes:
@@ -599,27 +608,15 @@ R3::XYZ Model::FindSurface(R3::XYZ loc) const {
 // METHOD:  Model :: SimulationThread()
 //
 void Model::SimulationThread() {
-
-  unsigned nph_byten = mNumPhonons / 10;  // For Progress Indicator
-  unsigned nph_by100 = mNumPhonons / 100; //
-  bool finegrain = (mNumPhonons > 9999);  // Threshold for hundredths indicator
-  if (nph_byten==0) nph_byten=1;          // Prevent div/0
-
   long remain = mPhononsRemain.fetch_sub(1);
   while (remain > 0) {
 
-    Phonon P = mpEventSource->GenerateEventPhonon();
-    P.Propagate();
+    const long phonon_index = mNumPhonons - remain;
+    RandomEngine rng(RandomEngine::SeedForStream(
+        mRandomSeed, static_cast<std::uint64_t>(phonon_index)));
+    Phonon P = mpEventSource->GenerateEventPhonon(rng);
+    P.Propagate(rng);
 
-    int i = mNumPhonons - remain; // phonons complete
-    if ( finegrain && (i % nph_by100 == 0) && (i>0) ) {  // 1% mark
-      std::cerr << ".";                                  //
-    }
-    if ( i % nph_byten == 0 ) {   // 10% mark
-      unsigned pct = (i / nph_byten) * 10;      //
-      std::cerr << pct << "% of " << mNumPhonons
-                << " have been cast.\n";
-    }
     remain = mPhononsRemain.fetch_sub(1);
 
   }
@@ -632,24 +629,26 @@ void Model::SimulationThread() {
 //
 void Model::RunSimulation() {
 
-  bool finegrain = (mNumPhonons > 9999);  // Threshold for hundredths indicator
-
   std::cout << "@@ __BEGINNING_SIMULATION__" << std::endl << std::flush;
 
   mPhononsRemain = mNumPhonons;
 
-  std::thread thread1(&Model::SimulationThread, this);
-  std::thread thread2(&Model::SimulationThread, this);
-  std::thread thread3(&Model::SimulationThread, this);
-  std::thread thread4(&Model::SimulationThread, this);
+  unsigned worker_count = mWorkerCount;
+  if (mNumPhonons > 0 && worker_count > static_cast<unsigned>(mNumPhonons)) {
+    worker_count = static_cast<unsigned>(mNumPhonons);
+  }
+  std::vector<std::thread> workers;
+  workers.reserve(worker_count);
+  for (unsigned i = 0; i < worker_count; ++i) {
+    workers.push_back(std::thread(&Model::SimulationThread, this));
+  }
+  for (std::size_t i = 0; i < workers.size(); ++i) {
+    workers[i].join();
+  }
 
-  thread1.join();
-  thread2.join();
-  thread3.join();
-  thread4.join();
-
-  if (finegrain) {std::cerr << ".";}
-  std::cerr << "100% of " << mNumPhonons << " have been cast.\n";
+  for (int pct = 10; pct <= 100; pct += 10) {
+    std::cerr << pct << "% of " << mNumPhonons << " have been cast.\n";
+  }
   std::cout << "@@ __SIMULATION_COMPLETE__" << std::endl;
 
   dataout.OutputPostSimSummary();

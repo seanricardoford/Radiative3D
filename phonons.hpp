@@ -31,6 +31,7 @@ class TravelRec;   /* Defined in media.hpp */
 class MediumCell;  /* Defined in media.hpp */
 class CellFace;    /* Defined in media.hpp */
 class Scatterer;   /* Defined in scatterers.hpp */
+class RandomEngine; /* Defined in probability.hpp */
 
 
 ////////////////////////////////////////////////////////////////////////
@@ -274,6 +275,7 @@ public:
                       // physical.  But does handle P<->S
                       // conversions.
 
+  void Refract(const CellFace * pFace, RandomEngine &);
   void Refract(const CellFace * pFace);
                       // Handles the transmission of a phonon from one
                       // cell into the adjacent cell, via a CellFace.
@@ -291,6 +293,7 @@ public:
                       // post-critical incidence, which always
                       // reflects.
 
+  void Refraction_FullRT(const CellFace * pFace, RandomEngine &);
   void Refraction_FullRT(const CellFace * pFace);
                       // Called by Refract(). Handles the case where
                       // full Reflection/Transmission handling with
@@ -313,7 +316,8 @@ public:
                                         // to "reside" in the given
                                         // cell.
 
-  void Propagate();   // When this method is called, a phonon will
+  void Propagate(RandomEngine &); // Use an explicit random stream.
+  void Propagate();   // Diagnostic convenience overload. When this method is called, a phonon will
                       // "propagate" through a "model" until such time
                       // as the phonon dies or leaves the model, at
                       // which point the method returns. Progress is
