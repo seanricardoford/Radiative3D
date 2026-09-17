@@ -18,3 +18,5 @@ tests/test_anisotropic_scattering
 tests/test_anisotropic_scattering.dSYM/
 tests/test_report_reduction
 tests/test_report_reduction.dSYM/
+tests/test_seismometer_worker_bins
+tests/test_seismometer_worker_bins.dSYM/

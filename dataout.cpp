@@ -65,7 +65,7 @@ Seismometer::Seismometer(const R3::XYZ loc,
   mArea[RAY_S] = (  mRadiusO[RAY_S]*mRadiusO[RAY_S]
                   - mRadiusI[RAY_S]*mRadiusI[RAY_S] ) * Geometry::Pi;
 
-  mTimeBins = new BinRecord[cmNumBins];   // Heap allocation of the
+  mTimeBins = new SimulationReportBin[cmNumBins];   // Heap allocation of the
                                           // seismic trace.
 
 }
@@ -101,6 +101,11 @@ Seismometer::~Seismometer() {
 //   Seismometer list.)
 //
 bool Seismometer::CatchPhonon(const Phonon & phon) {
+  return CatchPhonon(phon, mTimeBins);
+}
+
+bool Seismometer::CatchPhonon(const Phonon & phon,
+                              SimulationReportBin * bins) const {
 
   bool retval;
   bool within_window = true;    // Tracks whether inside time window
@@ -197,22 +202,29 @@ bool Seismometer::CatchPhonon(const Phonon & phon) {
   Real energy_y = energy * yfrac;   //
   Real energy_z = energy * zfrac;   //
 
-  mTimeBins[binindex].mEnergyAxes[AXIS_X] += energy_x;
-  mTimeBins[binindex].mEnergyAxes[AXIS_Y] += energy_y;
-  mTimeBins[binindex].mEnergyAxes[AXIS_Z] += energy_z;
+  bins[binindex].mEnergyAxes[AXIS_X] += energy_x;
+  bins[binindex].mEnergyAxes[AXIS_Y] += energy_y;
+  bins[binindex].mEnergyAxes[AXIS_Z] += energy_z;
 
   //
   // :: Record energy by ray type:
   //
-  mTimeBins[binindex].mEnergyByType[ph_type] += energy;
+  bins[binindex].mEnergyByType[ph_type] += energy;
 
   //
   // :: Record Phonon-count by ray type:
   //
-  mTimeBins[binindex].mCountByType[ph_type] += 1;
+  bins[binindex].mCountByType[ph_type] += 1;
 
   return retval;
 
+}
+
+
+void Seismometer::MergeBins(const SimulationReportBin * bins) {
+  for (Count i = 0; i < cmNumBins; ++i) {
+    mTimeBins[i].Add(bins[i]);
+  }
 }
 
 
@@ -517,6 +529,107 @@ inline void DataReporter
   // Endline
   *out << std::endl;
 
+}
+
+
+SimulationReportContext DataReporter::CreateWorkerContext() const {
+  return SimulationReportContext(mSeismometers.size(),
+                                 Seismometer::NumberOfBins());
+}
+
+
+void DataReporter::MergeWorkerContext(
+    const SimulationReportContext & context) {
+  for (std::size_t i = 0; i < mSeismometers.size(); ++i) {
+    mSeismometers[i]->MergeBins(context.BinsFor(i));
+  }
+  mNumLost += context.NumLost();
+  mNumTimeout += context.NumTimeout();
+  mNumInvalid += context.NumInvalid();
+  mDiagInvalid |= context.InvalidDiagnostics();
+}
+
+
+void DataReporter::ReportNewEventPhonon(
+    SimulationReportContext &, const Phonon & phon) {
+  if (mbReportGenerate) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDGenerate, phon);
+  }
+}
+
+
+void DataReporter::ReportPhononTimeout(
+    SimulationReportContext & context, const Phonon & phon) {
+  if (mbReportTimeout) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDTimeout, phon);
+  }
+  context.RecordTimeout();
+}
+
+
+void DataReporter::ReportScatterEvent(
+    SimulationReportContext &, const Phonon & phon) {
+  if (mbReportScatter) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDScatter, phon);
+  }
+}
+
+
+void DataReporter::ReportPhononCollected(
+    SimulationReportContext & context, const Phonon & phon) {
+  if (mbReportCollect) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDCollect, phon);
+  }
+
+  for (std::size_t i = 0; i < mSeismometers.size(); ++i) {
+    bool stop = mSeismometers[i]->CatchPhonon(phon, context.BinsFor(i));
+    if (stop) {
+      break;
+    }
+  }
+}
+
+
+void DataReporter::ReportReflection(
+    SimulationReportContext &, const Phonon & phon) {
+  if (mbReportReflect) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDReflect, phon);
+  }
+}
+
+
+void DataReporter::ReportCellToCell(
+    SimulationReportContext &, const Phonon & phon) {
+  if (mbReportTransfer) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDTransfer, phon);
+  }
+}
+
+
+void DataReporter::ReportLostPhonon(
+    SimulationReportContext & context, const Phonon & phon) {
+  if (mbReportLost) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDLost, phon);
+  }
+  context.RecordLost();
+}
+
+
+void DataReporter::ReportInvalidPhonon(
+    SimulationReportContext & context, const Phonon & phon,
+    invalid_reason_e reason) {
+  if (mbReportInvalid) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
+    output_phonon_dataline(mposReports, mIDInvalid, phon);
+  }
+  context.RecordInvalid(static_cast<unsigned>(reason));
 }
 
 

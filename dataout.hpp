@@ -28,6 +28,7 @@
 #include "geom.hpp"
 #include "tensors.hpp"
 #include "raytype.hpp"
+#include "simulation_report.hpp"
 
 //////
 // CLASSES: -- Forward Declarations --
@@ -76,24 +77,6 @@ protected:
 
   enum axes_e {AXIS_X, AXIS_Y, AXIS_Z, NUM_AXES};
 
-  class BinRecord {  // Encapsulates a single time record in our
-  public:            // seismic trace. Energy is binned by time window
-                     // and distributed by seismic axis and raytype.
-    Real        mEnergyAxes[NUM_AXES];          // Energy by axis
-    Real      mEnergyByType[RAY_NUMBASICTYPES]; // Energy by raytype
-    unsigned   mCountByType[RAY_NUMBASICTYPES]; // Phonon count by rt
-
-    BinRecord() {               // Make sure bins get initialized
-      mEnergyAxes[AXIS_X] = 0;  // to zero on construction
-      mEnergyAxes[AXIS_Y] = 0;
-      mEnergyAxes[AXIS_Z] = 0;
-      mEnergyByType[RAY_P] = 0;
-      mEnergyByType[RAY_S] = 0;
-      mCountByType[RAY_P] = 0;
-      mCountByType[RAY_S] = 0;
-    }
-  };
-
 
 protected:
 
@@ -128,7 +111,7 @@ protected:
                                 // seismometer list for additional catches.
                                 // (Default is 'true')
 
-  BinRecord       * mTimeBins;  // ARRAY of BinRecs. Comprises the
+  SimulationReportBin * mTimeBins;  // ARRAY of bins. Comprises the
                                 // seismic trace. Dynamically
                                 // allocated.
 
@@ -182,6 +165,8 @@ public:
     cmNumBins    = floor(recordtime / bintime);
   }
 
+  static Count NumberOfBins() { return cmNumBins; }
+
   static void SetEventParameters(R3::XYZ loc, Tensor::Tensor MT) {
     cmEventLoc = loc;
     cmEventMT = MT;
@@ -193,6 +178,9 @@ public:
   // :::::::::::::::::::::::::::::::::::::::::::::::::
 
   bool CatchPhonon(const Phonon & phon);
+  bool CatchPhonon(const Phonon & phon,
+                  SimulationReportBin * bins) const;
+  void MergeBins(const SimulationReportBin * bins);
   //            Checks whether the Phonon is within the gather radii,
   //            and if it is, we ingest it and increment the appropriate
   //            bins.  Returns true if we ingested the phonon, and false
@@ -389,6 +377,9 @@ public:
                                    outer_radius, axes_desc));
   }
 
+  SimulationReportContext CreateWorkerContext() const;
+  void MergeWorkerContext(const SimulationReportContext & context);
+
   void OutputPostSimSummary();
   //            Spits out a summary of all aggregate data collected
   //            during the simulation run.  Such aggregate data
@@ -404,6 +395,16 @@ public:
   //            model simulation code reports events to the
   //            DataReporter object.
   //
+
+  void ReportNewEventPhonon(SimulationReportContext &, const Phonon &);
+  void ReportPhononTimeout(SimulationReportContext &, const Phonon &);
+  void ReportScatterEvent(SimulationReportContext &, const Phonon &);
+  void ReportPhononCollected(SimulationReportContext &, const Phonon &);
+  void ReportReflection(SimulationReportContext &, const Phonon &);
+  void ReportCellToCell(SimulationReportContext &, const Phonon &);
+  void ReportLostPhonon(SimulationReportContext &, const Phonon &);
+  void ReportInvalidPhonon(SimulationReportContext &, const Phonon &,
+                           invalid_reason_e reason);
 
   void ReportNewEventPhonon(const Phonon &);
                                   // Phonon generated at event source
