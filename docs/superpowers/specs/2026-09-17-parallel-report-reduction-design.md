@@ -2,7 +2,10 @@
 
 ## Status
 
-Approved for implementation on the `parallel-performance` branch.
+Approved for implementation on the `parallel-performance` branch; implemented,
+verified, and merged into local `master` at `8b9713d`. The feature branch was
+deleted after the fast-forward merge. See `PLANS.md` and
+`docs/DEVELOPMENT.md` for the current state and follow-up work.
 
 ## Goal
 
@@ -95,4 +98,3 @@ The implementation is accepted when:
    from wall-clock speedup; and
 6. `docs/DEVELOPMENT.md`, `docs/MANUAL.md` if user-visible semantics change,
    and `PLANS.md` describe the new reduction boundary and limitations.
-

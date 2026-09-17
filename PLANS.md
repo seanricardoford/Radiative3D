@@ -23,12 +23,12 @@
 
 ## Current baseline
 
-The capability baseline is on local `master`. This session's optimization work
-is isolated on `parallel-performance`, forked from that master tip. The branch
-contains the worker-local report design, its implementation, focused tests, and
-the benchmark record; `master` remains untouched until an explicit integration
-choice is made. Always re-check Git state because branch pointers and remote
-tracking information change over time.
+The capability and performance baseline is on local `master` at commit
+`8b9713d`. The `parallel-performance` branch was fast-forwarded into `master`
+and deleted after merged-result verification. Local `master` is currently ahead
+of `origin/master`; it has not been pushed unless a later session changes that
+state. Always re-check Git state because branch pointers and remote tracking
+information change over time.
 
 ## Completed capabilities
 
@@ -111,7 +111,7 @@ make test-plotting
 `tests/test_octave_plotting.sh`, which checks current Octave cell expansion,
 gnuplot colorbar invocation, figure annotations, and PDF generation.
 
-## Completed in this branch
+## Completed and merged into master
 
 ### Worker-local report reduction and chunked scheduling
 
@@ -130,6 +130,8 @@ gnuplot colorbar invocation, figure annotations, and PDF generation.
 - [x] Use the existing `do-lopnor-big.sh` and `do-lopnor-parallel.sh` recipes
   as matched serial/parallel workload definitions.
 - [x] Measure one, two, and four workers on a 10M-phonon Lop Nor run.
+- [x] Validate the merged result with one, four, and eight workers on the same
+  10M-phonon Lop Nor workload.
 - [x] Record machine/compiler/workload details and stable output summaries in
   `docs/DEVELOPMENT.md`.
 - [x] Document that report ordering and floating-point reduction order are not

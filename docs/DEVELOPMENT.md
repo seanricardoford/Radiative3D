@@ -238,6 +238,27 @@ summary was stable for all three worker counts: 9,789,917 loss-surface exits,
 matched. Compare counters, traces, and other scientific outputs separately
 from timing; report text ordering is not a valid equivalence check.
 
+A fresh validation after merging the optimization into `master` used the same
+machine, model, seed, 10M-phonon workload, and 320 seismometers. The serial
+time is the second-resolution interval recorded by `do-lopnor-big.sh`; the
+four-worker time is the full `do-lopnor-parallel.sh` wall time; the eight-worker
+run used the exact parallel recipe command with only `--workers=8` substituted.
+The serial figure-generation stage was excluded:
+
+| Workers | Simulation wall time | Speedup vs. one worker |
+| ---: | ---: | ---: |
+| 1 | ~634 s | 1.00x |
+| 4 | 191.46 s | 3.31x |
+| 8 | 108.59 s | 5.84x |
+
+The eight-worker run was a further 1.76x faster than four workers, reducing
+simulation time by 43.3%. All three runs reported 9,789,917 loss-surface
+exits, 210,083 timeouts, and zero invalid phonons. All 320 seismometer files
+matched byte-for-byte across the comparisons. Generated benchmark directories
+are ignored and may not be present in a fresh clone; the reproducible recipe
+inputs are the checked-in do-scripts and the command recorded in their output
+logs.
+
 ## Test coverage and gaps
 
 `make test` currently runs five focused executables and two shell checks:
@@ -279,12 +300,12 @@ working runtime before making stronger concurrency claims.
 
 ## Current Git integration state
 
-The optimized implementation is being developed on the isolated
-`parallel-performance` branch, based on the current local `master` tip. The
-branch includes the worker-local reporting design, its implementation, focused
-tests, and the benchmark documented above. `master` is intentionally untouched
-by this work; check `git status --short --branch` and `git branch -vv` before
-choosing whether to merge or preserve the branch.
+The optimized implementation is merged into local `master` at `8b9713d`. The
+temporary `parallel-performance` branch and worktree were removed after the
+fast-forward merge and merged-result test run. No remote feature branch was
+created; local `master` is ahead of `origin/master` until a later session
+pushes it. Check `git status --short --branch` and `git branch -vv` before
+starting new work.
 
 ## Known limitations
 
