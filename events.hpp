@@ -21,6 +21,7 @@
 //                         need to include full header.)
 
 class MediumCell;  /* Defined in media.hpp */
+class SimulationReportContext;
 
 
 //////
@@ -85,6 +86,7 @@ public:
   // ::::::::::::::::::::::::::::::::::::::::::::::::::::::
 
   Phonon GenerateEventPhonon(RandomEngine &);
+  Phonon GenerateEventPhonon(RandomEngine &, SimulationReportContext &);
   Phonon GenerateEventPhonon();
 
 };

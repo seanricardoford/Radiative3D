@@ -10,6 +10,75 @@
 #include "dataout.hpp"
 #include "ecs.hpp"
 
+namespace {
+
+class PhononReportSink {
+public:
+  explicit PhononReportSink(SimulationReportContext * context) :
+    mpContext(context) {}
+
+  void Timeout(const Phonon & phon) {
+    if (mpContext) {
+      dataout.ReportPhononTimeout(*mpContext, phon);
+    } else {
+      dataout.ReportPhononTimeout(phon);
+    }
+  }
+
+  void Invalid(const Phonon & phon, DataReporter::invalid_reason_e reason) {
+    if (mpContext) {
+      dataout.ReportInvalidPhonon(*mpContext, phon, reason);
+    } else {
+      dataout.ReportInvalidPhonon(phon, reason);
+    }
+  }
+
+  void Scatter(const Phonon & phon) {
+    if (mpContext) {
+      dataout.ReportScatterEvent(*mpContext, phon);
+    } else {
+      dataout.ReportScatterEvent(phon);
+    }
+  }
+
+  void Collected(const Phonon & phon) {
+    if (mpContext) {
+      dataout.ReportPhononCollected(*mpContext, phon);
+    } else {
+      dataout.ReportPhononCollected(phon);
+    }
+  }
+
+  void Reflection(const Phonon & phon) {
+    if (mpContext) {
+      dataout.ReportReflection(*mpContext, phon);
+    } else {
+      dataout.ReportReflection(phon);
+    }
+  }
+
+  void Transfer(const Phonon & phon) {
+    if (mpContext) {
+      dataout.ReportCellToCell(*mpContext, phon);
+    } else {
+      dataout.ReportCellToCell(phon);
+    }
+  }
+
+  void Lost(const Phonon & phon) {
+    if (mpContext) {
+      dataout.ReportLostPhonon(*mpContext, phon);
+    } else {
+      dataout.ReportLostPhonon(phon);
+    }
+  }
+
+private:
+  SimulationReportContext * mpContext;
+};
+
+} // namespace
+
 //
 // CLASS IMPLEMENTATION:  Phonon
 //
@@ -545,7 +614,10 @@ void Phonon::InsertInto(MediumCell * pCell) {
 //   etc., are reported to the outside world through method calls to
 //   the global DataOut object.
 //
-void Phonon::Propagate(RandomEngine & rng) {
+void Phonon::PropagateImpl(RandomEngine & rng,
+                           SimulationReportContext * context) {
+
+  PhononReportSink reporter(context);
 
   while (true) {    // ===========================
                     //   PROPAGATION INNER LOOP:
@@ -555,37 +627,37 @@ void Phonon::Propagate(RandomEngine & rng) {
     // :
 
     if (mTimeAlive > cm_ttl) {
-      dataout.ReportPhononTimeout(*this);
+      reporter.Timeout(*this);
       break;
     }
 
     if ((mMoveCount % 128)==127) { // Various VALIDITY checks:
       if (std::isnan(mPathLength)) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_PATH_NAN);
+        reporter.Invalid(*this, DataReporter::INV_PATH_NAN);
         break;
       }
       if (std::isnan(mTimeAlive)) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_TIME_NAN);
+        reporter.Invalid(*this, DataReporter::INV_TIME_NAN);
         break;
       }
       if (mPathLength < 0) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_PATH_NEGATIVE);
+        reporter.Invalid(*this, DataReporter::INV_PATH_NEGATIVE);
         break;
       }
       if ((mTimeAlive < 0) || (mRecentTravelTime < 0)) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_TIME_NEGATIVE);
+        reporter.Invalid(*this, DataReporter::INV_TIME_NEGATIVE);
         break;
       }
       if (mRecentTravelTime == 0) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_STUCK);
+        reporter.Invalid(*this, DataReporter::INV_STUCK);
         break;
       }
       if (mRecentTravelTime < cm_slow_concern) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_SLOW);
+        reporter.Invalid(*this, DataReporter::INV_SLOW);
         break;
       }
       if (mMoveCount > cm_loop_concern) {
-        dataout.ReportInvalidPhonon(*this, DataReporter::INV_LOOP_EXCEED);
+        reporter.Invalid(*this, DataReporter::INV_LOOP_EXCEED);
         break;
       }
       mRecentTravelTime = 0;
@@ -601,7 +673,7 @@ void Phonon::Propagate(RandomEngine & rng) {
                                 mDir); 
 
     if (travel.PathLength == 1.0/0.0){
-      dataout.ReportPhononTimeout(*this);
+      reporter.Timeout(*this);
       break;
     }
 
@@ -625,7 +697,7 @@ void Phonon::Propagate(RandomEngine & rng) {
                               // the results of the scattering event
                               // (coded in 'rph').
 
-      dataout.ReportScatterEvent(*this);
+      reporter.Scatter(*this);
      
       continue;
 
@@ -639,7 +711,7 @@ void Phonon::Propagate(RandomEngine & rng) {
     // :
 
     if (travel.pFace->IsCollectionFace()) {
-      dataout.ReportPhononCollected(*this);
+      reporter.Collected(*this);
     } // Our interaction with a collection-surface has been
       // reported. Phonon does not (necessarily) stop here. Continue
       // propagation handling below:
@@ -652,7 +724,7 @@ void Phonon::Propagate(RandomEngine & rng) {
     if (travel.pFace->IsReflectionFace()) { // Use R/T coefficient treatment
                                             // to handle reflection with P/S
       Refraction_FullRT(travel.pFace, rng); // conversion. Note: Unexpected
-      dataout.ReportReflection(*this);      // behavior may result if
+      reporter.Reflection(*this);           // behavior may result if
       continue;                             // reflection face is not a
                                             // free-surface face.
     } 
@@ -668,9 +740,9 @@ void Phonon::Propagate(RandomEngine & rng) {
       MediumCell * oldcell = mpCell;  // Remember where we were
       Refract(travel.pFace, rng);     // Reflect or Refract into next cell
       if (mpCell == oldcell) {            // If mpCell hasn't changed
-        dataout.ReportReflection(*this);  // then we reflected
+        reporter.Reflection(*this);       // then we reflected
       } else {
-        dataout.ReportCellToCell(*this);  // else we transmitted
+        reporter.Transfer(*this);         // else we transmitted
       }
 
       continue;
@@ -684,7 +756,7 @@ void Phonon::Propagate(RandomEngine & rng) {
     // :: Phonon LOST:
     // :
 
-    dataout.ReportLostPhonon(*this);
+    reporter.Lost(*this);
     break;
     
 
@@ -693,6 +765,15 @@ void Phonon::Propagate(RandomEngine & rng) {
 ////
 }// END: Phonon::Propagate()
 //
+
+void Phonon::Propagate(RandomEngine & rng,
+                       SimulationReportContext & context) {
+  PropagateImpl(rng, &context);
+}
+
+void Phonon::Propagate(RandomEngine & rng) {
+  PropagateImpl(rng, 0);
+}
 
 void Phonon::Propagate() {
   Propagate(RandomEngine::Default());

@@ -2,6 +2,7 @@
 //
 #include <cstdlib>
 #include <iomanip>
+#include <algorithm>
 #include <vector>
 #include <thread>
 #include "model.hpp"
@@ -18,6 +19,10 @@
 // Search on "&&&&" to jump between class implementations in this
 // file.
 //
+
+namespace {
+const long kPhononWorkChunk = 256;
+}
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -628,18 +633,21 @@ R3::XYZ Model::FindSurface(R3::XYZ loc) const {
 //////
 // METHOD:  Model :: SimulationThread()
 //
-void Model::SimulationThread() {
-  long remain = mPhononsRemain.fetch_sub(1);
-  while (remain > 0) {
+void Model::SimulationThread(std::atomic<long> & next_phonon,
+                             SimulationReportContext & context) {
+  while (true) {
+    const long begin = next_phonon.fetch_add(kPhononWorkChunk);
+    if (begin >= mNumPhonons) {
+      break;
+    }
 
-    const long phonon_index = mNumPhonons - remain;
-    RandomEngine rng(RandomEngine::SeedForStream(
-        mRandomSeed, static_cast<std::uint64_t>(phonon_index)));
-    Phonon P = mpEventSource->GenerateEventPhonon(rng);
-    P.Propagate(rng);
-
-    remain = mPhononsRemain.fetch_sub(1);
-
+    const long end = std::min(begin + kPhononWorkChunk, mNumPhonons);
+    for (long phonon_index = begin; phonon_index < end; ++phonon_index) {
+      RandomEngine rng(RandomEngine::SeedForStream(
+          mRandomSeed, static_cast<std::uint64_t>(phonon_index)));
+      Phonon P = mpEventSource->GenerateEventPhonon(rng, context);
+      P.Propagate(rng, context);
+    }
   }
 }
 
@@ -652,19 +660,29 @@ void Model::RunSimulation() {
 
   std::cout << "@@ __BEGINNING_SIMULATION__" << std::endl << std::flush;
 
-  mPhononsRemain = mNumPhonons;
-
   unsigned worker_count = mWorkerCount;
   if (mNumPhonons > 0 && worker_count > static_cast<unsigned>(mNumPhonons)) {
     worker_count = static_cast<unsigned>(mNumPhonons);
   }
+  std::atomic<long> next_phonon(0);
+  std::vector<SimulationReportContext> contexts;
+  contexts.reserve(worker_count);
+  for (unsigned i = 0; i < worker_count; ++i) {
+    contexts.push_back(dataout.CreateWorkerContext());
+  }
+
   std::vector<std::thread> workers;
   workers.reserve(worker_count);
   for (unsigned i = 0; i < worker_count; ++i) {
-    workers.push_back(std::thread(&Model::SimulationThread, this));
+    workers.push_back(std::thread(&Model::SimulationThread, this,
+                                  std::ref(next_phonon),
+                                  std::ref(contexts[i])));
   }
   for (std::size_t i = 0; i < workers.size(); ++i) {
     workers[i].join();
+  }
+  for (std::size_t i = 0; i < contexts.size(); ++i) {
+    dataout.MergeWorkerContext(contexts[i]);
   }
 
   for (int pct = 10; pct <= 100; pct += 10) {

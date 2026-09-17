@@ -39,6 +39,7 @@
 //
 class ModelParams;
 class Model;
+class SimulationReportContext;
 
 // *** TYPEDEFS:
 //
@@ -349,11 +350,10 @@ private:;
   ///
   // Threads and coordination:
 
-  std::atomic<long> mPhononsRemain; // Threads deduct from this counter
-                                    // until all phonons simulated.
   unsigned           mWorkerCount;
   std::uint64_t      mRandomSeed;
-  void SimulationThread();
+  void SimulationThread(std::atomic<long> & next_phonon,
+                        SimulationReportContext & context);
 
 
 public:

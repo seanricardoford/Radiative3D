@@ -123,6 +123,19 @@ Phonon ShearDislocation::GenerateEventPhonon(RandomEngine & rng) {
 
 }
 
+Phonon ShearDislocation::GenerateEventPhonon(
+    RandomEngine & rng, SimulationReportContext & context) {
+
+  Phonon P = GenerateRandomPhonon(RAY_NA, rng);
+
+  P.SetLocation(mLoc);
+  P.InsertInto(mpCell);
+
+  dataout.ReportNewEventPhonon(context, P);
+
+  return P;
+}
+
 Phonon ShearDislocation::GenerateEventPhonon() {
   return GenerateEventPhonon(RandomEngine::Default());
 }

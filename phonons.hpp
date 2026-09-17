@@ -33,6 +33,7 @@ class MediumCell;  /* Defined in media.hpp */
 class CellFace;    /* Defined in media.hpp */
 class Scatterer;   /* Defined in scatterers.hpp */
 class RandomEngine; /* Defined in probability.hpp */
+class SimulationReportContext;
 
 
 ////////////////////////////////////////////////////////////////////////
@@ -317,6 +318,9 @@ public:
                                         // to "reside" in the given
                                         // cell.
 
+  void Propagate(RandomEngine &, SimulationReportContext &);
+                                  // Use an explicit stream and worker-local
+                                  // reporting context.
   void Propagate(RandomEngine &); // Use an explicit random stream.
   void Propagate();   // Diagnostic convenience overload. When this method is called, a phonon will
                       // "propagate" through a "model" until such time
@@ -328,6 +332,8 @@ public:
 
 
 private:
+
+  void PropagateImpl(RandomEngine &, SimulationReportContext *);
 
   // :::::::::::::::::::::::::::::::::::::::
   // ::: Private Methods  (Phonon Class) :::
