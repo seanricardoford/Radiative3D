@@ -294,7 +294,7 @@ produce_ttcurves() {  # $1:     station code
     #set(hRID, "color", [1 1 1]);  # Invisible but selectable in pdf version
     #set(findobj("tag", "OLCapt3"), "color", [1 1 1]); # Same for NR label
     newstr=get(findobj("tag", "OLCapt2"), "string");
-    newstr=sprintf("%s\n%s","Channel:  Ex+Ey+Ez",newstr); # Add to OL2 label
+    newstr=sprintf("%s | %s","Channel:  Ex+Ey+Ez",newstr); # Add to OL2 label
     set(findobj("tag", "OLCapt2"), "string", newstr);
     #title("");  # Kill title
     print("tmp-traveltime-$1-xyz-g2.0-nr.pdf");       # PDF version
