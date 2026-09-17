@@ -180,15 +180,37 @@ parallel reproducibility, add explicit values such as:
 Use a small phonon count for development. Large example defaults (often `10M`
 or more) are research runs, not unit tests.
 
+The repository includes three focused Lop Nor recipes for exercising the merged
+capabilities directly:
+
+```bash
+./do-lopnor-big.sh big-demo
+./do-lopnor-parallel.sh parallel-demo
+./do-lopnor-anistropic.sh anisotropic-demo
+```
+
+`do-lopnor-big.sh` runs the complete, visualized isotropic Lop Nor workflow as
+a serial `10M`-phonon baseline. `do-lopnor-parallel.sh` uses the same model,
+workload, and fixed seed with four explicit workers; compare the recorded run
+times in their logs to estimate shared-memory speedup. The two speed recipes
+are scientifically comparable because worker count is their intended runtime
+variable. `do-lopnor-anistropic.sh` remains a smaller serial reference with a
+fixed seed and a global ellipsoidal scattering override of 0.25 horizontally
+and 1.25 in the local vertical direction. Its filename follows the requested
+example name.
+
 ## Test coverage and gaps
 
-`make test` currently runs two focused executables:
+`make test` currently runs two focused executables and a shell recipe check:
 
 1. `test_parallel_features` checks default worker/seed parameters,
    repeatability of `RandomEngine`, stable stream derivation, and seeded
    `ProbDist` selection.
 2. `test_anisotropic_scattering` checks anisotropic state, isotropic-limit PSD
    symmetry, unequal-length PSD difference, and rejection of an invalid length.
+3. `test_do_capability_scripts.sh` checks that the three capability-focused
+   Lop Nor recipes are executable, syntactically valid, and pass their
+   intended workload, worker, seed, and scattering options.
 
 The repository still needs an automated end-to-end regression that runs a small
 compiled-in model with one and multiple workers and compares stable summary or

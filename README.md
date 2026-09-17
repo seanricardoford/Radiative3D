@@ -42,6 +42,21 @@ User Manual here: [Radiative3D Manual Page](docs/MANUAL.md)
 
 There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data. The "do-scripts" are written in Bash and may depend on the installation of additional command line tools. Their plotting stages invoke Octave in non-GUI mode with the gnuplot toolkit. (See the [User Manual](docs/MANUAL.md) for details.)
 
+Capability-focused Lop Nor recipes are also included:
+
+```bash
+./do-lopnor-big.sh big-demo
+./do-lopnor-parallel.sh parallel-demo
+./do-lopnor-anistropic.sh anisotropic-demo
+```
+
+The big recipe is a serial, fully visualized `10M`-phonon baseline. The
+parallel recipe uses the same `10M` workload, model, and fixed seed with four
+explicit shared-memory workers, making it suitable for a speed comparison.
+The anisotropic recipe remains a smaller focused run with unequal global
+horizontal and vertical scattering correlation lengths; the lengths are
+expressed in the model's distance unit.
+
 ## Current capabilities
 
 - Shared-memory simulation workers are selected with `--workers=N` or

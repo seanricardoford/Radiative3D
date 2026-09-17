@@ -248,6 +248,24 @@ The script will create an output directory at <tt>./data/YYYYMMDD-HHMMSS-test02-
 
 To get good quality images, a few tens of thousands of phonons will be propagated.  You can expect the simulation to run for about ten to twenty minutes, and the video generation to take another twenty minutes after that.  Videos are generally much less computationally intensive to produce than envelopes and travel-time curves are, because for videos every phonon is useful, whereas for envelopes only those phonons that interact with a given seismometer are useful in producing the envelope trace.
 
+#### Lop Nor: parallel and anisotropic capability examples
+
+Three focused waveform recipes exercise the shared-memory and anisotropic
+scattering options:
+
+    ./do-lopnor-parallel.sh parallel-demo
+    ./do-lopnor-anistropic.sh anisotropic-demo
+    ./do-lopnor-big.sh big-demo
+
+The big recipe uses one worker, the complete visualization workflow, and ten
+million phonons. The parallel recipe uses four workers, the same ten-million
+phonon workload and fixed seed, and retains the compiled model's isotropic
+scattering; compare their recorded run times for a speedup estimate. The
+anisotropic recipe uses one worker, one million phonons, a fixed seed, and
+unequal global correlation lengths of 0.25 horizontally and 1.25 vertically,
+in the model's length unit. Each recipe records its complete command line in
+the output directory.
+
 ### INSTALLATION
 
 #### Via Subversion

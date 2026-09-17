@@ -17,9 +17,10 @@ objects := $(addprefix $(objdir)/,$(objects))
 .PHONY : default cleanall clean neat anyway directories test test-plotting .FORCE
 default : directories $(OUT_EXEC)
 
-test : directories tests/test_parallel_features tests/test_anisotropic_scattering
+test : directories tests/test_parallel_features tests/test_anisotropic_scattering tests/test_do_capability_scripts.sh
 	./tests/test_anisotropic_scattering
 	./tests/test_parallel_features
+	./tests/test_do_capability_scripts.sh
 
 test-plotting :
 	./tests/test_octave_plotting.sh
