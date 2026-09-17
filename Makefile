@@ -17,9 +17,10 @@ objects := $(addprefix $(objdir)/,$(objects))
 .PHONY : default cleanall clean neat anyway directories test test-plotting .FORCE
 default : directories $(OUT_EXEC)
 
-test : directories tests/test_parallel_features tests/test_anisotropic_scattering tests/test_do_capability_scripts.sh
+test : directories tests/test_parallel_features tests/test_anisotropic_scattering tests/test_report_reduction tests/test_do_capability_scripts.sh
 	./tests/test_anisotropic_scattering
 	./tests/test_parallel_features
+	./tests/test_report_reduction
 	./tests/test_do_capability_scripts.sh
 
 test-plotting :
@@ -30,6 +31,9 @@ tests/test_parallel_features : tests/test_parallel_features.cpp probability.cpp 
 
 tests/test_anisotropic_scattering : tests/test_anisotropic_scattering.cpp scatparams.cpp scatparams.hpp geom_r3.cpp geom_s2.cpp elastic.cpp
 	$(CPP) $< scatparams.cpp geom_r3.cpp geom_s2.cpp elastic.cpp $(FLAGS) -I. -o $@
+
+tests/test_report_reduction : tests/test_report_reduction.cpp simulation_report.hpp $(typedefs_hpp) raytype.hpp
+	$(CPP) $< $(FLAGS) -I. -o $@
 
 directories : $(objdir)
 

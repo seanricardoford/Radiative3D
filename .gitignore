@@ -16,3 +16,5 @@ tests/test_parallel_features
 tests/test_parallel_features.dSYM/
 tests/test_anisotropic_scattering
 tests/test_anisotropic_scattering.dSYM/
+tests/test_report_reduction
+tests/test_report_reduction.dSYM/
