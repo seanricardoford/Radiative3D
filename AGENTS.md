@@ -58,11 +58,15 @@ user explicitly requests it. Create a new feature branch from the current
 ## Parallel execution rules
 
 - The simulation uses portable C++11 `std::thread` workers and an atomic
-  remaining-phonon counter; it is not MPI and must not acquire an MPI dependency
-  without a separate design decision.
-- Shared reporting and seismometer accumulation are protected by the
-  `DataReporter` mutex. Any new shared mutable state needs equivalent
-  synchronization or a documented thread-local/reduction design.
+  next-phonon counter that assigns 256-phonon chunks; it is not MPI and must
+  not acquire an MPI dependency without a separate design decision.
+- Each worker owns a `SimulationReportContext` containing its counters,
+  diagnostics, and flattened seismometer bins. `DataReporter` merges these
+  contexts after all workers join. Keep new simulation accumulators worker-local
+  where possible and define an explicit join-time reduction for shared results.
+- Text micro-reports remain serialized by `DataReporter::mReportMutex` only
+  when those reports are enabled. Reports are therefore a deliberate
+  synchronization and I/O cost, not part of the default simulation hot path.
 - Probability distributions use lazy integration. Call or preserve the existing
   `PrepareForSimulation()` freeze point before worker threads start; do not add
   worker-time mutation to shared `ProbDist` objects.

@@ -33,6 +33,11 @@ Radiative3D models energy propagation through both deterministic and statistical
 
   Base random seed. Each phonon derives an independent deterministic stream from this seed and its stable phonon index, so changing worker count does not change the random sequence assigned to a phonon. Decimal and `0x`-prefixed hexadecimal values are accepted.
 
+  Use the same seed when comparing serial and parallel runs. The stochastic
+  work is intended to be stable per phonon, but multi-worker report lines can
+  appear in a different order and floating-point reductions may differ by
+  tiny round-off amounts.
+
 * <tt>-T, --timetolive=_time_</tt>
 
   Sets the time to live for each phonon, or in other words the amount of sim-time to model.
@@ -87,6 +92,27 @@ Radiative3D models energy propagation through both deterministic and statistical
 
   Set global horizontal and vertical correlation lengths for an ellipsoidal scattering spectrum. Values use the model's length unit and are measured perpendicular and parallel to the local model vertical/radial direction, respectively. Both options must be supplied together for a nonzero override and must be finite and positive. An explicit `0,0` pair is equivalent to omitting both options and preserves the correlation lengths supplied by each model cell.
 
+##### _Parallel simulation behavior:_
+
+The simulation uses portable shared-memory C++11 worker threads. Workers claim
+small chunks of phonon indices dynamically, so `--workers=1` is the serial
+reference and larger values can reduce wall-clock time when enough phonons are
+available. The requested count is capped at the number of phonons. The default
+is the detected hardware concurrency, with a fallback to one worker when the
+platform does not report it.
+
+Each worker accumulates event counters and seismometer bins locally. These
+results are reduced after all workers finish. This removes the default
+per-phonon reporting lock, but it does not make text report output ordered:
+when micro-reports are enabled, their writes are serialized and their line
+order depends on scheduling. Use <tt>--reports=ALL_OFF</tt> for performance
+measurements unless the report stream itself is the subject of the experiment.
+
+For scientific comparisons, use the same model, phonon count, and
+<tt>--seed</tt>, then compare summary counters, seismometer traces, or other
+domain outputs. Exact byte-for-byte equality of floating-point reductions is
+not guaranteed across worker counts.
+
 ##### _Event args:_
 
 * <tt>-L, --source-loc=_X_,_Y_,_Z_</tt>
@@ -118,6 +144,11 @@ Radiative3D models energy propagation through both deterministic and statistical
 * <tt>--reports[=_REPORTS_FLAGS_]</tt>
 
   Enables real-time event reporting.  These are reports of various simulation events detailing the trajectories of individual phonons, such as generation at source, reflection off interfaces, scattering events, collection by seismometers, etc., written to an output stream as they are simulated.  The aggregate of these micro-reports can be used for, among other things, producing videos of energy propagation within the Earth model.  Multiple keywords can be provided as a comma-separated list in order to specify which event types are desired. Event reports are written to <tt>stdout</tt> unless directed to a file by the <tt>--report-file</tt> option.  The keywords are:
+
+  With multiple workers, report lines are protected from interleaving but are
+  not emitted in phonon-index order. Enabling large report streams can
+  substantially reduce parallel speedup because every line requires serialized
+  text output.
 
   * <tt>--reports</tt>, <tt>--reports=ALL_ON</tt>
 

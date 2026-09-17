@@ -4,7 +4,7 @@
 
 **Goal:** Preserve the merged multithreaded and anisotropic-scattering baseline while making future numerical, performance, and integration work reproducible and reviewable.
 
-**Architecture:** `main.cpp` parses options into `ModelParams`; `Model` constructs the compiled-in Earth model and owns the simulation worker boundary; `Phonon`, `Scatterer`, `ScatterParams`, and `RandomEngine` implement stochastic propagation; `DataReporter` serializes shared reports and seismometer accumulation. New work should extend these boundaries without introducing hidden global state or worker-time mutation of shared probability tables.
+**Architecture:** `main.cpp` parses options into `ModelParams`; `Model` constructs the compiled-in Earth model and owns the simulation worker boundary; `Phonon`, `Scatterer`, `ScatterParams`, and `RandomEngine` implement stochastic propagation; `DataReporter` owns canonical output plus worker-local report reduction. New work should extend these boundaries without introducing hidden global state or worker-time mutation of shared probability tables.
 
 **Tech Stack:** C++11, GCC/G++, `std::thread`, `std::atomic`, `std::mutex`, `std::mt19937_64`, GNU Make, shell run scripts, and native assertion-based C++ regression tests.
 
@@ -23,25 +23,12 @@
 
 ## Current baseline
 
-At the time this handoff was written, `master` contains the feature-code tip
-`d4b8039` and both requested capabilities. Documentation commits may be newer
-than that feature-code tip:
-
-```text
-ae81634  origin/master
-  |
-aeb3cb8  initial thread coordination
-  |
-4386340  deterministic multi-worker simulation support
-  |
-d4b8039  ellipsoidal anisotropic scattering (feature-code tip)
-```
-
-The local `multithread` branch points to `4386340`; the local
-`anisotropic-scattering` branch points to `d4b8039`. They are retained as
-historical feature pointers. Local `master` is ahead of `origin/master`; the
-merge was local and has not been pushed unless a later session changes that
-state. Always re-check Git state because this snapshot will age.
+The capability baseline is on local `master`. This session's optimization work
+is isolated on `parallel-performance`, forked from that master tip. The branch
+contains the worker-local report design, its implementation, focused tests, and
+the benchmark record; `master` remains untouched until an explicit integration
+choice is made. Always re-check Git state because branch pointers and remote
+tracking information change over time.
 
 ## Completed capabilities
 
@@ -54,11 +41,14 @@ state. Always re-check Git state because this snapshot will age.
 - Each phonon gets a stream derived from the base seed and stable phonon index
   through `RandomEngine::SeedForStream()`.
 - `Model::RunSimulation()` caps workers at the requested phonon count, uses an
-  atomic remaining counter, and joins all workers before post-simulation output.
+  atomic next-index counter to assign 256-phonon chunks, and joins all workers
+  before post-simulation output.
 - Stochastic APIs have explicit `RandomEngine&` overloads; no-argument overloads
   remain as thread-local compatibility wrappers.
-- `DataReporter` protects reports, counters, and seismometer accumulation with a
-  mutex. Lazy probability integration is completed before workers start.
+- `SimulationReportContext` stores worker-local counters, diagnostics, and
+  flattened seismometer bins. `DataReporter` merges contexts after workers
+  join; only enabled text reports use the mutex in the worker hot path. Lazy
+  probability integration is completed before workers start.
 
 Primary files: `model.cpp`, `model.hpp`, `probability.cpp`, `probability.hpp`,
 `phonons.cpp`, `phonons.hpp`, `sources.cpp`, `sources.hpp`, `dataout.cpp`,
@@ -107,35 +97,47 @@ make test-plotting
   engine sequences, stream derivation, and seeded `ProbDist` selection.
 - `tests/test_anisotropic_scattering.cpp`: isotropic/an-isotropic parameter
   state, directional PSD difference, and invalid-length rejection.
-- `tests/test_octave_plotting.sh`: current Octave cell expansion, gnuplot
-  colorbar invocation, figure annotations, and PDF generation.
+- `tests/test_report_reduction.cpp`: worker-context arithmetic and diagnostic
+  reduction.
+- `tests/test_seismometer_worker_bins.cpp`: worker-local seismometer capture.
+- `tests/test_parallel_context_api.cpp`: explicit context overloads used by
+  event generation and propagation.
+- `tests/test_parallel_reproducibility.sh`: a process-level one-versus-two
+  worker summary comparison with a fixed seed and reports disabled.
+- `tests/test_do_capability_scripts.sh`: syntax and option checks for the
+  capability-focused Lop Nor recipes.
 
-The current unit suite does not replace an end-to-end simulation comparison.
-The next parallel regression should run the same small compiled-in model with
-`--workers=1` and `--workers=2` (or more), the same `--seed`, reports disabled,
-and compare stable summary/seismometer results. Do not compare raw report line
-order from multi-worker runs.
+`make test-plotting` separately runs
+`tests/test_octave_plotting.sh`, which checks current Octave cell expansion,
+gnuplot colorbar invocation, figure annotations, and PDF generation.
+
+## Completed in this branch
+
+### Worker-local report reduction and chunked scheduling
+
+- [x] Add `SimulationReportContext` for worker-local counters, diagnostics,
+  and flattened seismometer bins.
+- [x] Add context-aware event generation and propagation APIs while retaining
+  compatibility overloads.
+- [x] Replace per-phonon atomic scheduling with 256-phonon dynamic chunks.
+- [x] Preserve random streams by deriving them from the absolute phonon index.
+- [x] Merge contexts after worker join and keep enabled text reports serialized.
+- [x] Add focused reduction, seismometer, API, and process-level regression
+  tests.
+
+### Performance comparison
+
+- [x] Use the existing `do-lopnor-big.sh` and `do-lopnor-parallel.sh` recipes
+  as matched serial/parallel workload definitions.
+- [x] Measure one, two, and four workers on a 10M-phonon Lop Nor run.
+- [x] Record machine/compiler/workload details and stable output summaries in
+  `docs/DEVELOPMENT.md`.
+- [x] Document that report ordering and floating-point reduction order are not
+  equivalence criteria.
 
 ## Prioritized follow-up
 
-### Task 1: Add a small end-to-end serial/parallel regression
-
-**Files:**
-- Create: `tests/test_simulation_reproducibility.cpp` or a repository-supported equivalent integration test.
-- Modify: `Makefile` to build and run it through `make test`.
-- Modify: `docs/DEVELOPMENT.md` with the exact invocation and comparison rule.
-
-**Acceptance:** A small deterministic compiled-in model runs with one and
-multiple workers using the same seed; reports are disabled; the test compares
-stable simulation outputs or counters and does not depend on scheduling order.
-
-- [ ] Add the smallest supported compiled-in model invocation.
-- [ ] Run it with `--workers=1 --seed=0x123456789abcdef0`.
-- [ ] Run it again with the same seed and multiple workers.
-- [ ] Compare stable counters or seismometer values, not report ordering.
-- [ ] Run `make test`.
-
-### Task 2: Exercise command-line validation at the process boundary
+### Task 1: Exercise command-line validation at the process boundary
 
 **Files:**
 - Create or extend: a focused command-line regression test.
@@ -152,23 +154,7 @@ avoid brittle tests that require unrelated banner text.
 - [ ] Verify the all-zero anisotropy pair retains isotropic behavior.
 - [ ] Run `make test`.
 
-### Task 3: Add reproducible performance measurements
-
-**Files:**
-- Create: a short documented benchmark recipe under `docs/` or `scripts/`.
-- Modify: `docs/DEVELOPMENT.md` with machine, compiler, model, phonon count,
-  seed, worker counts, and timing interpretation.
-
-**Acceptance:** The recipe uses fixed repository-relative paths, does not alter
-scientific defaults, and reports throughput for `--workers=1` and at least
-two larger worker counts. It must distinguish wall-clock speedup from
-stochastic-output equivalence.
-
-- [ ] Record compiler, machine, model, phonon count, seed, and worker counts.
-- [ ] Measure serial and at least two multi-worker configurations.
-- [ ] Record output-equivalence checks separately from timing results.
-
-### Task 4: Establish continuous verification
+### Task 2: Establish continuous verification
 
 **Files:**
 - Create: CI configuration appropriate for the hosting forge.
@@ -184,12 +170,12 @@ as a false pass.
 - [ ] Confirm CI uses the same Makefile commands as local development.
 - [ ] Add sanitizer coverage only on a runner with a working runtime.
 
-### Task 5: Decide the next parallelism layer
+### Task 3: Decide the next parallelism layer
 
 Before adding MPI or distributed-memory execution, write a design note covering
 phonon ownership, seeded stream partitioning, report reduction, failure
-propagation, and output ordering. The current atomic worker boundary is a good
-shared-memory seam but is not an MPI protocol.
+propagation, and output ordering. The current chunked atomic worker boundary is
+a good shared-memory seam but is not an MPI protocol.
 
 ## Domain limitations to keep visible
 
