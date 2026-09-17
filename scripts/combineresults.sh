@@ -89,6 +89,6 @@ for file1 in "$dir1"/$seispattern "$dir1"/$parampattern; do
     fi
     #echo "Combining: $file1 and $file2..."
     echo "combine(\"$file1\", \"$file2\", \"$ofile\")" \
-        | octave -qfW -p "`dirname $COMB_M`"
+        | octave --no-gui -qf -p "`dirname $COMB_M`"
 
 done

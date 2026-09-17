@@ -419,6 +419,17 @@ $R3D_EXE --reports=$REPORTS \
 "
     echo $R3D_CMDLN >> "$LOGFILE"
     eval "$R3D_CMDLN" | tee "$outdir"/stdout.txt
+    local pipeline_status=("${PIPESTATUS[@]}")
+    local simulation_status="${pipeline_status[0]}"
+    local tee_status="${pipeline_status[1]}"
+    if [ "$simulation_status" -ne 0 ]; then
+        echo "Radiative3D simulation failed (status $simulation_status)." >&2
+        return "$simulation_status"
+    fi
+    if [ "$tee_status" -ne 0 ]; then
+        echo "Could not write Radiative3D output log (status $tee_status)." >&2
+        return "$tee_status"
+    fi
     echo End__ Radiative3D Run: `date +"%Y.%m.%d-%H:%M:%S"` >> "$LOGFILE"
     local TIMEEND=`date +"%s"`
     local TIMEELAPSED=$(SecondsDeltaToHours $TIMEEND $TIMEBEGIN)

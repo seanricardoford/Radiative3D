@@ -123,7 +123,7 @@ function NS = arrayimage (           # NS is "Norm Struct"
   map = hot(64);
   map = map(end:-1:1,:);  # light to dark instead of dark to light
   colormap(map);
-  colorbar("linewidth", linethin, "fontsize", fontxylabel, "eastoutside");
+  colorbar("eastoutside", "linewidth", linethin, "fontsize", fontxylabel);
   xlabel("Range (km)", "fontsize", fontxylabel);
   ylabel("Time (s)", "fontsize", fontxylabel);
   azi_deg = ARRAY.Azimuths(end);
@@ -195,13 +195,20 @@ function overlayplot (Y0,       # Y-origin, as a fraction of view window
   # Up to three captions: (main, upper-right, lower-right)
   caption3 = caption2 = "";
   if (iscell(caption))
-    captions = {caption{},"",""}; # (ensure length>=3)
+    captions = {caption{:},"",""}; # (ensure length>=3)
     caption1 = captions{1};
     caption2 = captions{2};
     caption3 = captions{3};
   else
     caption1 = caption;
   end
+
+  # The current gnuplot toolkit treats literal newlines in text as
+  # commands instead of line breaks. Keep captions on one line so
+  # headless PDF/PNG output remains valid.
+  caption1 = strrep(caption1, "\n", " ");
+  caption2 = strrep(caption2, "\n", " ");
+  caption3 = strrep(caption3, "\n", " ");
 
   # View window dimensions:
   axlims = axis();

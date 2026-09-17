@@ -14,12 +14,15 @@ objects  = geom_s2.o geom_r3.o geom_r4.o probability.o sources.o scatterers.o \
 
 objects := $(addprefix $(objdir)/,$(objects))
 
-.PHONY : default cleanall clean neat anyway directories test .FORCE
+.PHONY : default cleanall clean neat anyway directories test test-plotting .FORCE
 default : directories $(OUT_EXEC)
 
 test : directories tests/test_parallel_features tests/test_anisotropic_scattering
 	./tests/test_anisotropic_scattering
 	./tests/test_parallel_features
+
+test-plotting :
+	./tests/test_octave_plotting.sh
 
 tests/test_parallel_features : tests/test_parallel_features.cpp probability.cpp probability.hpp model.hpp typedefs.hpp
 	$(CPP) $< probability.cpp $(FLAGS) -I. -o $@

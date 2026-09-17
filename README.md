@@ -26,6 +26,8 @@ $ git clone https://github.com/christophersanborn/Radiative3D.git
 $ cd Radiative3D
 $ make
 $ make test
+# Optional plotting regression (requires Octave and gnuplot)
+$ make test-plotting
 ```
 
 Results in a binary named `main`.
@@ -38,7 +40,7 @@ $ ./main [args]
 
 User Manual here: [Radiative3D Manual Page](docs/MANUAL.md)
 
-There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data.  The "do-scripts" are written in BASH and may depend on the installation of additional command line tools.  (See Manual Page.)
+There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data. The "do-scripts" are written in Bash and may depend on the installation of additional command line tools. Their plotting stages invoke Octave in non-GUI mode with the gnuplot toolkit. (See the [User Manual](docs/MANUAL.md) for details.)
 
 ## Current capabilities
 
@@ -48,6 +50,8 @@ There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managin
 - Ellipsoidal anisotropic scattering is configured with paired
   `--scatter-horizontal=L_H` and `--scatter-vertical=L_V` options.
 - The focused regression suite is available through `make test`.
+- Plotting compatibility can be checked with `make test-plotting` when GNU
+  Octave and gnuplot are installed.
 
 ## Development handoff
 

@@ -109,7 +109,7 @@ SEIS3=--seis-p2p=$SEISORIG3,$SEISDEST3,$R0,$GATHER,$NSEIS
 PopDefaults $SIMTARGET        ## Defined in do-fundamentals.sh
 CheckBuildStatus              ##  ''
 CreateOutputDirectory $@      ##  ''
-RunSimulation                 ##  ''
+RunSimulation || exit $?      ##  ''
 
 echo Begin Figure Generation: >> "$LOGFILE"
 rwd=`pwd`       # Switch to output directory - the rest of our work
@@ -149,10 +149,14 @@ RUNID=${SHFILE%.sh}
 RUNID=${RUNID#do-}
 echo "Found RunID: $RUNID"
 
-# Some octave/gnuplot set-up and platform-independence stuff:
-alias octave="octave --no-window-system"    # Prevents trouble on some systems.
-export GNUTERM="dumb"                   # Ascii, but we don't disply so is OK.
-shopt -s expand_aliases                 # Aliases in scripts... needs enabled.
+# Some Octave/gnuplot set-up and platform-independence stuff:
+octave() {
+  command octave --no-gui "$@" || {
+    local status=$?
+    echo "Octave plotting failed (status $status)." >&2
+    exit "$status"
+  }
+}
 reverser="tac"                                  # Linux has tac (backwords cat)
 [ "`uname`" == "Darwin" ] && reverser="tail -r" # But OS X has 'tail -r',...
 revtail() { $reverser | tail $@ | $reverser; }  # 'head' with neg line count

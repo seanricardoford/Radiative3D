@@ -16,6 +16,7 @@ function figinit(varargin)
   width = reg{1};       # Assumed inches, but can override by passing 
   height = reg{2};      #   "paperunits", "centimeters", ...
 
+  warning("off", "Octave:gnuplot-graphics");
   graphics_toolkit "gnuplot";   # Otherwise it crashes when run over
                                 # SSH connection. (Affects newer Octave
                                 # versions with OpenGL and Qt support.)
@@ -23,7 +24,7 @@ function figinit(varargin)
   clf();                # Clear it all...
 
   if (length(PV)>1)     # Set all requested properties. (if units
-    set(gcf(), PV{});   # changed, will get papersize in correct units 
+    set(gcf(), PV{:});   # changed, will get papersize in correct units
   end                   # before we query it)
 
                         # BTW, not sure what happens if user sets 

@@ -13,6 +13,14 @@ NUMPH=36000
 
 SUFFIX="Before"
 
+octave() {
+  command octave --no-gui "$@" || {
+    local status=$?
+    echo "Octave plotting failed (status $status)." >&2
+    exit "$status"
+  }
+}
+
 function sprayhisto_main {
 
   EVENT=SDR,0,90,0

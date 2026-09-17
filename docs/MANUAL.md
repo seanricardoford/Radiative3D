@@ -273,10 +273,14 @@ Radiative3D itself has no requirements other than a reasonably recent C++ compil
 * __GNU Octave__ — for figure generation
 
   * GNU Octave is an open-source implementation of the Matlab programming language, and is available for Linux, OS X, and Windows.  Octave is usually available through the package management utilities on modern Linux systems.  On OS X it can be installed via Homebrew, a third-party open source package management system.
+
+  * The do-scripts invoke Octave with `--no-gui` for headless figure generation. The current plotting compatibility check is `make test-plotting` from the repository root.
   
 * __Gnuplot__
 
   * This is a standard plotting utility on Unix systems and provides the back end to Octave's plotting system. It is available through the system package management tools or via Homebrew on Mac.
+
+  * The plotting routines explicitly use the gnuplot toolkit when producing non-interactive figures. GNU Octave 11.x with gnuplot 6.x is the current verified combination; other versions may require additional compatibility work.
 
 * __LaTeX__ (recommended)
 

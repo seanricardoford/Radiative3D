@@ -82,6 +82,15 @@ Primary files: `scatparams.cpp`, `scatparams.hpp`, `scatterers.cpp`,
 `scatterers.hpp`, `model.cpp`, `model.hpp`, `cmdline.cpp`, `cmdline.hpp`, and
 `docs/MANUAL.md`.
 
+### Current Octave/gnuplot compatibility
+
+- The do-scripts invoke Octave through a checked `--no-gui` wrapper and no
+  longer force `GNUTERM=dumb`.
+- Shared plotting helpers use current Octave cell expansion, current
+  `colorbar` argument ordering, and figure annotations for paper-space text.
+- `make test-plotting` verifies the headless plotting path and generated PDF
+  artifact without making Octave/gnuplot a dependency of `make test`.
+
 ## Verification baseline
 
 Run from the repository root:
@@ -89,6 +98,7 @@ Run from the repository root:
 ```bash
 make -j2
 make test
+make test-plotting
 ```
 
 `make test` currently builds and runs:
@@ -97,6 +107,8 @@ make test
   engine sequences, stream derivation, and seeded `ProbDist` selection.
 - `tests/test_anisotropic_scattering.cpp`: isotropic/an-isotropic parameter
   state, directional PSD difference, and invalid-length rejection.
+- `tests/test_octave_plotting.sh`: current Octave cell expansion, gnuplot
+  colorbar invocation, figure annotations, and PDF generation.
 
 The current unit suite does not replace an end-to-end simulation comparison.
 The next parallel regression should run the same small compiled-in model with

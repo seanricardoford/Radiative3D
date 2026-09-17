@@ -118,6 +118,7 @@ function modelplot (gridfile,           # name of file with grid data
   fontinset  = 9.0;
 
   clf();
+  warning("off", "Octave:gnuplot-graphics");
   graphics_toolkit(gcf(),"gnuplot");
   set(gcf(),"paperposition", [0.25 2.25 figwidth figheight]); 
   hold on;

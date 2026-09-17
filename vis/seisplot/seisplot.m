@@ -212,7 +212,7 @@ function seisplot (tracefile, gpow=1.0)
                      sprintf("S: %8.2e", EIntPS(2)));
   htxt{end+1} = text(x_max*0.99, 1*Staging+30,
                      sprintf("P+S: %8.2e", sum(EIntPS)));
-  set([htxt{}],fontspec{});
+  set([htxt{:}],fontspec{:});
 
   # Count statistics:
   text_phoncaught = sprintf("Total Caught: %8.2e", sum(CSumPS));
@@ -229,7 +229,7 @@ function seisplot (tracefile, gpow=1.0)
   htxt{end+1} = text(x_max*0.99, 4*Staging+190, text_phoncast);
   htxt{end+1} = text(x_max*0.99, 4*Staging+150, text_phoncaught);
   htxt{end+1} = text(x_max*0.99, 4*Staging+110, text_catchrate);
-  set([htxt{}],fontspec{});
+  set([htxt{:}],fontspec{:});
 
   # Additional annotations:
   fontspec = {"fontname", fontfam};
@@ -260,7 +260,7 @@ function seisplot (tracefile, gpow=1.0)
   htxt{end+1} = text(SEIS.TimeWindow(2)*.5,95, 
        sprintf("Gather Radius S = %0.1f km", SEIS.GatherRadius(2,2)),
        "fontsize", fontinset);
-  set([htxt{}],fontspec{});
+  set([htxt{:}],fontspec{:});
   grid("off");
 
 end

@@ -27,8 +27,14 @@ user explicitly requests it. Create a new feature branch from the current
 - Run the focused regression suite with `make test`.
 - Run both commands after changes to simulation, scattering, threading, output,
   command-line parsing, or build rules.
+- Run `make test-plotting` after changes to Octave, gnuplot, visualization
+  helpers, or do-script figure generation when those optional tools are
+  installed.
 - The test programs are native C++ executables built by the Makefile; they use
   assertions and return nonzero on failure.
+- `tests/test_octave_plotting.sh` is an optional shell regression that checks
+  headless Octave/gnuplot figure generation and is invoked by
+  `make test-plotting`.
 - `make clean` removes object files and `main` but keeps the generated floating
   point configuration. `make cleanall` also removes that generated file.
 - Do not claim a build or test passes without running the command on the current

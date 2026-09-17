@@ -19,6 +19,8 @@ The normal build is GCC/G++ plus GNU Make:
 ```bash
 make -j2
 make test
+# Optional plotting regression; requires GNU Octave and gnuplot.
+make test-plotting
 ```
 
 The executable is `main`. Build artifacts and focused test executables are
@@ -38,8 +40,30 @@ may require Bash, Octave, GMT, SAC, or other local tools.
 | Scattering physics | `scatparams.*`, `scatterers.*` | Sato/Fehler scattering parameters, PSD/G functions, MFPs, outgoing direction/type sampling. |
 | Output | `dataout.*` | Micro-reports, counters, seismometer bins, post-simulation traces and metadata. |
 | User models | `user.cpp`, `user_*_inc.cpp` | Compiled-in model constructors and model-selection logic. |
-| Tests | `tests/test_parallel_features.cpp`, `tests/test_anisotropic_scattering.cpp` | Focused assertion-based regression executables invoked by `make test`. |
+| Tests | `tests/test_parallel_features.cpp`, `tests/test_anisotropic_scattering.cpp`, `tests/test_octave_plotting.sh` | Focused native and plotting regressions invoked by `make test` or `make test-plotting`. |
 | User docs and recipes | `README.md`, `docs/MANUAL.md`, `do-*.sh`, `scripts/`, `vis/` | Usage, experiment setup, post-processing, and visualization. |
+
+## Octave and gnuplot workflows
+
+The repository's `do-*.sh` recipes and visualization helpers invoke Octave in
+non-GUI mode with `octave --no-gui`. They do not force the `GNUTERM` environment
+variable; the plotting code selects gnuplot explicitly where headless output
+needs it. This avoids the legacy `--no-window-system` and `GNUTERM=dumb`
+combination, which is noisy and unreliable with current gnuplot releases.
+
+The plotting helpers use current Octave cell-expansion syntax (`{:}`), pass
+the colorbar location in the current argument order, and implement paper-space
+labels as figure annotations rather than a second axes. The latter avoids
+gnuplot multiplot stream warnings when writing PNG and PDF output. Run the
+focused compatibility check with:
+
+```bash
+make test-plotting
+```
+
+The check requires GNU Octave and gnuplot but is intentionally separate from
+`make test`, so native simulation tests remain usable on systems without the
+optional visualization toolchain.
 
 ## Execution flow
 

@@ -333,7 +333,7 @@ function hln = VPline (xyxy,    # [x0 y0 x1 y1 ...] w.r.t. X0,Y0 baseline
   XX = X0 + xyxy(1:2:end);
   YY = Y0 + xyxy([2:2:end]);
   hln = line(XX, YY);
-  set(hln, lspec{});  
+  set(hln, lspec{:});
 
 end
 
@@ -387,7 +387,7 @@ function htxt = VPannotate (msg,        # Annotation text
 
   htxt = text(X, Y, msg, "horizontalalignment", side,
               "verticalalignment", valign);
-  set(htxt,propval{});
+  set(htxt,propval{:});
          
 end
 

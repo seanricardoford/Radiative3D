@@ -17,6 +17,14 @@ R3D_EXE=../../main  # Executable to use
 OUT_BASE=data       # Parent directory in which to put output
                     # subdirectories
 
+octave() {
+  command octave --no-gui "$@" || {
+    local status=$?
+    echo "Octave plotting failed (status $status)." >&2
+    exit "$status"
+  }
+}
+
 event=eq        # See case statement below for choices
 
 

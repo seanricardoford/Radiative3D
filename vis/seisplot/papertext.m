@@ -8,10 +8,10 @@
 # X and Y both range from 0 to 1 and span the entire paperspace of the
 # figure.
 #
-# Works by creating an invisible axes object that spans the whole
-# figure, especially for paperspace annotations.  If such an axes
-# object already exists, it will be reused instead of creating a new
-# one.
+# Uses a figure annotation object so the text is positioned in normalized
+# figure coordinates without adding a second axes.  The gnuplot toolkit
+# renders multiple axes as a multiplot and emits warnings for its streamed
+# data when printing, so keeping annotations on the figure avoids that path.
 #
 function h = papertext(varargin)
 
@@ -19,22 +19,15 @@ function h = papertext(varargin)
      error("Usage: h = papertext(X, Y, \"text\", [prop, val], ... )");
   end
 
-  hAx = gca();                    # Remember so we can restore later
-  kids = get(gcf(), "children");  # Remember original child list too
+  x = varargin{1};
+  y = varargin{2};
+  label = varargin{3};
+  properties = varargin(4:end);
 
-  # Search for a paperspace axes, create if doesn't exist:
-  hPaper = findobj(gcf(),"type", "axes", "position", [0 0 1 1], "visible", "off");
-  if (length(hPaper)>0)
-    hPaper = hPaper(end);
-  else
-    hPaper = axes('position',[0 0 1 1],'visible','off');
-    kids = [kids; hPaper];        # Put new axis at bottom of z-order not top
-    set(gcf(),"children",kids);   # (Fixes octave bug where invisible is
-  end                             #  sometimes not honored.)
-
-  # Draw text on paperspace
-  axes(hPaper);
-  h = text(varargin{});
-  axes(hAx);
+  h = annotation(gcf(), "textbox", [x, y, 0, 0],
+                 "string", label,
+                 "fitboxtotext", "on",
+                 "linestyle", "none",
+                 properties{:});
 
 end
