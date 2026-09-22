@@ -4,6 +4,7 @@ set -euo pipefail
 
 repo_dir=$(cd "$(dirname "$0")/.." && pwd)
 parallel_script="$repo_dir/do-lopnor-big-parallel.sh"
+parallel_anisotropic_script="$repo_dir/do-lopnor-big-parallel-anisotropic.sh"
 anisotropic_script="$repo_dir/do-lopnor-anisotropic.sh"
 equal_script="$repo_dir/do-lopnor-anisotropic-equal.sh"
 semi_equal_script="$repo_dir/do-lopnor-anisotropic-semi-equal.sh"
@@ -19,7 +20,7 @@ assert_contains() {
     fi
 }
 
-for script in "$parallel_script" "$anisotropic_script" "$equal_script" \
+for script in "$parallel_script" "$parallel_anisotropic_script" "$anisotropic_script" "$equal_script" \
              "$semi_equal_script" "$big_script"; do
     test -x "$script"
     bash -n "$script"
@@ -37,9 +38,17 @@ if rg --fixed-strings --quiet -- '--scatter-horizontal=' "$parallel_script" || \
     exit 1
 fi
 
+assert_contains "$parallel_anisotropic_script" 'NUMPHONS=10M'
+assert_contains "$parallel_anisotropic_script" '--workers=8'
+assert_contains "$parallel_anisotropic_script" '--seed=0x5eedc0de12345678'
+assert_contains "$parallel_anisotropic_script" '--scatter-horizontal=5.00'
+assert_contains "$parallel_anisotropic_script" '--scatter-vertical=1.25'
+assert_contains "$parallel_anisotropic_script" '## ___FIG_GEN_START___'
+assert_contains "$parallel_anisotropic_script" '## ___FIG_GEN_END___'
+
 assert_contains "$anisotropic_script" 'NUMPHONS=100K'
-assert_contains "$anisotropic_script" '--scatter-horizontal=1.25'
-assert_contains "$anisotropic_script" '--scatter-vertical=0.625'
+assert_contains "$anisotropic_script" '--scatter-horizontal=5.00'
+assert_contains "$anisotropic_script" '--scatter-vertical=1.25'
 assert_contains "$anisotropic_script" '## ___FIG_GEN_START___'
 assert_contains "$anisotropic_script" '## ___FIG_GEN_END___'
 

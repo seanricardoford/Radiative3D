@@ -23,10 +23,10 @@
 
 ## Current baseline
 
-The capability and performance baseline is on local `master` at commit
-`8b9713d`. The `parallel-performance` branch was fast-forwarded into `master`
-and deleted after merged-result verification. Local `master` is currently ahead
-of `origin/master`; it has not been pushed unless a later session changes that
+The capability and performance baseline is on local `master`. The
+`parallel-performance` branch was fast-forwarded into `master` and deleted
+after merged-result verification. Local `master` is currently ahead of
+`origin/master`; it has not been pushed unless a later session changes that
 state. Always re-check Git state because branch pointers and remote tracking
 information change over time.
 
@@ -87,6 +87,25 @@ Primary files: `scatparams.cpp`, `scatparams.hpp`, `axisymmetric_scattering.cpp`
 - `make test-plotting` verifies the headless plotting path and generated PDF
   artifact without making Octave/gnuplot a dependency of `make test`.
 
+### Latest session handoff (2026-09-22)
+
+- Added `do-lopnor-big-parallel-anisotropic.sh`, combining the 10M-phonon,
+  eight-worker, fixed-seed benchmark with the unequal axisymmetric scattering
+  override `ah=5.00`, `av=1.25`.
+- Full-scenario recipes now include the complete figure-generation stage. The
+  parallel-anisotropic run produced 320 traces, 25 PNGs, and 6 PDFs in
+  `data/20260922-152109-lopnor-big-parallel-anisotropic-R3D/`.
+- That run completed with 9,961,631 loss-surface exits, 38,369 timeouts, and
+  zero invalid phonons. Its command line and figure completion markers are in
+  the output `logfile`.
+- The writable Fontconfig cache workaround for this environment is:
+  `XDG_CACHE_HOME=/private/tmp/r3d-xdg-cache`.
+- Final verification for this session: `make test` and
+  `make test-plotting` both pass. Generated test executables are not retained.
+- The anisotropic scenario recipe and README/manual/development documentation
+  use `ah=5.00`, `av=1.25`; note that this is a 4:1 horizontal-to-vertical
+  ratio.
+
 ## Verification baseline
 
 Run from the repository root:
@@ -146,7 +165,7 @@ gnuplot colorbar invocation, figure annotations, and PDF generation.
 - [x] Document that report ordering and floating-point reduction order are not
   equivalence criteria.
 
-### Axisymmetric anisotropic scattering (completed in this branch)
+### Axisymmetric anisotropic scattering (completed and validated)
 
 - [x] Correct directional `GSATO` geometry around the local vertical symmetry
   axis with a stable parallel-incidence fallback.

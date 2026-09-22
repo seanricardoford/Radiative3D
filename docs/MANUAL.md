@@ -289,10 +289,11 @@ To get good quality images, a few tens of thousands of phonons will be propagate
 
 #### Lop Nor: parallel and anisotropic capability examples
 
-Four focused waveform recipes exercise the shared-memory and anisotropic
+Five focused waveform recipes exercise the shared-memory and anisotropic
 scattering options:
 
     ./do-lopnor-big-parallel.sh parallel-demo
+    ./do-lopnor-big-parallel-anisotropic.sh parallel-anisotropic-demo
     ./do-lopnor-anisotropic.sh anisotropic-demo
     ./do-lopnor-anisotropic-equal.sh lopnor-anisotropic-equal
     ./do-lopnor-anisotropic-semi-equal.sh lopnor-anisotropic-semi-equal
@@ -302,9 +303,12 @@ The big recipe uses one worker, the complete visualization workflow, and ten
 million phonons. The parallel recipe uses eight workers, the same ten-million
 phonon workload and fixed seed, and retains the compiled model's isotropic
 scattering; compare their recorded run times for a speedup estimate. The
+parallel-anisotropic recipe uses the same ten-million-phonon workload, eight
+workers, and fixed seed with global correlation lengths of 5.00 horizontally
+and 1.25 vertically, followed by the complete figure-generation stage. The
 anisotropic recipe follows the standard Lop Nor waveform workflow with global
-correlation lengths of 1.25 horizontally and 0.625 vertically, in the model's
-length unit. The vertical length is one half of the horizontal length. Each
+correlation lengths of 5.00 horizontally and 1.25 vertically, in the model's
+length unit. Each
 recipe records its complete command line in the output directory. The equal
 recipe uses 1.25 horizontally and vertically as an isotropic-limit runtime
 comparison. The semi-equal recipe uses 1.25 horizontally and 1.249 vertically,

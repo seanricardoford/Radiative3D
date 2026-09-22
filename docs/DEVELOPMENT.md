@@ -215,12 +215,13 @@ parallel reproducibility, add explicit values such as:
 Use a small phonon count for development. Large example defaults (often `10M`
 or more) are research runs, not unit tests.
 
-The repository includes four focused Lop Nor recipes for exercising the merged
+The repository includes five focused Lop Nor recipes for exercising the merged
 capabilities directly:
 
 ```bash
 ./do-lopnor-big.sh big-demo
 ./do-lopnor-big-parallel.sh parallel-demo
+./do-lopnor-big-parallel-anisotropic.sh parallel-anisotropic-demo
 ./do-lopnor-anisotropic.sh anisotropic-demo
 ./do-lopnor-anisotropic-equal.sh lopnor-anisotropic-equal
 ./do-lopnor-anisotropic-semi-equal.sh lopnor-anisotropic-semi-equal
@@ -231,10 +232,12 @@ a serial `10M`-phonon baseline. `do-lopnor-big-parallel.sh` uses the same model,
 workload, and fixed seed with eight explicit workers; compare the recorded run
 times in their logs to estimate shared-memory speedup. The two speed recipes
 are scientifically comparable because worker count is their intended runtime
-variable. `do-lopnor-anisotropic.sh` follows the standard `do-lopnor.sh`
-waveform workflow with global ellipsoidal scattering lengths of 1.25
-horizontally and 0.625 in the local vertical direction. The vertical length is
-therefore one half of the horizontal length.
+variable. `do-lopnor-big-parallel-anisotropic.sh` uses that same `10M` workload,
+eight workers, and fixed seed while enabling global anisotropic lengths of 5.00
+horizontally and 1.25 vertically, followed by the complete figure-generation
+stage. `do-lopnor-anisotropic.sh` follows the standard `do-lopnor.sh`
+waveform workflow with global ellipsoidal scattering lengths of 5.00
+horizontally and 1.25 in the local vertical direction.
 `do-lopnor-anisotropic-equal.sh` uses the same full workflow with equal global
 lengths of 1.25 and 1.25 as an isotropic-limit runtime comparison.
 `do-lopnor-anisotropic-semi-equal.sh` uses 1.25 horizontally and 1.249

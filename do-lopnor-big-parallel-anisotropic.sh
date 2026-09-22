@@ -13,14 +13,14 @@
 ##
 source scripts/do-fundamentals.sh
 ##
-##  This DO-SCRIPT exercises global ellipsoidal anisotropic scattering with
-##  the LOP NOR cylinder model.
+##  This DO-SCRIPT exercises shared-memory parallel simulation with
+##  axisymmetric anisotropic scattering in the LOP NOR cylinder model.
 ##
 
 ## One-liner description: (Keep this BRIEF.)
 ##
-INTENT="Example Lop Nor simulation with anisotropic scattering."
-CAMPAIGN="Anisotropic scattering capability example"
+INTENT="Reproducible eight-worker Lop Nor anisotropic simulation."
+CAMPAIGN="Parallel axisymmetric anisotropic scattering example"
 
 SIMTARGET="waveform"          # Choice: 'waveform' or 'video'. Affects
                               # defaults not otherwise specified.
@@ -38,13 +38,12 @@ EQISOFRAC=0.0   # Iso fraction for EQ event (choose from range [-1.0, 1.0])
 ##  Lop Nor geography and event source parameters:
 ##
 
-LOPXYZ=492.31,-263.65,1.05    # Lop Nor, Surface, site of Chinese Test 596
-XINXYZ=425.54,-169.53,0.98    # Lop Nor, Surface, site of Xinjiang Quake 030313
-MAKXYZ=-102.27,430.84,0.60    # Station MAK
-WUSXYZ=-390.04,-167.18,1.457  # Station WUS
+XINXYZ=425.54,-169.53,0.98    # Lop Nor, surface, site of Xinjiang Quake 030313
+MAKXYZ=-102.27,430.84,0.60   # Station MAK
+WUSXYZ=-390.04,-167.18,1.457 # Station WUS
 
 FREQ=2.0                      # Phonon frequency to model
-NUMPHONS=100K                 # Number of phonons to spray (Recommend: 140M)
+NUMPHONS=10M                  # Same workload as do-lopnor-big.sh
 RECTIME=600                   # Recording duration of seismometers (seconds).
 BINSIZE=2.00                  # Seismometer time-bin size in seconds
 GATHER=40.0                   # Terminal gather radius, in kilometers.
@@ -56,37 +55,24 @@ CYLRAD=1200                   # Total (cylindrical) radius of model.
 SCAT1=0.8,0.01,0.5,0.2,50     # Scat Args (nu,eps,a,kappa) and Q in sedi's
 SCAT2=0.8,0.01,0.5,0.3,1000   # Scat Args (nu,eps,a,kappa) and Q in crust
 SCAT3=0.8,0.01,0.7,0.5,300    # Scat Args (nu,eps,a,kappa) and Q in mantle
-                              # (Note: Q's specified are Q_s values.
-                              # Q_p is computed from assumption that
-                              # Q_kappa is infinite.)
-# To enable Moho structure, uncomment the following:
-#SCAT3=$SCAT3,0.8,0.02,0.5,0.5,2000  # Scat Args in transition layers
+                              # (Q values specified are Q_s values.)
 
 COMPARGS=$SCAT1,$SCAT2,$SCAT3
 
-FLATTEN="--flatten"           # If set to "--flatten", apply Earth-flattening
-#FLATTEN=""                   # transformation to depths and velocities.
-                              # (Set to "" to disable.)
-# Correlation lengths use the model's length unit (typically kilometers).
-# Horizontal is perpendicular to local model vertical; vertical is parallel
-# to it. This test uses ah=5.00 and av=1.25.
-ADDITIONAL="--scatter-horizontal=5.00 --scatter-vertical=1.25"
-#
-#   Event Parameters:
-#
+FLATTEN="--flatten"          # Apply Earth-flattening transformation.
+
+# Eight workers and a fixed seed preserve the parallel benchmark recipe.
+# The anisotropic override uses ah=5.00 and av=1.25 in model length units.
+ADDITIONAL="--workers=8 --seed=0x5eedc0de12345678 --scatter-horizontal=5.00 --scatter-vertical=1.25"
 
 case "$event" in
     expl)   # Generic explosion
-        SOURCELOC=425.54,-169.53,-1.02    # Lop Nor, 2km below surface
-        #SOURCELOC=425.54,-169.53,-5.02    # Lop Nor, 6km below surface
-        #SOURCELOC=425.54,-169.53,-31.02   # Xinjiang, 32km below surface
-        SOURCETYP=EXPL                    #
+        SOURCELOC=425.54,-169.53,-1.02
+        SOURCETYP=EXPL
         ;;
     eq)     # Xinjiang earthquake
-        #SOURCELOC=425.54,-169.53,-1.02    # Lop Nor, 2km below surface
-        #SOURCELOC=425.54,-169.53,-5.02    # Xinjiang, 6km below surface
-        SOURCELOC=425.54,-169.53,-31.02   # Xinjiang, 32km below surface
-        SOURCETYP=SDR,125,40,90,$EQISOFRAC  #
+        SOURCELOC=425.54,-169.53,-31.02
+        SOURCETYP=SDR,125,40,90,$EQISOFRAC
         ;;
     *)
         echo Event code not recognized.
@@ -94,27 +80,20 @@ case "$event" in
         ;;
 esac
 
-SEISORIG1=$XINXYZ             # Array locations:
-SEISORIG2=$XINXYZ             #
-#SEISORIG3=$XINXYZ            #
-SEISDEST1=$WUSXYZ             #
-SEISDEST2=$MAKXYZ             #
-#SEISDEST3=""                 #
+SEISORIG1=$XINXYZ
+SEISORIG2=$XINXYZ
+SEISDEST1=$WUSXYZ
+SEISDEST2=$MAKXYZ
 SEIS1=--seis-p2p=$SEISORIG1,$SEISDEST1,1.0,2.0,$GATHER,160
 SEIS2=--seis-p2p=$SEISORIG2,$SEISDEST2,1.0,2.0,$GATHER,160
-#SEIS3=--seis-p2p=$SEISORIG3,$SEISDEST3,1.0,2.0,$GATHER,160
-
 
 ## RUN THE SIMULATION:
-##
-##  Set up output directory and run the sim:
 ##
 
 PopDefaults $SIMTARGET        ## Defined in do-fundamentals.sh
 CheckBuildStatus              ##  ''
 CreateOutputDirectory $@      ##  ''
 RunSimulation || exit $?      ##  ''
-
 echo Begin Figure Generation: >> "$LOGFILE"
 rwd=`pwd`       # Switch to output directory - the rest of our work
 cd "$outdir"    # will be done there.
