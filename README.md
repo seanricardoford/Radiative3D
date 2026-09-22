@@ -49,6 +49,7 @@ Capability-focused Lop Nor recipes are also included:
 ./do-lopnor-big-parallel.sh parallel-demo
 ./do-lopnor-anisotropic.sh anisotropic-demo
 ./do-lopnor-anisotropic-equal.sh lopnor-anisotropic-equal
+./do-lopnor-anisotropic-semi-equal.sh lopnor-anisotropic-semi-equal
 ```
 
 The big recipe is a serial, fully visualized `10M`-phonon baseline. The
@@ -58,7 +59,8 @@ The anisotropic recipe follows the standard `do-lopnor.sh` waveform workflow
 with global horizontal and vertical scattering correlation lengths of `1.25`
 and `0.625`, respectively, in the model's distance unit.
 The equal-length recipe uses `1.25` for both directions as an isotropic-limit
-runtime comparison.
+runtime comparison. The semi-equal recipe uses `1.25` horizontally and
+`1.249` vertically, a 1 m difference in the model's kilometer units.
 
 ## Current capabilities
 

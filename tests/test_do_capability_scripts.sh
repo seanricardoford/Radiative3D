@@ -6,6 +6,7 @@ repo_dir=$(cd "$(dirname "$0")/.." && pwd)
 parallel_script="$repo_dir/do-lopnor-big-parallel.sh"
 anisotropic_script="$repo_dir/do-lopnor-anisotropic.sh"
 equal_script="$repo_dir/do-lopnor-anisotropic-equal.sh"
+semi_equal_script="$repo_dir/do-lopnor-anisotropic-semi-equal.sh"
 big_script="$repo_dir/do-lopnor-big.sh"
 
 assert_contains() {
@@ -18,7 +19,8 @@ assert_contains() {
     fi
 }
 
-for script in "$parallel_script" "$anisotropic_script" "$equal_script" "$big_script"; do
+for script in "$parallel_script" "$anisotropic_script" "$equal_script" \
+             "$semi_equal_script" "$big_script"; do
     test -x "$script"
     bash -n "$script"
     assert_contains "$script" 'source scripts/do-fundamentals.sh'
@@ -46,6 +48,12 @@ assert_contains "$equal_script" '--scatter-horizontal=1.25'
 assert_contains "$equal_script" '--scatter-vertical=1.25'
 assert_contains "$equal_script" '## ___FIG_GEN_START___'
 assert_contains "$equal_script" '## ___FIG_GEN_END___'
+
+assert_contains "$semi_equal_script" 'NUMPHONS=100K'
+assert_contains "$semi_equal_script" '--scatter-horizontal=1.25'
+assert_contains "$semi_equal_script" '--scatter-vertical=1.249'
+assert_contains "$semi_equal_script" '## ___FIG_GEN_START___'
+assert_contains "$semi_equal_script" '## ___FIG_GEN_END___'
 
 assert_contains "$big_script" 'NUMPHONS=10M'
 if ! rg --quiet --regexp '^ADDITIONAL="--workers=1 --seed=0x5eedc0de12345678"$' "$big_script"; then

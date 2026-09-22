@@ -215,7 +215,7 @@ parallel reproducibility, add explicit values such as:
 Use a small phonon count for development. Large example defaults (often `10M`
 or more) are research runs, not unit tests.
 
-The repository includes three focused Lop Nor recipes for exercising the merged
+The repository includes four focused Lop Nor recipes for exercising the merged
 capabilities directly:
 
 ```bash
@@ -223,6 +223,7 @@ capabilities directly:
 ./do-lopnor-big-parallel.sh parallel-demo
 ./do-lopnor-anisotropic.sh anisotropic-demo
 ./do-lopnor-anisotropic-equal.sh lopnor-anisotropic-equal
+./do-lopnor-anisotropic-semi-equal.sh lopnor-anisotropic-semi-equal
 ```
 
 `do-lopnor-big.sh` runs the complete, visualized isotropic Lop Nor workflow as
@@ -236,6 +237,8 @@ horizontally and 0.625 in the local vertical direction. The vertical length is
 therefore one half of the horizontal length.
 `do-lopnor-anisotropic-equal.sh` uses the same full workflow with equal global
 lengths of 1.25 and 1.25 as an isotropic-limit runtime comparison.
+`do-lopnor-anisotropic-semi-equal.sh` uses 1.25 horizontally and 1.249
+vertically, a 1 m difference in the model's kilometer units.
 
 ## Performance benchmark
 
