@@ -50,6 +50,15 @@ the existing `Phonon::Transform()` method. Thus the propagation path remains
 fully 3D even though the scattering kernel is reduced to axisymmetric
 coordinates.
 
+The kernel's relative azimuth is measured from the incoming/up meridian. The
+existing `Phonon::Transform()` API instead interprets a relative phonon's
+azimuth in the incoming polarization frame. The anisotropic scattering API
+must therefore receive the incoming polarization angle and convert each
+sampled direction and S polarization vector from the symmetry-axis meridian
+into the transform frame before constructing the relative phonon. This keeps
+the anisotropic kernel tied to `up` and prevents the current S polarization
+orientation from silently rotating the statistical medium.
+
 ## Goals and non-goals
 
 ### Goals
@@ -113,6 +122,14 @@ single source of scattering physics. Add comments documenting `ah`, `av`,
 `q_h`, `q_v`, and the local symmetry-axis convention. No caller will construct
 the reduced kernel by duplicating the PSD or radiation-pattern equations.
 
+The directional `GSATO(incoming, up, toa, ...)` implementation will construct a
+stable orthonormal basis from `incoming` and `up`: the first transverse axis is
+the incoming/up meridian and the second is its right-handed perpendicular. It
+will use that basis to form the outgoing wavevector in the PSD calculation; it
+will not assume that the simulation-frame global Z axis is the local symmetry
+axis. Near parallel incoming/up directions, a deterministic perpendicular
+fallback will avoid division by a vanishing transverse projection.
+
 ### `Scatterer`
 
 Add a private axisymmetric-kernel cache containing:
@@ -164,7 +181,9 @@ For unequal anisotropy and normal deflection:
    bin's contribution to the selected conversion.
 4. Sample a reduced quadrature node from that CDF.
 5. Construct `Phonon(S2::ThetaPhi(psi, zeta), output_type)` and assign the
-   cached S/S polarization angle when applicable.
+   cached S/S polarization angle when applicable, after converting both
+   direction and polarization from the symmetry-axis meridian into the current
+   incoming polarization frame.
 6. Let `Phonon::Transform()` express the relative direction in the current
    global 3D frame.
 
@@ -203,6 +222,10 @@ direction and local vertical when it exercises the anisotropic sampler. It must
 not accidentally call the isotropic no-geometry overload with an uninitialized
 full-sphere distribution.
 
+The geometry-aware scattering overload will carry the incoming polarization
+angle required by the meridian-to-transform-frame conversion. Existing
+no-geometry overloads remain compatibility wrappers using zero polarization.
+
 ## Verification strategy
 
 ### Numerical kernel tests
@@ -213,6 +236,9 @@ Extend the anisotropic test coverage to verify:
 * unequal lengths produce distinct vertical and horizontal PSD values;
 * rotating the incoming direction around the symmetry axis leaves directional
   MFP and conversion totals unchanged;
+* rotating the incoming S polarization while holding the incoming direction and
+  local vertical fixed changes only the transform-frame representation, not the
+  sampled physical outgoing direction or S polarization vector;
 * reduced quadrature MFPs and conversion totals agree with an independent,
   higher-resolution two-angle reference within documented tolerances;
 * increasing quadrature resolution produces a converged result for the Lop Nor
