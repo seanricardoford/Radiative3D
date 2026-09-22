@@ -94,7 +94,8 @@ Scatterer::GetScattererMatchingParams(ScatterParams par) {
 // CONSTRUCTOR:  Scatterer()
 //
 Scatterer::Scatterer(ScatterParams par) :
-  PhononSource(NUM_INTYPES, NUM_OUTTYPES),  
+  PhononSource(NUM_INTYPES, NUM_OUTTYPES,
+               par.IsAnisotropic() ? 0 : nTOA),
                         // Init base class for two input raytypes and
                         // four output raytypes.
   mParams(par)          // Record params for later use if needed
