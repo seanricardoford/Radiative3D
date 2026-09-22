@@ -156,6 +156,7 @@ public:
   // ::::::::::::::::::::::::::::::::::::::::::
 
   PhononSource(int nraytypes_in, int nraytypes_out);
+  PhononSource(int nraytypes_in, int nraytypes_out, int angular_size);
 
   // :::::::::::::::::::::::::::::::::::::::::::::::::
   // ::: Produce-Something Methods  (PhononSource) :::

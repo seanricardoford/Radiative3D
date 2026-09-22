@@ -8,17 +8,18 @@ objdir = $(build_dir)
 
 OUT_EXEC = main
 objects  = geom_s2.o geom_r3.o geom_r4.o probability.o sources.o scatterers.o \
-           events.o phonons.o grid.o raypath.o media_cellface.o media.o \
-	   model.o rtcoef.o dataout.o scatparams.o cmdline.o user.o global.o \
-           ecs.o elastic.o main.o
+	           events.o phonons.o grid.o raypath.o media_cellface.o media.o \
+	   model.o rtcoef.o dataout.o scatparams.o axisymmetric_scattering.o cmdline.o user.o global.o \
+	           ecs.o elastic.o main.o
 
 objects := $(addprefix $(objdir)/,$(objects))
 
 .PHONY : default cleanall clean neat anyway directories test test-plotting .FORCE
 default : directories $(OUT_EXEC)
 
-test : directories $(OUT_EXEC) tests/test_parallel_features tests/test_anisotropic_scattering tests/test_report_reduction tests/test_seismometer_worker_bins tests/test_parallel_context_api tests/test_parallel_reproducibility.sh tests/test_do_capability_scripts.sh
+test : directories $(OUT_EXEC) tests/test_parallel_features tests/test_anisotropic_scattering tests/test_axisymmetric_scattering tests/test_report_reduction tests/test_seismometer_worker_bins tests/test_parallel_context_api tests/test_parallel_reproducibility.sh tests/test_do_capability_scripts.sh
 	./tests/test_anisotropic_scattering
+	./tests/test_axisymmetric_scattering
 	./tests/test_parallel_features
 	./tests/test_report_reduction
 	./tests/test_seismometer_worker_bins
@@ -34,6 +35,9 @@ tests/test_parallel_features : tests/test_parallel_features.cpp probability.cpp 
 
 tests/test_anisotropic_scattering : tests/test_anisotropic_scattering.cpp scatparams.cpp scatparams.hpp geom_r3.cpp geom_s2.cpp elastic.cpp
 	$(CPP) $< scatparams.cpp geom_r3.cpp geom_s2.cpp elastic.cpp $(FLAGS) -I. -o $@
+
+tests/test_axisymmetric_scattering : tests/test_axisymmetric_scattering.cpp $(objects)
+	$(CPP) $< $(filter-out $(objdir)/main.o,$(objects)) $(FLAGS) -I. -o $@
 
 tests/test_report_reduction : tests/test_report_reduction.cpp simulation_report.hpp $(typedefs_hpp) raytype.hpp
 	$(CPP) $< $(FLAGS) -I. -o $@
@@ -145,7 +149,8 @@ phonons_hpp = phonons.hpp $(geom_hpp) $(raytype_hpp)
 sources_hpp = sources.hpp $(geom_hpp) $(raytype_hpp) $(probability_hpp)
 events_hpp  = events.hpp  $(sources_hpp) $(tensors_hpp)
 scatparams_hpp = scatparams.hpp $(geom_hpp) $(elastic_hpp)
-scatterers_hpp = scatterers.hpp $(sources_hpp) $(scatparams_hpp)
+axisymmetric_hpp = axisymmetric_scattering.hpp $(scatparams_hpp) $(probability_hpp) $(raytype_hpp)
+scatterers_hpp = scatterers.hpp $(sources_hpp) $(scatparams_hpp) $(axisymmetric_hpp)
 grid_hpp    = grid.hpp    $(ecs_hpp)
 raypath_hpp = raypath.hpp $(geom_hpp)
 media_cellface_hpp = media_cellface.hpp $(geom_hpp)
@@ -205,6 +210,9 @@ $(objdir)/events.o : events.cpp $(events_hpp) $(phonons_hpp) $(dataout_hpp) $(co
 	$(CPP) -c $< $(FLAGS) -o $@
 
 $(objdir)/scatparams.o : scatparams.cpp $(scatparams_hpp) $(comd)
+	$(CPP) -c $< $(FLAGS) -o $@
+
+$(objdir)/axisymmetric_scattering.o : axisymmetric_scattering.cpp $(axisymmetric_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@
 
 $(objdir)/scatterers.o : scatterers.cpp $(scatterers_hpp) $(phonons_hpp) $(comd)

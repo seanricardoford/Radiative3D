@@ -13,14 +13,14 @@
 ##
 source scripts/do-fundamentals.sh
 ##
-##  This DO-SCRIPT exercises global ellipsoidal anisotropic scattering with
-##  the LOP NOR cylinder model.
+##  This DO-SCRIPT exercises shared-memory parallel simulation with the
+##  LOP NOR cylinder model while retaining the model's isotropic scattering.
 ##
 
 ## One-liner description: (Keep this BRIEF.)
 ##
-INTENT="Lop Nor waveform simulation with anisotropic scattering."
-CAMPAIGN="Anisotropic scattering capability example"
+INTENT="Reproducible eight-worker Lop Nor waveform simulation."
+CAMPAIGN="Parallel capability example"
 
 SIMTARGET="waveform"          # Choice: 'waveform' or 'video'. Affects
                               # defaults not otherwise specified.
@@ -43,7 +43,7 @@ MAKXYZ=-102.27,430.84,0.60   # Station MAK
 WUSXYZ=-390.04,-167.18,1.457 # Station WUS
 
 FREQ=2.0                      # Phonon frequency to model
-NUMPHONS=1M                   # Enough samples for directional scattering
+NUMPHONS=10M                  # Same workload as do-lopnor-big.sh
 RECTIME=600                   # Recording duration of seismometers (seconds).
 BINSIZE=2.00                  # Seismometer time-bin size in seconds
 GATHER=40.0                   # Terminal gather radius, in kilometers.
@@ -61,11 +61,10 @@ COMPARGS=$SCAT1,$SCAT2,$SCAT3
 
 FLATTEN="--flatten"          # Apply Earth-flattening transformation.
 
-# Correlation lengths use the model's length unit (typically kilometers).
-# Horizontal is perpendicular to local model vertical; vertical is parallel
-# to it. Both values are required for a nonzero global anisotropy override.
-# The unequal values make the directional PSD and MFP behavior observable.
-ADDITIONAL="--workers=1 --seed=0x5eedc0de87654321 --scatter-horizontal=0.25 --scatter-vertical=1.25"
+# Explicit worker count and seed make this a reproducible parallel recipe.
+# No scattering-length override is supplied: the compiled model remains
+# isotropic, providing a clean parallelism example.
+ADDITIONAL="--workers=8 --seed=0x5eedc0de12345678"
 
 case "$event" in
     expl)   # Generic explosion

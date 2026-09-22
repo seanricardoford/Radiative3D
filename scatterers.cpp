@@ -3,6 +3,7 @@
 #include <cmath>        /* log(), sqrt() */
 #include <iomanip>      /* setw() */
 #include <cstdlib>
+#include <limits>
 #include "scatterers.hpp"
 #include "phonons.hpp"
 
@@ -94,33 +95,79 @@ Scatterer::GetScattererMatchingParams(ScatterParams par) {
 // CONSTRUCTOR:  Scatterer()
 //
 Scatterer::Scatterer(ScatterParams par) :
-  PhononSource(NUM_INTYPES, NUM_OUTTYPES),  
+  PhononSource(NUM_INTYPES, NUM_OUTTYPES,
+               par.IsAnisotropic() ? 0 : nTOA),
                         // Init base class for two input raytypes and
                         // four output raytypes.
-  mParams(par)          // Record params for later use if needed
+  mParams(par),         // Record params for later use if needed
+  mpAxisymmetric(par.IsAnisotropic()
+      ? new AxisymmetricScatteringKernel(par) : 0)
 {
 
-  PopulateProbDists(par);   // Populate probability distributions
-  PopulateWholeProbs();     //
-  PrepareForSimulation();   // Freeze lazy probability integration before workers.
+  if (mParams.IsAnisotropic()) {
+    mWholeProbs[IN_P].SetRelativeProb(GPP,
+        mpAxisymmetric->GetAverageConversionWeight(
+            AxisymmetricScatteringKernel::GPP));
+    mWholeProbs[IN_P].SetRelativeProb(GPS,
+        mpAxisymmetric->GetAverageConversionWeight(
+            AxisymmetricScatteringKernel::GPS));
+    mWholeProbs[IN_P].SetRelativeProb(GSP, 0.0);
+    mWholeProbs[IN_P].SetRelativeProb(GSS, 0.0);
+    mWholeProbs[IN_S].SetRelativeProb(GPP, 0.0);
+    mWholeProbs[IN_S].SetRelativeProb(GPS, 0.0);
+    mWholeProbs[IN_S].SetRelativeProb(GSP,
+        mpAxisymmetric->GetAverageConversionWeight(
+            AxisymmetricScatteringKernel::GSP));
+    mWholeProbs[IN_S].SetRelativeProb(GSS,
+        mpAxisymmetric->GetAverageConversionWeight(
+            AxisymmetricScatteringKernel::GSS));
+    PrepareForSimulation();
 
-  if (!cm_MFPOverride_b) {  // Populate Mean Free Path values
-    ComputeMFPs();          //
+    if (!cm_MFPOverride_b) {
+      for (int intype = 0; intype < RAY_NBT; ++intype) {
+        const Real inverse =
+            mpAxisymmetric->GetAverageInverseMeanFreePath(
+                static_cast<raytype>(intype));
+        mMeanFreeP[intype] = inverse > 0.0
+            ? 1.0 / inverse : std::numeric_limits<Real>::infinity();
+      }
+    } else {
+      mMeanFreeP[RAY_P] = cm_MFPOverrides[RAY_P];
+      mMeanFreeP[RAY_S] = cm_MFPOverrides[RAY_S];
+    }
+
+    if (!cm_NoDeflect_b) {
+      mDipoles[RAY_P] = mpAxisymmetric->GetAverageDipole(RAY_P);
+      mDipoles[RAY_S] = mpAxisymmetric->GetAverageDipole(RAY_S);
+    } else {
+      mDipoles[RAY_P] = 1.0;
+      mDipoles[RAY_S] = 1.0;
+    }
   } else {
-    mMeanFreeP[RAY_P] = cm_MFPOverrides[RAY_P];   // Override values
-    mMeanFreeP[RAY_S] = cm_MFPOverrides[RAY_S];   // if requested
+    PopulateProbDists(par);   // Populate probability distributions
+    PopulateWholeProbs();     //
+    PrepareForSimulation();   // Freeze lazy probability integration before workers.
+
+    if (!cm_MFPOverride_b) {  // Populate Mean Free Path values
+      ComputeMFPs();          //
+    } else {
+      mMeanFreeP[RAY_P] = cm_MFPOverrides[RAY_P];   // Override values
+      mMeanFreeP[RAY_S] = cm_MFPOverrides[RAY_S];   // if requested
+    }
+
+    if (!cm_NoDeflect_b) {    // Populate Dipole Moments
+      ComputeDipoles();       //
+    } else {
+      mDipoles[RAY_P] = 1.0;  // Note: these are informational values, over-
+      mDipoles[RAY_S] = 1.0;  // riding them does not prevent deflection. A
+    }                         // check in GRSPh() does that.
   }
-
-  if (!cm_NoDeflect_b) {    // Populate Dipole Moments
-    ComputeDipoles();       //
-  } else {
-    mDipoles[RAY_P] = 1.0;  // Note: these are informational values, over-
-    mDipoles[RAY_S] = 1.0;  // riding them does not prevent deflection. A
-  }                         // check in GRSPh() does that.
 
   //
 }//
 //
+
+Scatterer::~Scatterer() {}
 
 
 //////
@@ -313,14 +360,11 @@ Real Scatterer::GetRandomPathLength(raytype intype) {
 Real Scatterer::GetDirectionalMeanFreePath(
     raytype intype, const R3::XYZ & incoming,
     const R3::XYZ & vertical) const {
-  Real inverse_mfp = 0.0;
-  for (int k = 0; k < nTOA; ++k) {
-    Real gpp, gps, gsp, gss, spol;
-    mParams.GSATO(incoming, vertical, (*pTOA)[k],
-                  gpp, gps, gsp, gss, spol);
-    inverse_mfp += (intype == RAY_P) ? (gpp + gps) : (gsp + gss);
-  }
-  inverse_mfp /= nTOA;
+  const R3::XYZ up = vertical.UnitElse(R3::XYZ(0,0,1));
+  const R3::XYZ in = incoming.UnitElse(up);
+  const Real mu = in.Dot(up);
+  const Real inverse_mfp =
+      mpAxisymmetric->GetInverseMeanFreePath(intype, mu);
   return inverse_mfp > 0.0 ? 1.0 / inverse_mfp
                            : mMeanFreeP[intype];
 }
@@ -347,6 +391,11 @@ Real Scatterer::GetRandomPathLength(raytype intype,
 //
 Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype,
                                                    RandomEngine & rng) {
+  if (mpAxisymmetric) {
+    return GetRandomScatteredRelativePhonon(
+        intype, R3::XYZ(0,0,1), R3::XYZ(0,0,1), 0.0, rng);
+  }
+
   S2::S2Set & toa = (*pTOA);             // Alias
   raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
                           RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
@@ -405,74 +454,63 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(
     return GetRandomScatteredRelativePhonon(intype, rng);
   }
 
+  return GetRandomScatteredRelativePhonon(
+      intype, incoming, vertical, 0.0, rng);
+}
+
+Phonon Scatterer::GetRandomScatteredRelativePhonon(
+    raytype intype, const R3::XYZ & incoming,
+    const R3::XYZ & vertical, Real incoming_polarization,
+    RandomEngine & rng) {
+  if (!mParams.IsAnisotropic()) {
+    return GetRandomScatteredRelativePhonon(intype, rng);
+  }
+
   if (cm_NoDeflect_b) {
     Phonon nodeflect(S2::ThetaPhi(0,0), intype);
     nodeflect.SetPolarization(0);
     return nodeflect;
   }
 
-  std::vector<Real> totals(NUM_OUTTYPES, 0.0);
-  std::vector< std::vector<Real> > weights(
-      NUM_OUTTYPES, std::vector<Real>(nTOA, 0.0));
-  for (int k = 0; k < nTOA; ++k) {
-    Real gpp, gps, gsp, gss, spol;
-    mParams.GSATO(incoming, vertical, (*pTOA)[k],
-                  gpp, gps, gsp, gss, spol);
-    weights[GPP][k] = gpp;
-    weights[GPS][k] = gps;
-    weights[GSP][k] = gsp;
-    weights[GSS][k] = gss;
-    totals[GPP] += gpp;
-    totals[GPS] += gps;
-    totals[GSP] += gsp;
-    totals[GSS] += gss;
-  }
+  const R3::XYZ in = incoming.UnitElse(R3::XYZ(0,0,1));
+  const R3::XYZ up = vertical.UnitElse(R3::XYZ(0,0,1));
+  const Real mu = in.Dot(up);
+  const AxisymmetricScatteringKernel::Sample sample =
+      mpAxisymmetric->GetRandomSample(intype, mu, rng);
 
-  if (intype == RAY_P) {
-    totals[GSP] = 0.0;
-    totals[GSS] = 0.0;
-  } else {
-    totals[GPP] = 0.0;
-    totals[GPS] = 0.0;
-  }
+  R3::XYZ meridian, azimuth;
+  ScatterParams::MakeAxisymmetricBasis(in, up, meridian, azimuth);
+  const Real sp = std::sin(sample.psi);
+  const Real cp = std::cos(sample.psi);
+  const Real cz = std::cos(sample.zeta);
+  const Real sz = std::sin(sample.zeta);
+  const R3::XYZ out = in.ScaledBy(cp)
+                    + meridian.ScaledBy(sp * cz)
+                    + azimuth.ScaledBy(sp * sz);
+  const R3::XYZ rtheta = meridian.ScaledBy(cp * cz)
+                       + azimuth.ScaledBy(cp * sz)
+                       + in.ScaledBy(-sp);
+  const R3::XYZ rphi = meridian.ScaledBy(-sz)
+                     + azimuth.ScaledBy(cz);
+  const R3::XYZ output_pol = rtheta.ScaledBy(std::cos(sample.polarization))
+                           + rphi.ScaledBy(std::sin(sample.polarization));
 
-  Real total = 0.0;
-  for (int conv = 0; conv < NUM_OUTTYPES; ++conv) total += totals[conv];
-  if (total <= 0.0) {
-    return GetRandomScatteredRelativePhonon(intype, rng);
-  }
-  Real selection = rng.Uniform01() * total;
-  out_types_e conv = GSS;
-  Real cumulative = 0.0;
-  for (int candidate = 0; candidate < NUM_OUTTYPES; ++candidate) {
-    cumulative += totals[candidate];
-    if (selection <= cumulative) {
-      conv = static_cast<out_types_e>(candidate);
-      break;
-    }
-  }
+  const R3::OrthoAxes incoming_axes(
+      in.Theta(), in.Phi(), incoming_polarization);
+  const Real rel_cos = std::max(static_cast<Real>(-1.0),
+      std::min(static_cast<Real>(1.0), out.Dot(incoming_axes.E3())));
+  const Real rel_theta = std::acos(rel_cos);
+  const Real rel_phi = std::atan2(out.Dot(incoming_axes.S2()),
+                                  out.Dot(incoming_axes.S1()));
+  const R3::XYZ pol_in_AA(output_pol.Dot(incoming_axes.S1()),
+                          output_pol.Dot(incoming_axes.S2()),
+                          output_pol.Dot(incoming_axes.E3()));
+  const R3::OrthoAxes relative_axes(rel_theta, rel_phi, 0.0);
+  const Real rel_pol = std::atan2(pol_in_AA.Dot(relative_axes.E2()),
+                                  pol_in_AA.Dot(relative_axes.E1()));
 
-  Real direction_selection = rng.Uniform01() * totals[conv];
-  cumulative = 0.0;
-  Index toa_index = nTOA - 1;
-  for (int k = 0; k < nTOA; ++k) {
-    cumulative += weights[conv][k];
-    if (direction_selection <= cumulative) {
-      toa_index = k;
-      break;
-    }
-  }
-
-  raytype out_types[NUM_OUTTYPES] = {RAY_P, RAY_S, RAY_P, RAY_S};
-  Real pol = 0.0;
-  if (conv == GSS) {
-    Real gpp, gps, gsp, gss, spol;
-    mParams.GSATO(incoming, vertical, (*pTOA)[toa_index],
-                  gpp, gps, gsp, gss, spol);
-    pol = spol;
-  }
-  Phonon result((*pTOA)[toa_index], out_types[conv]);
-  result.SetPolarization(pol);
+  Phonon result(S2::ThetaPhi(rel_theta, rel_phi), sample.output_type);
+  result.SetPolarization(sample.output_type == RAY_P ? 0.0 : rel_pol);
   return result;
 }
 
@@ -497,7 +535,11 @@ void Scatterer::test_random_rayset(raytype intype, int count) {
   // FILL BINS:
   //  
   for (int ctr=0; ctr<count; ctr++) {
-    Phonon phon = GetRandomScatteredRelativePhonon(intype);
+    Phonon phon = mpAxisymmetric
+        ? GetRandomScatteredRelativePhonon(
+            intype, R3::XYZ(0,0,1), R3::XYZ(0,0,1), 0.0,
+            RandomEngine::Default())
+        : GetRandomScatteredRelativePhonon(intype);
     raytype rt = phon.GetFullRaytype();
     int toa_index = toa.GetBestIndexFromPoint(phon.GetDirection());
     bins[rt][toa_index]++;

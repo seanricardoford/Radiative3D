@@ -12,8 +12,10 @@
 #ifndef SCATTERERS_H_
 #define SCATTERERS_H_
 //
+#include <memory>
 #include "sources.hpp"
 #include "scatparams.hpp"
+#include "axisymmetric_scattering.hpp"
 
 //////
 // CLASSES: Forward Declarations
@@ -178,6 +180,8 @@ protected:
                                 // conservation is a planned future
                                 // feature.)
 
+  std::unique_ptr<AxisymmetricScatteringKernel> mpAxisymmetric;
+
   std::vector<Real>  m_spol;    // Polarization angles for S->S
                                 // conversions
 
@@ -189,6 +193,7 @@ public:
   // :::::::::::::::::::::::::::::::::::::::
 
   Scatterer(ScatterParams par);
+  ~Scatterer();
 
 
 protected:
@@ -236,6 +241,10 @@ public:
                                           const R3::XYZ & incoming,
                                           const R3::XYZ & vertical,
                                           RandomEngine &);
+  Phonon GetRandomScatteredRelativePhonon(
+      raytype intype, const R3::XYZ & incoming,
+      const R3::XYZ & vertical, Real incoming_polarization,
+      RandomEngine &);
 
 
   // ::::::::::::::::::::::::::::::::::::::::::

@@ -692,7 +692,7 @@ void Phonon::PropagateImpl(RandomEngine & rng,
       this->Move(travel);     // Move us to the scatterer
 
       Phonon rph = mpScat->GetRandomScatteredRelativePhonon(
-          mType, incoming_direction, local_vertical, rng);
+          mType, incoming_direction, local_vertical, mPol, rng);
       this->Transform(rph);   // Re-orient and re-raytype us according
                               // the results of the scattering event
                               // (coded in 'rph').

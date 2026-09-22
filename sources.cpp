@@ -57,7 +57,13 @@ S2::S2Set * PhononSource::pTOA = NULL;
 //   not... there will be problems.
 //
 PhononSource::PhononSource(int nraytypes_in, int nraytypes_out) :
-  mPDists     (nraytypes_out, ProbDist(nTOA)          ),
+  PhononSource(nraytypes_in, nraytypes_out, nTOA)
+{}
+
+PhononSource::PhononSource(int nraytypes_in, int nraytypes_out,
+                           int angular_size) :
+  mPDists     (angular_size > 0 ? nraytypes_out : 0,
+               ProbDist(angular_size > 0 ? angular_size : 0)),
   mWholeProbs (nraytypes_in,  ProbDist(nraytypes_out) )
 {}
 

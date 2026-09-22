@@ -92,6 +92,14 @@ Radiative3D models energy propagation through both deterministic and statistical
 
   Set global horizontal and vertical correlation lengths for an ellipsoidal scattering spectrum. Values use the model's length unit and are measured perpendicular and parallel to the local model vertical/radial direction, respectively. Both options must be supplied together for a nonzero override and must be finite and positive. An explicit `0,0` pair is equivalent to omitting both options and preserves the correlation lengths supplied by each model cell.
 
+  When the two values differ, scattering uses an axisymmetric reduced kernel
+  about the local vertical while preserving full three-dimensional phonon
+  trajectories and polarization. The reduced cache is built before simulation
+  workers start. Equal horizontal and vertical values retain the existing
+  isotropic scattering path. The option is global for the model invocation; it
+  does not define per-cell symmetry axes. `--overridemfp` still takes precedence
+  over computed directional mean free paths.
+
 ##### _Parallel simulation behavior:_
 
 The simulation uses portable shared-memory C++11 worker threads. Workers claim
@@ -284,18 +292,21 @@ To get good quality images, a few tens of thousands of phonons will be propagate
 Three focused waveform recipes exercise the shared-memory and anisotropic
 scattering options:
 
-    ./do-lopnor-parallel.sh parallel-demo
-    ./do-lopnor-anistropic.sh anisotropic-demo
+    ./do-lopnor-big-parallel.sh parallel-demo
+    ./do-lopnor-anisotropic.sh anisotropic-demo
+    ./do-lopnor-anisotropic-equal.sh lopnor-anisotropic-equal
     ./do-lopnor-big.sh big-demo
 
 The big recipe uses one worker, the complete visualization workflow, and ten
-million phonons. The parallel recipe uses four workers, the same ten-million
+million phonons. The parallel recipe uses eight workers, the same ten-million
 phonon workload and fixed seed, and retains the compiled model's isotropic
 scattering; compare their recorded run times for a speedup estimate. The
-anisotropic recipe uses one worker, one million phonons, a fixed seed, and
-unequal global correlation lengths of 0.25 horizontally and 1.25 vertically,
-in the model's length unit. Each recipe records its complete command line in
-the output directory.
+anisotropic recipe follows the standard Lop Nor waveform workflow with global
+correlation lengths of 1.25 horizontally and 0.625 vertically, in the model's
+length unit. The vertical length is one half of the horizontal length. Each
+recipe records its complete command line in the output directory. The equal
+recipe uses 1.25 horizontally and vertically as an isotropic-limit runtime
+comparison.
 
 ### INSTALLATION
 
