@@ -265,6 +265,11 @@ public:
               Real & gsp, Real & gss,
               Real & spol) const;
 
+  static void MakeAxisymmetricBasis(const R3::XYZ & incoming,
+                                    const R3::XYZ & vertical,
+                                    R3::XYZ & meridian,
+                                    R3::XYZ & azimuth);
+
   void XSATO (S2::S2Point toa,          // (A`la PSPhonon)
               Real & xpp, Real & xps,
               Real & xsp, Real & xss_psi, 

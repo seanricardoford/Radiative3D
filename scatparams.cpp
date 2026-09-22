@@ -148,9 +148,13 @@ void ScatterParams::GSATO(const R3::XYZ & incoming,
   const Real pi4  = 4. * Geometry::Pi;
   const Real el4  = pow(el,4);
   const R3::XYZ in = incoming.UnitElse(R3::XYZ(0,0,1));
-  const R3::XYZ out = R3::OrthoAxes(in.Theta(), in.Phi(), 0.0)
-                        .Express(R3::OrthoAxes(toa.Theta(), toa.Phi(), 0.0))
-                        .E3().UnitElse(in);
+  R3::XYZ meridian, azimuth;
+  MakeAxisymmetricBasis(in, vertical, meridian, azimuth);
+  const Real psi = toa.Theta();
+  const Real zeta = toa.Phi();
+  const R3::XYZ out = in.ScaledBy(cos(psi))
+                    + meridian.ScaledBy(sin(psi) * cos(zeta))
+                    + azimuth.ScaledBy(sin(psi) * sin(zeta));
 
   Real xpp, xps, xsp, xss_psi, xss_zeta;
   XSATO(toa, xpp, xps, xsp, xss_psi, xss_zeta);
@@ -182,6 +186,34 @@ void ScatterParams::GSATO(const R3::XYZ & incoming,
   if (gsp < 1.e-30) gsp = 0.;
   if (gss < 1.e-30) gss = 0.;
   spol = atan2(xss_zeta, xss_psi);
+}
+
+void ScatterParams::MakeAxisymmetricBasis(const R3::XYZ & incoming,
+                                           const R3::XYZ & vertical,
+                                           R3::XYZ & meridian,
+                                           R3::XYZ & azimuth) {
+  const R3::XYZ in = incoming.UnitElse(R3::XYZ(0,0,1));
+  const R3::XYZ up = vertical.UnitElse(R3::XYZ(0,0,1));
+  const Real mu = in.Dot(up);
+  meridian = in.ScaledBy(mu) + up.Negative();
+
+  if (meridian.Mag() < 1.0e-12) {
+    const R3::XYZ stable_axes[] = {
+      R3::XYZ(1,0,0), R3::XYZ(0,1,0), R3::XYZ(0,0,1)
+    };
+    for (const R3::XYZ & axis : stable_axes) {
+      const Real projection = in.Dot(axis);
+      const R3::XYZ candidate = in.ScaledBy(projection) + axis.Negative();
+      if (candidate.Mag() >= 1.0e-12) {
+        meridian = candidate.Unit();
+        break;
+      }
+    }
+  } else {
+    meridian.Normalize();
+  }
+
+  azimuth = in.Cross(meridian).UnitElse(R3::XYZ(0,1,0));
 }
 
 
