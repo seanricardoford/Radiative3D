@@ -36,8 +36,8 @@ tests/test_parallel_features : tests/test_parallel_features.cpp probability.cpp 
 tests/test_anisotropic_scattering : tests/test_anisotropic_scattering.cpp scatparams.cpp scatparams.hpp geom_r3.cpp geom_s2.cpp elastic.cpp
 	$(CPP) $< scatparams.cpp geom_r3.cpp geom_s2.cpp elastic.cpp $(FLAGS) -I. -o $@
 
-tests/test_axisymmetric_scattering : tests/test_axisymmetric_scattering.cpp axisymmetric_scattering.cpp axisymmetric_scattering.hpp scatparams.cpp scatparams.hpp geom_r3.cpp geom_s2.cpp elastic.cpp probability.cpp probability.hpp
-	$(CPP) $< axisymmetric_scattering.cpp scatparams.cpp geom_r3.cpp geom_s2.cpp elastic.cpp probability.cpp $(FLAGS) -I. -o $@
+tests/test_axisymmetric_scattering : tests/test_axisymmetric_scattering.cpp $(objects)
+	$(CPP) $< $(filter-out $(objdir)/main.o,$(objects)) $(FLAGS) -I. -o $@
 
 tests/test_report_reduction : tests/test_report_reduction.cpp simulation_report.hpp $(typedefs_hpp) raytype.hpp
 	$(CPP) $< $(FLAGS) -I. -o $@
