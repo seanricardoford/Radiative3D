@@ -1,7 +1,7 @@
 # Axisymmetric Anisotropic Scattering Design
 
-**Date:** 2026-09-22  
-**Status:** Approved for implementation  
+**Date:** 2026-09-22
+**Status:** Approved for implementation
 **Branch:** `axisymmetric-anisotropic-scattering`
 
 ## Problem
