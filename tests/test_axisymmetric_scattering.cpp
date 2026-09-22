@@ -91,6 +91,18 @@ int main() {
                         reference.gss, 5.0e-3);
   }
 
+  ScatterParams strong_params(spectrum, 1.0, 1.7, 4.0, 0.05);
+  AxisymmetricScatteringKernel strong_kernel(strong_params);
+  const Real strong_mus[] = {-0.6, 0.0, 0.7};
+  for (Real mu : strong_mus) {
+    const ReferenceTotals reference =
+        IntegrateReference(strong_params, mu, 192, 384);
+    AssertRelativeClose(strong_kernel.GetInverseMeanFreePath(RAY_P, mu),
+                        reference.inverse_p(), 8.0e-3);
+    AssertRelativeClose(strong_kernel.GetInverseMeanFreePath(RAY_S, mu),
+                        reference.inverse_s(), 8.0e-3);
+  }
+
   const Real invariant_mu = 0.13;
   const R3::XYZ canonical_incoming(
       std::sqrt(1.0 - invariant_mu*invariant_mu), 0.0, invariant_mu);
@@ -142,6 +154,26 @@ int main() {
              out_a.GetDirection().XYZ())) < 1.0e-11);
   assert(std::abs(out_b.DirectionOfMotion().Dot(
              out_b.GetDirection().XYZ())) < 1.0e-11);
+  assert(out_a.DirectionOfMotion().DistFrom(
+             out_b.DirectionOfMotion()) < 1.0e-11);
+
+  RandomEngine compatibility_rng(0x2468);
+  Phonon compatibility = scatterer.GetRandomScatteredRelativePhonon(
+      RAY_S, compatibility_rng);
+  assert(std::isfinite(compatibility.GetDirection().Theta()));
+
+  ScatterParams equal_params(spectrum, 1.0, 1.7, 1.25, 1.25);
+  Scatterer equal_scatterer(equal_params);
+  RandomEngine equal_rng_a(0x1357);
+  RandomEngine equal_rng_b(0x1357);
+  Phonon equal_legacy = equal_scatterer.GetRandomScatteredRelativePhonon(
+      RAY_S, equal_rng_a);
+  Phonon equal_geometry = equal_scatterer.GetRandomScatteredRelativePhonon(
+      RAY_S, incoming, vertical, Geometry::Pi90, equal_rng_b);
+  assert(equal_legacy.GetDirection().XYZ().DistFrom(
+             equal_geometry.GetDirection().XYZ()) < 1.0e-12);
+  assert(std::abs(equal_legacy.GetPolarization()
+                 - equal_geometry.GetPolarization()) < 1.0e-12);
 
   Scatterer::OverrideMFP(12.0, 34.0);
   Scatterer override_scatterer(params);
@@ -157,6 +189,15 @@ int main() {
   assert(path_sum_p / path_count < 13.5);
   assert(path_sum_s / path_count > 30.0);
   assert(path_sum_s / path_count < 38.0);
+
+  RandomEngine directional_path_rng(0x6789);
+  Real directional_path_sum = 0.0;
+  for (int i = 0; i < path_count; ++i) {
+    directional_path_sum += override_scatterer.GetRandomPathLength(
+        RAY_P, R3::XYZ(1,0,0), R3::XYZ(0,0,1), directional_path_rng);
+  }
+  assert(directional_path_sum / path_count > 10.5);
+  assert(directional_path_sum / path_count < 13.5);
 
   Scatterer::SetNoDeflect();
   Scatterer no_deflect_scatterer(params);

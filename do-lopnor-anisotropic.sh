@@ -13,14 +13,14 @@
 ##
 source scripts/do-fundamentals.sh
 ##
-##  This DO-SCRIPT is the serial, large-workload baseline for comparing
-##  against do-lopnor-big-parallel.sh.
+##  This DO-SCRIPT exercises global ellipsoidal anisotropic scattering with
+##  the LOP NOR cylinder model.
 ##
 
 ## One-liner description: (Keep this BRIEF.)
 ##
-INTENT="Large serial Lop Nor simulation for parallel speed comparison."
-CAMPAIGN="Parallel speed comparison baseline"
+INTENT="Example Lop Nor simulation with anisotropic scattering."
+CAMPAIGN="Anisotropic scattering capability example"
 
 SIMTARGET="waveform"          # Choice: 'waveform' or 'video'. Affects
                               # defaults not otherwise specified.
@@ -44,7 +44,7 @@ MAKXYZ=-102.27,430.84,0.60    # Station MAK
 WUSXYZ=-390.04,-167.18,1.457  # Station WUS
 
 FREQ=2.0                      # Phonon frequency to model
-NUMPHONS=10M                  # Same workload as do-lopnor-big-parallel.sh
+NUMPHONS=100K                 # Number of phonons to spray (Recommend: 140M)
 RECTIME=600                   # Recording duration of seismometers (seconds).
 BINSIZE=2.00                  # Seismometer time-bin size in seconds
 GATHER=40.0                   # Terminal gather radius, in kilometers.
@@ -67,13 +67,10 @@ COMPARGS=$SCAT1,$SCAT2,$SCAT3
 FLATTEN="--flatten"           # If set to "--flatten", apply Earth-flattening
 #FLATTEN=""                   # transformation to depths and velocities.
                               # (Set to "" to disable.)
-# Explicit serial baseline: match do-lopnor-big-parallel.sh
-# in model, seed, and phonon count; vary only worker count.
-ADDITIONAL="--workers=1 --seed=0x5eedc0de12345678"
-# Additional params. (Such as --ocsraw,
-                              # or --earthrad=xxxx) Radii: Earth: 6371 km,
-                              # Mars: 3389, Mercury: 2440, Earth's
-                              # moon: 1737
+# Correlation lengths use the model's length unit (typically kilometers).
+# Horizontal is perpendicular to local model vertical; vertical is parallel
+# to it. The vertical length is one half of the horizontal length.
+ADDITIONAL="--scatter-horizontal=1.25 --scatter-vertical=0.625"
 #
 #   Event Parameters:
 #

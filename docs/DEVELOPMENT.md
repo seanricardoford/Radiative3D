@@ -37,10 +37,10 @@ may require Bash, Octave, GMT, SAC, or other local tools.
 | Geometry and materials | `geom_*`, `geom.hpp`, `elastic.*`, `ecs.*`, `tensors.hpp`, `raytype.hpp` | Coordinates, tessellations, elastic properties, coordinate transforms, and ray types. |
 | Sources and propagation | `sources.*`, `events.*`, `phonons.*`, `raypath.*`, `rtcoef.*` | Generate event/scattered phonons, propagate through cells, handle reflection/refraction and ray state. |
 | Randomness and discrete choices | `probability.*` | `RandomEngine` and lazy relative/cumulative probability distributions. |
-| Scattering physics | `scatparams.*`, `scatterers.*` | Sato/Fehler scattering parameters, PSD/G functions, MFPs, outgoing direction/type sampling. |
+| Scattering physics | `scatparams.*`, `scatterers.*`, `axisymmetric_scattering.*` | Sato/Fehler scattering parameters, PSD/G functions, cached axisymmetric MFPs, and outgoing direction/type sampling. |
 | Output | `dataout.*` | Micro-reports, counters, seismometer bins, post-simulation traces and metadata. |
 | User models | `user.cpp`, `user_*_inc.cpp` | Compiled-in model constructors and model-selection logic. |
-| Tests | `tests/test_parallel_features.cpp`, `tests/test_anisotropic_scattering.cpp`, `tests/test_report_reduction.cpp`, `tests/test_seismometer_worker_bins.cpp`, `tests/test_parallel_context_api.cpp`, `tests/test_parallel_reproducibility.sh`, `tests/test_octave_plotting.sh` | Focused native, process-level, and plotting regressions invoked by `make test` or `make test-plotting`. |
+| Tests | `tests/test_parallel_features.cpp`, `tests/test_anisotropic_scattering.cpp`, `tests/test_axisymmetric_scattering.cpp`, `tests/test_report_reduction.cpp`, `tests/test_seismometer_worker_bins.cpp`, `tests/test_parallel_context_api.cpp`, `tests/test_parallel_reproducibility.sh`, `tests/test_octave_plotting.sh` | Focused native, process-level, and plotting regressions invoked by `make test` or `make test-plotting`. |
 | User docs and recipes | `README.md`, `docs/MANUAL.md`, `do-*.sh`, `scripts/`, `vis/` | Usage, experiment setup, post-processing, and visualization. |
 
 ## Octave and gnuplot workflows
@@ -164,15 +164,34 @@ leaves each cell's `Elastic::HetSpec::a()` as its isotropic correlation length.
 For an override, `ScatterParams` stores `ah=L_H` and `av=L_V`. The directional
 `GSATO(incoming, vertical, toa, ...)` path expresses the scattering geometry in
 the local frame whose vertical axis is supplied by `ECS.GetUp(mLoc)`. The
-`Scatterer` then uses directional G-values both for the exponential path
-length (direction-dependent MFP) and for the sampled outgoing conversion/take-
-off direction. `--overridemfp` intentionally takes precedence over computed
-MFPs.
+shared meridional basis is formed from the incoming direction and that local
+vertical, including a deterministic fallback for nearly parallel vectors.
 
-Equal horizontal and vertical lengths are the isotropic limit. The focused
-anisotropic test checks that the isotropic PSD has equal horizontal/vertical
-samples while unequal lengths produce a directional difference. It does not
-yet validate a full propagated model statistically.
+When `ah != av`, `Scatterer` owns an immutable
+`AxisymmetricScatteringKernel`. It tabulates 65 incoming `mu_in` bins over
+`[-1,1]`, with 48 Gauss-Legendre nodes in `cos(psi)` and 64 periodic `zeta`
+nodes. The quadrature weights are normalized by `4*pi`. Each incoming bin
+stores P/S inverse MFPs, four conversion totals, conditional outgoing CDFs,
+and S/S polarization angles. Runtime interpolation and binary-search sampling
+therefore avoid the previous per-event full-sphere scan while preserving the
+3D phonon trajectory. The cache and all probability integrations are complete
+before worker threads start; unequal-anisotropy scatterers do not allocate the
+legacy full-sphere `mPDists` arrays.
+
+The sampled `(psi,zeta)` direction and S polarization are converted from the
+local-vertical meridian into the current incoming-polarization frame before
+`Phonon::Transform()` is called. Equal horizontal and vertical lengths retain
+the existing isotropic path exactly. Scalar MFP and dipole values printed by
+the legacy scatterer report are incoming-direction averages of the cached
+directional values. The current approximation is axisymmetric (two
+correlation lengths, sometimes called 2.5-D): the CLI remains global per model
+and does not provide three unequal axes or per-cell symmetry axes.
+
+`--overridemfp` intentionally takes precedence over computed directional MFPs.
+The focused native tests check local-frame rotation, independent quadrature
+agreement within 0.5%, CDF validity, polarization-frame conversion, override
+precedence, and no-deflection behavior. The process-level reproducibility test
+also runs the unequal-anisotropy case with one and two workers.
 
 ## Command-line and experiment workflow
 
@@ -201,19 +220,22 @@ capabilities directly:
 
 ```bash
 ./do-lopnor-big.sh big-demo
-./do-lopnor-parallel.sh parallel-demo
-./do-lopnor-anistropic.sh anisotropic-demo
+./do-lopnor-big-parallel.sh parallel-demo
+./do-lopnor-anisotropic.sh anisotropic-demo
+./do-lopnor-anisotropic-equal.sh lopnor-anisotropic-equal
 ```
 
 `do-lopnor-big.sh` runs the complete, visualized isotropic Lop Nor workflow as
-a serial `10M`-phonon baseline. `do-lopnor-parallel.sh` uses the same model,
-workload, and fixed seed with four explicit workers; compare the recorded run
+a serial `10M`-phonon baseline. `do-lopnor-big-parallel.sh` uses the same model,
+workload, and fixed seed with eight explicit workers; compare the recorded run
 times in their logs to estimate shared-memory speedup. The two speed recipes
 are scientifically comparable because worker count is their intended runtime
-variable. `do-lopnor-anistropic.sh` remains a smaller serial reference with a
-fixed seed and a global ellipsoidal scattering override of 0.25 horizontally
-and 1.25 in the local vertical direction. Its filename follows the requested
-example name.
+variable. `do-lopnor-anisotropic.sh` follows the standard `do-lopnor.sh`
+waveform workflow with global ellipsoidal scattering lengths of 1.25
+horizontally and 0.625 in the local vertical direction. The vertical length is
+therefore one half of the horizontal length.
+`do-lopnor-anisotropic-equal.sh` uses the same full workflow with equal global
+lengths of 1.25 and 1.25 as an isotropic-limit runtime comparison.
 
 ## Performance benchmark
 
@@ -241,8 +263,9 @@ from timing; report text ordering is not a valid equivalence check.
 A fresh validation after merging the optimization into `master` used the same
 machine, model, seed, 10M-phonon workload, and 320 seismometers. The serial
 time is the second-resolution interval recorded by `do-lopnor-big.sh`; the
-four-worker time is the full `do-lopnor-parallel.sh` wall time; the eight-worker
-run used the exact parallel recipe command with only `--workers=8` substituted.
+eight-worker time is the full `do-lopnor-big-parallel.sh` wall time; the
+four-worker run used the exact parallel recipe command with only `--workers=4`
+substituted.
 The serial figure-generation stage was excluded:
 
 | Workers | Simulation wall time | Speedup vs. one worker |

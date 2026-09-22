@@ -19,7 +19,7 @@ source scripts/do-fundamentals.sh
 
 ## One-liner description: (Keep this BRIEF.)
 ##
-INTENT="Reproducible four-worker Lop Nor waveform simulation."
+INTENT="Reproducible eight-worker Lop Nor waveform simulation."
 CAMPAIGN="Parallel capability example"
 
 SIMTARGET="waveform"          # Choice: 'waveform' or 'video'. Affects
@@ -64,7 +64,7 @@ FLATTEN="--flatten"          # Apply Earth-flattening transformation.
 # Explicit worker count and seed make this a reproducible parallel recipe.
 # No scattering-length override is supplied: the compiled model remains
 # isotropic, providing a clean parallelism example.
-ADDITIONAL="--workers=4 --seed=0x5eedc0de12345678"
+ADDITIONAL="--workers=8 --seed=0x5eedc0de12345678"
 
 case "$event" in
     expl)   # Generic explosion

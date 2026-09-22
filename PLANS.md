@@ -63,14 +63,20 @@ Primary files: `model.cpp`, `model.hpp`, `probability.cpp`, `probability.hpp`,
   isotropic `hs.a()` length.
 - `ScatterParams` stores horizontal and vertical correlation lengths and uses
   them in its directional power spectral density.
+- `AxisymmetricScatteringKernel` caches 65 incoming polar bins and fixed
+  48-by-64 outgoing quadrature/CDF tables before workers start, so unequal
+  anisotropic events no longer scan the full legacy sphere.
 - `Scatterer` computes direction-dependent MFP and angular scattering weights
-  using the incoming direction and `ECS.GetUp(location)` as the local vertical.
-- Equal horizontal and vertical lengths are intended to recover isotropic
-  behavior; the focused test checks the corresponding PSD symmetry.
+  using the incoming direction and `ECS.GetUp(location)` as the local vertical,
+  then converts the sampled 3D direction and polarization into the existing
+  incoming-phonon transform frame.
+- Equal horizontal and vertical lengths retain the existing isotropic path;
+  focused tests check PSD symmetry and transformed-trajectory equivalence.
 
-Primary files: `scatparams.cpp`, `scatparams.hpp`, `scatterers.cpp`,
-`scatterers.hpp`, `model.cpp`, `model.hpp`, `cmdline.cpp`, `cmdline.hpp`, and
-`docs/MANUAL.md`.
+Primary files: `scatparams.cpp`, `scatparams.hpp`, `axisymmetric_scattering.cpp`,
+`axisymmetric_scattering.hpp`, `scatterers.cpp`, `scatterers.hpp`,
+`sources.cpp`, `sources.hpp`, `phonons.cpp`, `model.cpp`, `model.hpp`,
+`cmdline.cpp`, `cmdline.hpp`, and `docs/MANUAL.md`.
 
 ### Current Octave/gnuplot compatibility
 
@@ -97,6 +103,8 @@ make test-plotting
   engine sequences, stream derivation, and seeded `ProbDist` selection.
 - `tests/test_anisotropic_scattering.cpp`: isotropic/an-isotropic parameter
   state, directional PSD difference, and invalid-length rejection.
+- `tests/test_axisymmetric_scattering.cpp`: reduced quadrature agreement,
+  cache/CDF validity, local-frame conversion, MFP overrides, and no-deflection.
 - `tests/test_report_reduction.cpp`: worker-context arithmetic and diagnostic
   reduction.
 - `tests/test_seismometer_worker_bins.cpp`: worker-local seismometer capture.
@@ -127,8 +135,9 @@ gnuplot colorbar invocation, figure annotations, and PDF generation.
 
 ### Performance comparison
 
-- [x] Use the existing `do-lopnor-big.sh` and `do-lopnor-parallel.sh` recipes
-  as matched serial/parallel workload definitions.
+- [x] Use the existing `do-lopnor-big.sh` and
+  `do-lopnor-big-parallel.sh` recipes as matched serial/parallel workload
+  definitions.
 - [x] Measure one, two, and four workers on a 10M-phonon Lop Nor run.
 - [x] Validate the merged result with one, four, and eight workers on the same
   10M-phonon Lop Nor workload.
@@ -136,6 +145,18 @@ gnuplot colorbar invocation, figure annotations, and PDF generation.
   `docs/DEVELOPMENT.md`.
 - [x] Document that report ordering and floating-point reduction order are not
   equivalence criteria.
+
+### Axisymmetric anisotropic scattering (completed in this branch)
+
+- [x] Correct directional `GSATO` geometry around the local vertical symmetry
+  axis with a stable parallel-incidence fallback.
+- [x] Replace unequal-anisotropy full-sphere event scans with the immutable
+  cached reduced kernel while preserving 3D trajectories and polarization.
+- [x] Verify independent quadrature accuracy, seeded one/two-worker
+  reproducibility, explicit MFP overrides, and no-deflection behavior.
+- [x] Document the fixed numerical resolution and the two-axis/global-model
+  limitations; retain analytic azimuth reduction and fully tensorial
+  anisotropy as future work.
 
 ## Prioritized follow-up
 
@@ -185,5 +206,8 @@ a good shared-memory seam but is not an MPI protocol.
 - The code uses class-static configuration for frequency, global scattering overrides, and several reporting/model settings; one active `Model` is the supported usage pattern.
 - Multi-worker report ordering is nondeterministic even when per-phonon random streams are deterministic.
 - Anisotropy is global per model invocation, not a per-cell CLI feature.
+- Unequal anisotropy currently uses an axisymmetric two-correlation-length
+  (2.5-D) kernel; three unequal axes and per-cell CLI symmetry axes are not
+  supported.
 - `--overridemfp` intentionally bypasses computed directional MFP behavior.
 - ThreadSanitizer was not linkable in the arm64 GCC environment used for the current feature verification; rerun with a working sanitizer runtime before making stronger concurrency claims.

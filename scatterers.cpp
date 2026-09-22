@@ -391,6 +391,11 @@ Real Scatterer::GetRandomPathLength(raytype intype,
 //
 Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype,
                                                    RandomEngine & rng) {
+  if (mpAxisymmetric) {
+    return GetRandomScatteredRelativePhonon(
+        intype, R3::XYZ(0,0,1), R3::XYZ(0,0,1), 0.0, rng);
+  }
+
   S2::S2Set & toa = (*pTOA);             // Alias
   raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
                           RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to

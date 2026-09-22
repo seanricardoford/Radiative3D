@@ -35,6 +35,11 @@ run_case() {
     "$@" \
     > "$output_dir/stdout.txt"
 
+  rg --fixed-strings --quiet '@@ __SIMULATION_COMPLETE__' \
+    "$output_dir/stdout.txt"
+  rg --regexp 'Invalidity:[[:space:]]+0([[:space:]]|$)' \
+    "$output_dir/stdout.txt"
+
   rg 'Loss surfaces:|Timeout:|Invalidity:' "$output_dir/stdout.txt" \
     > "$output_dir/summary.txt"
 }
