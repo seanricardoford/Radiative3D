@@ -43,6 +43,30 @@ Radiative3D models energy propagation through both deterministic and statistical
   simulation parameters so the run can be repeated. Event-report ordering is
   not guaranteed when multiple workers are active.
 
+### Multithreaded performance benchmark
+
+The simulation-only Lop Nor benchmark compares a serial reference run, an
+explicit 12-worker run, and automatic worker selection. It does not invoke
+Octave or generate figures:
+
+    LOPNOR_BENCH_PHONONS=210000000 \
+    LOPNOR_BENCH_OUTPUT_DIR=/path/to/benchmark-output \
+    tests/benchmark_lopnor_threads.sh
+
+The benchmark uses the same fixed-seed scenario for all three modes. Record
+the host and compiler with the results because performance depends on the
+machine:
+
+| Date | Host | Compiler | Workload |
+|---|---|---|---|
+| 2026-10-16 | macOS host, 24 logical CPUs | Apple Clang/G++ C++11 build | 210,000,000 phonons |
+
+| Mode | Workers | Phonons | Seconds | Phonons/s | Speedup |
+|---|---:|---:|---:|---:|---:|
+| Serial | 1 | 210,000,000 | 221.007 | 950,196 | 1.00x |
+| Explicit | 12 | 210,000,000 | 168.611 | 1,245,470 | 1.31x |
+| Automatic | 23 | 210,000,000 | 140.657 | 1,492,994 | 1.57x |
+
 * <tt>-A, --toa-degree=_TOA_DEGREE_</tt>
 
   Sets the take-off angle degree, which determines the number of discrete [[take-off angle]]s that PhononSource objects (e.g. event sources and scattering sources) have to choose from.  Increasing this number increases the angular fineness of these objects.  "Degree," in this context, is an integer that represents the number of times the angular space is subdivided, and in the default (and at present only) method for discretizing take-off angles, the algorithm starts with 20 angles and subdivides by four with each iteration (degree), such that N_TOA = 20 * 4 ^ (degree).

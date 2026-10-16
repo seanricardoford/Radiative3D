@@ -37,4 +37,30 @@ $ ./main [args]
 
 User Manual here: [Radiative3D Manual Page](doc/MANUAL.md)
 
+## Multithreaded simulation performance
+
+Radiative3D supports automatic phonon worker selection and an explicit
+`--threads N` override. Use `--threads 1` for a serial reference run. The
+simulation-only Lop Nor benchmark can be run with:
+
+```sh
+LOPNOR_BENCH_PHONONS=210000000 \
+LOPNOR_BENCH_OUTPUT_DIR=/path/to/benchmark-output \
+tests/benchmark_lopnor_threads.sh
+```
+
+This benchmark does not invoke Octave or generate figures. It runs the same
+fixed-seed Lop Nor scenario with one worker, 12 workers, and automatic worker
+selection. Results below were measured on:
+
+| Date | Host | Compiler | Workload |
+|---|---|---|---|
+| 2026-10-16 | macOS host, 24 logical CPUs | Apple Clang/G++ C++11 build | 210,000,000 phonons |
+
+| Mode | Workers | Phonons | Seconds | Phonons/s | Speedup |
+|---|---:|---:|---:|---:|---:|
+| Serial | 1 | 210,000,000 | 221.007 | 950,196 | 1.00x |
+| Explicit | 12 | 210,000,000 | 168.611 | 1,245,470 | 1.31x |
+| Automatic | 23 | 210,000,000 | 140.657 | 1,492,994 | 1.57x |
+
 There are also supporting scripts (e.g. `do-crustpinch.sh`) to help with managing command line options and organizing the various output files and post-processing of data.  The "do-scripts" are writtin in BASH and may depend on the installation of additional command line tools.  (See Manual Page.)

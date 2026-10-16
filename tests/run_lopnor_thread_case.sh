@@ -4,6 +4,7 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 threads=$1
 outdir=$2
+phonons=${3:-24}
 mkdir -p "$outdir"
 
 # This is the simulation-only portion of do-lopnor.sh's Lop Nor waveform case.
@@ -25,7 +26,7 @@ set -- "$ROOT/main" \
   --output-dir="$outdir" \
   --report-file=reports.dat \
   --mparams-outfile=out_mparams.octv \
-  --num-phonons=24 \
+  --num-phonons="$phonons" \
   --toa-degree=5 \
   --source="$SOURCETYP" \
   --source-loc="$SOURCELOC" \
