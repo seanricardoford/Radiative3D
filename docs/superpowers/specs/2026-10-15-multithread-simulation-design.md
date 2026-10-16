@@ -35,13 +35,16 @@ remaining controllable for debugging, benchmarking, and reproducibility.
 Workers will claim phonon IDs from shared atomic work state, generate and
 propagate one phonon per claimed ID, and repeat until no work remains.
 
-The default worker count will be based on
-`std::thread::hardware_concurrency()`, the number of requested phonons, and a
-conservative oversubscription policy. When more than two hardware threads are
-available, automatic selection will reserve one hardware thread for the
-operating system. The effective count will never exceed the requested phonon
-count. An explicit `--threads N` setting will override automatic selection;
-positive values are valid, including values that oversubscribe hardware.
+The default worker count will be based on the available performance CPUs when
+the platform exposes that information, the number of requested phonons, and a
+conservative oversubscription policy. On macOS, automatic selection uses
+`hw.perflevel0.logicalcpu` and reserves one performance logical CPU when more
+than two are available. Other platforms fall back to
+`std::thread::hardware_concurrency()` and reserve one hardware thread when
+more than two are available. The effective count will never exceed the
+requested phonon count. An explicit `--threads N` setting will override
+automatic selection; positive values are valid, including values that
+oversubscribe hardware.
 
 Workers will not write progress output directly. The coordinator will report
 progress from shared completion state at controlled intervals to prevent
@@ -86,7 +89,9 @@ merged similarly.
 Detailed event reports will remain compatible with existing report settings,
 but concurrent report lines must be serialized or buffered so individual lines
 cannot interleave. Their order is not guaranteed when multiple workers are
-active. The default suppressed-report simulation path will not pay this cost.
+active. Report mutexes are acquired only when the corresponding report is
+enabled, so the default suppressed-report simulation path does not pay a
+global mutex cost for disabled reports.
 
 ## Error handling
 
