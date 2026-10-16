@@ -39,11 +39,15 @@ Real ScatterParams::CompareRoughly(const ScatterParams & other) const {
   Real dnu = (other.nu - nu);
   Real deps = (other.eps - eps);
   Real da = (other.a - a);
+  Real dax = (other.ax - ax);
+  Real day = (other.ay - ay);
+  Real daz = (other.az - az);
   Real dkappa = (other.kappa - kappa);
   Real del = (other.el - el);
   Real dgam0 = (other.gam0 - gam0);
-  Real sum = dnu*dnu + deps*deps 
-           + da*da + dkappa*dkappa 
+  Real sum = dnu*dnu + deps*deps
+           + da*da + dax*dax + day*day + daz*daz
+           + dkappa*dkappa
            + del*del + dgam0*dgam0;
   return sum;
 }
@@ -184,13 +188,98 @@ void ScatterParams::XSATO(S2::S2Point toa,
 Real ScatterParams::PSATO(Real m) const {
   const Real pi32  = pow(Geometry::Pi,1.5); // pi^(3/2)
 
-  const Real numer = (8.*pi32*eps*eps*a*a*a)  
+  const Real numer = (8.*pi32*eps*eps*a*a*a)
                    * tgamma(kappa+1.5)
                    / tgamma(kappa);
 
   const Real denom = pow((1.+a*a*m*m),(kappa+1.5));
 
   return numer/denom;
+}
+
+
+//////
+// METHOD:  ScatterParams :: AnisoMajorantFactor()
+//
+// PURPOSE: Returns M = ax*ay*az/a^3 (a == min(ax,ay,az)), the factor by
+// which the anisotropic spectrum PSATO_Aniso() can exceed the isotropic
+// PSATO() evaluated at the same |m| (see AnisoRatio()). This is also the
+// factor by which the anisotropic-medium majorant mean free path is
+// shortened relative to the a=min isotropic mean free path used as the
+// delta-tracking proposal distribution. M==1 when the spec is isotropic.
+//
+Real ScatterParams::AnisoMajorantFactor() const {
+  return (ax*ay*az)/(a*a*a);
+}
+
+
+//////
+// METHOD:  ScatterParams :: PSATO_Aniso()
+//
+// PURPOSE: Computes the anisotropic von Karman power spectral density
+// function, Sato (2019) Eq. 3, generalizing PSATO() to three independent
+// scale lengths. 'm' is the exchange wavevector expressed in the fabric
+// frame (ie, its x,y,z components are measured along the ax,ay,az axes,
+// respectively -- NOT necessarily the simulation's internal XYZ axes).
+//
+//   P(m) = 8 pi^(3/2) eps^2 ax ay az Gamma(kappa+3/2)
+//          / [ Gamma(kappa) (1 + ax^2 mx^2 + ay^2 my^2 + az^2 mz^2)^(kappa+3/2) ]
+//
+// When ax==ay==az==a, this reduces exactly to PSATO(m.Mag()).
+//
+Real ScatterParams::PSATO_Aniso(const R3::XYZ & m) const {
+  const Real pi32  = pow(Geometry::Pi,1.5); // pi^(3/2)
+
+  const Real numer = (8.*pi32*eps*eps*ax*ay*az)
+                   * tgamma(kappa+1.5)
+                   / tgamma(kappa);
+
+  const Real mx = m.x();
+  const Real my = m.y();
+  const Real mz = m.z();
+  const Real denom = pow((1. + ax*ax*mx*mx + ay*ay*my*my + az*az*mz*mz),
+                         (kappa+1.5));
+
+  return numer/denom;
+}
+
+
+//////
+// METHOD:  ScatterParams :: AnisoRatio()
+//
+// PURPOSE: Returns PSATO_Aniso(m)/PSATO(|m|), the ratio of the
+// anisotropic spectrum to the isotropic (a=min(ax,ay,az)) spectrum
+// evaluated at the same wavevector. This ratio is always positive and
+// never exceeds AnisoMajorantFactor() (equality is reached whenever the
+// denominator term along the shortest fabric axis dominates, e.g. m
+// purely along that axis, or trivially at m=0).
+//
+Real ScatterParams::AnisoRatio(const R3::XYZ & m) const {
+  return PSATO_Aniso(m) / PSATO(m.Mag());
+}
+
+
+//////
+// METHOD:  ScatterParams :: AnisoAcceptance()
+//
+// PURPOSE: Returns AnisoRatio(m)/AnisoMajorantFactor(), ie,
+//
+//   [ (1 + a^2 |m|^2) / (1 + ax^2 mx^2 + ay^2 my^2 + az^2 mz^2) ]^(kappa+3/2)
+//
+// This is the delta-tracking accept probability for a proposal (direction
+// and conversion type) drawn from the isotropic a=min(ax,ay,az) tables:
+// always in (0,1], reaching 1 only when the proposal direction's fabric
+// components make the isotropic and anisotropic spectra agree (always
+// true when the spec is isotropic).
+//
+Real ScatterParams::AnisoAcceptance(const R3::XYZ & m) const {
+  const Real mx = m.x();
+  const Real my = m.y();
+  const Real mz = m.z();
+  const Real numer = 1. + a*a*m.MagSquared();
+  const Real denom = 1. + ax*ax*mx*mx + ay*ay*my*my + az*az*mz*mz;
+
+  return pow(numer/denom, kappa+1.5);
 }
 
 

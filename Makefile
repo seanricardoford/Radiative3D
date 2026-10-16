@@ -148,6 +148,12 @@ anyway : $(objects)
 	$(CPP) -c main.cpp $(FLAGS) $(DEFINES)
 	$(CPP) $^ -o $(OUT_EXEC) $(FLAGS)
 
+test_objects := $(filter-out $(objdir)/main.o,$(objects))
+$(objdir)/anisotropy_tests : tests/anisotropy_tests.cpp $(test_objects) $(scatterers_hpp) $(ecs_hpp) $(phonons_hpp)
+	$(CPP) tests/anisotropy_tests.cpp $(test_objects) -I. $(FLAGS) -o $@
+.PHONY : anisotropy-tests
+anisotropy-tests : directories $(objdir)/anisotropy_tests
+
 
 ##//////
 ## Objects Files:

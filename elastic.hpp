@@ -98,6 +98,7 @@
 #ifndef ELASTIC_H_
 #define ELASTIC_H_
 //
+#include <stdexcept>
 #include "typedefs.hpp"
 
 namespace Elastic {
@@ -231,28 +232,50 @@ public:
 class HetSpec {
 private:
 
-  Real mNu;     // 
+  Real mNu;     //
   Real mEps;    // Heterogeneity amplitude (fractional)
-  Real mA;      // Spatial scale-length (corner)
+  Real mA;      // Spatial scale-length (corner) along the fabric x-axis.
+                // (Doubles as "ax"; see ax() below.)
+  Real mAy;     // Spatial scale-length along the fabric y-axis.
+  Real mAz;     // Spatial scale-length along the fabric z-axis.
   Real mKappa;  // Von Karman K
 
 protected:
 
-  HetSpec(Real nu, Real eps, Real a, Real k)  // protected: use schemas to
-    : mNu(nu), mEps(eps), mA(a), mKappa(k)    // set values
+  HetSpec(Real nu, Real eps,                  // protected: use schemas to
+          Real ax, Real ay, Real az, Real k)  // set values. Triaxial form:
+    : mNu(nu), mEps(eps),                     // scale lengths ax, ay, az
+      mA(ax), mAy(ay), mAz(az),               // may differ (anisotropic
+      mKappa(k)                               // heterogeneity fabric).
+  {
+    if (!(ax>0 && ay>0 && az>0)) {
+      throw std::invalid_argument(
+        "HetSpec: scale lengths ax, ay, az must be positive");
+    }
+  }
+
+  HetSpec(Real nu, Real eps, Real a, Real k) :  // Isotropic form: sets
+    HetSpec(nu, eps, a, a, a, k)                // ax = ay = az = a.
   {}
 
-public: 
+public:
 
   HetSpec()                         // A default option - (eps zero)
     : mNu(0.8), mEps(0.00),         //
-      mA(1.0), mKappa(0.5)
+      mA(1.0), mAy(1.0), mAz(1.0), mKappa(0.5)
   {}
 
   Real nu() const {return mNu;}
   Real eps() const {return mEps;}
-  Real a() const {return mA;}
+  Real a() const {return mA;}       // Equals ax(). Retained for isotropic-
+                                    // era callers.
+  Real ax() const {return mA;}
+  Real ay() const {return mAy;}
+  Real az() const {return mAz;}
   Real kappa() const {return mKappa;}
+
+  bool IsIsotropic() const {return (mA==mAy && mAy==mAz);}
+  bool IsAxisymmetric() const {return (mA==mAy && mAy!=mAz);}
 
 };
 
@@ -261,6 +284,14 @@ class HSneak : public HetSpec {     // Schema explicitly denoting arg order
 public:                             // as nu, eps, a, kappa (n,e,a,k)
   HSneak(Real nu, Real eps, Real a, Real k) :
     HetSpec(nu,eps,a,k)
+  {}
+};
+
+
+class HSnexyzk : public HetSpec {   // Schema explicitly denoting arg order
+public:                             // as nu, eps, ax, ay, az, kappa
+  HSnexyzk(Real nu, Real eps, Real ax, Real ay, Real az, Real k) :
+    HetSpec(nu,eps,ax,ay,az,k)
   {}
 };
 
