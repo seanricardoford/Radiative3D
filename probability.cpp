@@ -2,6 +2,7 @@
 //
 #include <iostream>
 #include <cstdlib>
+#include <mutex>
 #include "probability.hpp"
 using namespace std;
 
@@ -103,7 +104,11 @@ Real ProbDist::GetDiffProb(Index idx) {
 //
 Index ProbDist::GetRandomIndex() {
 
-  if (!mbIntegrated) {Integrate();}  // Needs integral representation
+  if (!mbIntegrated) {
+    static std::mutex integrate_mutex;
+    std::lock_guard<std::mutex> lock(integrate_mutex);
+    if (!mbIntegrated) Integrate();
+  }  // Needs integral representation
 
   Index k1 = 0;                 // Initial lower bound for search
   Index k2 = mDist.size() - 1;  // Initial upper bound

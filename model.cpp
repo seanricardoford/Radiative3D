@@ -6,6 +6,13 @@
 #include <ctime>        /* time() */
 #include <iomanip>
 #include <thread>
+
+static std::uint64_t MixRandomSeed(std::uint64_t value) {
+  value += 0x9e3779b97f4a7c15ULL;
+  value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
+  value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
+  return value ^ (value >> 31);
+}
 #include "model.hpp"
 #include "phonons.hpp"
 #include "dataout.hpp"
@@ -610,17 +617,18 @@ R3::XYZ Model::FindSurface(R3::XYZ loc) const {
 // METHOD:  Model :: SimulationThread()
 //
 void Model::SimulationThread(unsigned worker_index) {
-  RandomContext random(mRandomSeed + worker_index);
-  SetActiveRandomContext(&random);
+  (void) worker_index;
   while (true) {
     long remain = mPhononsRemain.fetch_sub(1);
     if (remain <= 0) break;
 
+    const std::uint64_t phonon_id = static_cast<std::uint64_t>(mNumPhonons - remain);
+    RandomContext random(MixRandomSeed(mRandomSeed ^ phonon_id));
+    SetActiveRandomContext(&random);
     Phonon P = mpEventSource->GenerateEventPhonon();
     P.Propagate();
-
+    SetActiveRandomContext(0);
   }
-  SetActiveRandomContext(0);
 }
 
 //////
