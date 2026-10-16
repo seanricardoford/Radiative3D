@@ -63,9 +63,15 @@ machine:
 
 | Mode | Workers | Phonons | Seconds | Phonons/s | Speedup |
 |---|---:|---:|---:|---:|---:|
-| Serial | 1 | 210,000,000 | 221.007 | 950,196 | 1.00x |
-| Explicit | 12 | 210,000,000 | 168.611 | 1,245,470 | 1.31x |
-| Automatic | 23 | 210,000,000 | 140.657 | 1,492,994 | 1.57x |
+| Serial | 1 | 210,000,000 | 218.051 | 963,077 | 1.00x |
+| Explicit | 12 | 210,000,000 | 30.143 | 6,966,792 | 7.23x |
+| Automatic | 23 | 210,000,000 | 27.564 | 7,618,633 | 7.91x |
+
+The benchmark was rerun after removing unnecessary report-mutex acquisition
+when reporting is disabled. The original implementation serialized these
+frequent report calls even with <tt>--reports=ALL_OFF</tt>; the corrected
+results show the expected strong scaling up to the useful core range of this
+host.
 
 * <tt>-A, --toa-degree=_TOA_DEGREE_</tt>
 

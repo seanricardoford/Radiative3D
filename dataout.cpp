@@ -564,8 +564,8 @@ inline void DataReporter
 // METHOD:  ReportNewEventPhonon()
 //
 void DataReporter::ReportNewEventPhonon(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportGenerate) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDGenerate, phon);
   }
 }
@@ -574,8 +574,8 @@ void DataReporter::ReportNewEventPhonon(const Phonon & phon) {
 // METHOD:  ReportScatterEvent()
 //
 void DataReporter::ReportScatterEvent(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportScatter) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDScatter, phon);
   }
 }
@@ -614,8 +614,8 @@ void DataReporter::ReportPhononCollected(const Phonon & phon) {
 // METHOD:  ReportReflection()
 //
 void DataReporter::ReportReflection(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportReflect) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDReflect, phon);
   }
 }
@@ -624,8 +624,8 @@ void DataReporter::ReportReflection(const Phonon & phon) {
 // METHOD:  ReportCellToCell()
 //
 void DataReporter::ReportCellToCell(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportTransfer) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDTransfer, phon);
   }
 }
