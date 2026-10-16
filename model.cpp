@@ -6,12 +6,30 @@
 #include <ctime>        /* time() */
 #include <iomanip>
 #include <thread>
+#if defined(__APPLE__)
+#include <sys/types.h>
+#include <sys/sysctl.h>
+#endif
 
 static std::uint64_t MixRandomSeed(std::uint64_t value) {
   value += 0x9e3779b97f4a7c15ULL;
   value = (value ^ (value >> 30)) * 0xbf58476d1ce4e5b9ULL;
   value = (value ^ (value >> 27)) * 0x94d049bb133111ebULL;
   return value ^ (value >> 31);
+}
+
+static unsigned GetAutomaticWorkerLimit() {
+  unsigned hardware = std::thread::hardware_concurrency();
+  if (hardware == 0) hardware = 1;
+#if defined(__APPLE__)
+  int performance = 0;
+  size_t size = sizeof(performance);
+  if (sysctlbyname("hw.perflevel0.logicalcpu", &performance, &size, 0, 0) == 0 &&
+      performance > 0) {
+    return static_cast<unsigned>(performance);
+  }
+#endif
+  return hardware;
 }
 #include "model.hpp"
 #include "phonons.hpp"
@@ -660,12 +678,14 @@ void Model::RunSimulation() {
   if (hardware == 0) hardware = 1;
   unsigned workers = mNumThreads;
   if (workers == 0) {
-    workers = hardware > 2 ? hardware - 1 : hardware;
+    workers = GetAutomaticWorkerLimit();
+    if (workers > 2) --workers;
     if (mNumPhonons > 0 && workers > static_cast<unsigned>(mNumPhonons))
       workers = static_cast<unsigned>(mNumPhonons);
   }
   if (workers == 0) workers = 1;
   std::cout << "Workers: " << workers << "\n";
+  std::cout << "Hardware threads: " << hardware << "\n";
   std::cout << "Random seed: " << mRandomSeed << "\n";
   std::vector<std::thread> threads;
   mWorkerAccumulators.assign(workers, static_cast<DataReporter::WorkerAccumulator*>(0));

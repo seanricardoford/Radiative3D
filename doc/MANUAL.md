@@ -63,15 +63,17 @@ machine:
 
 | Mode | Workers | Phonons | Seconds | Phonons/s | Speedup |
 |---|---:|---:|---:|---:|---:|
-| Serial | 1 | 210,000,000 | 218.051 | 963,077 | 1.00x |
-| Explicit | 12 | 210,000,000 | 30.143 | 6,966,792 | 7.23x |
-| Automatic | 23 | 210,000,000 | 27.564 | 7,618,633 | 7.91x |
+| Serial | 1 | 210,000,000 | 221.917 | 946,300 | 1.00x |
+| Explicit | 12 | 210,000,000 | 27.623 | 7,602,360 | 8.03x |
+| Automatic | 15 | 210,000,000 | 28.122 | 7,467,463 | 7.89x |
 
 The benchmark was rerun after removing unnecessary report-mutex acquisition
 when reporting is disabled. The original implementation serialized these
 frequent report calls even with <tt>--reports=ALL_OFF</tt>; the corrected
 results show the expected strong scaling up to the useful core range of this
 host.
+Automatic selection uses the 16 performance logical CPUs reported by macOS and
+reserves one; the explicit 12-worker run was slightly faster in this sample.
 
 * <tt>-A, --toa-degree=_TOA_DEGREE_</tt>
 
