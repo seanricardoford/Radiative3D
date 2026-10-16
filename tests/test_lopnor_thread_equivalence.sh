@@ -13,6 +13,17 @@ run_case() {
   "$ROOT/tests/run_lopnor_thread_case.sh" "$1" "$work/$2"
 }
 
+# Identical all-zero traces would make the comparisons below pass trivially,
+# so require at least one nonzero energy or count value inside a trace block.
+trace_has_signal() {
+  awk '
+    /#### BEGIN TRACE ####/ { in_trace = 1; next }
+    /#### END TRACE ####/ { in_trace = 0; next }
+    in_trace { for (i = 1; i <= NF; i++) if ($i + 0 != 0) found = 1 }
+    END { exit !found }
+  ' "$1"
+}
+
 run_case 1 one
 run_case 12 twelve
 run_case auto automatic
@@ -22,6 +33,10 @@ for case in one twelve automatic; do
   grep '^Workers:' "$work/$case/stdout.txt" >/dev/null
   test -s "$work/$case/seis_traces_asc.dat"
   grep -E '^[[:space:]]*[0-9.eE+-]+[[:space:]]+' "$work/$case/seis_traces_asc.dat" >/dev/null
+  if ! trace_has_signal "$work/$case/seis_traces_asc.dat"; then
+    echo "Lop Nor '$case' traces are all zero; no phonons reached a seismometer" >&2
+    exit 1
+  fi
 done
 
 normalize_trace() {
