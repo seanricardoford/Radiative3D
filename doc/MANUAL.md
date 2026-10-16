@@ -29,6 +29,20 @@ Radiative3D models energy propagation through both deterministic and statistical
 
   Sets the time to live for each phonon, or in other words the amount of sim-time to model.
 
+* <tt>--threads=_N_</tt>
+
+  Sets the number of phonon-simulation worker threads. If omitted, Radiative3D
+  selects a worker count automatically from the available hardware and the
+  requested phonon count. Use <tt>--threads=1</tt> for a single-thread
+  debugging or reference run. Explicit values must be positive.
+
+* <tt>--seed=_N_</tt>
+
+  Sets the non-negative random seed used to derive independent phonon random
+  streams. If omitted, a seed is generated automatically and printed in the
+  simulation parameters so the run can be repeated. Event-report ordering is
+  not guaranteed when multiple workers are active.
+
 * <tt>-A, --toa-degree=_TOA_DEGREE_</tt>
 
   Sets the take-off angle degree, which determines the number of discrete [[take-off angle]]s that PhononSource objects (e.g. event sources and scattering sources) have to choose from.  Increasing this number increases the angular fineness of these objects.  "Degree," in this context, is an integer that represents the number of times the angular space is subdivided, and in the default (and at present only) method for discretizing take-off angles, the algorithm starts with 20 angles and subdivides by four with each iteration (degree), such that N_TOA = 20 * 4 ^ (degree).
