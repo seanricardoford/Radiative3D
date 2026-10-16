@@ -24,6 +24,7 @@
 #include <iostream>
 #include <fstream>
 #include <atomic>
+#include <mutex>
 #include "geom.hpp"
 #include "tensors.hpp"
 #include "raytype.hpp"
@@ -294,7 +295,8 @@ protected:
             // grow the vector with the AddSeismometer() member, which
             // is responsible for allocating Seismometers with "new".
             // We shrink it in the destructor, which deletes the
-            // Seismometers.)
+             // Seismometers.)
+  mutable std::mutex mReportMutex;
 
 
 public:

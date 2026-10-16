@@ -619,15 +619,24 @@ R3::XYZ Model::FindSurface(R3::XYZ loc) const {
 void Model::SimulationThread(unsigned worker_index) {
   (void) worker_index;
   while (true) {
+    if (mCancelSimulation.load()) break;
     long remain = mPhononsRemain.fetch_sub(1);
     if (remain <= 0) break;
 
     const std::uint64_t phonon_id = static_cast<std::uint64_t>(mNumPhonons - remain);
     RandomContext random(MixRandomSeed(mRandomSeed ^ phonon_id));
     SetActiveRandomContext(&random);
-    Phonon P = mpEventSource->GenerateEventPhonon();
-    P.Propagate();
-    SetActiveRandomContext(0);
+    try {
+      Phonon P = mpEventSource->GenerateEventPhonon();
+      P.Propagate();
+      SetActiveRandomContext(0);
+    } catch (...) {
+      SetActiveRandomContext(0);
+      mCancelSimulation.store(true);
+      std::lock_guard<std::mutex> lock(mWorkerExceptionMutex);
+      if (!mWorkerException) mWorkerException = std::current_exception();
+      break;
+    }
   }
 }
 
@@ -641,6 +650,8 @@ void Model::RunSimulation() {
   std::cout << "@@ __BEGINNING_SIMULATION__" << std::endl << std::flush;
 
   mPhononsRemain = mNumPhonons;
+  mCancelSimulation = false;
+  mWorkerException = std::exception_ptr();
   unsigned hardware = std::thread::hardware_concurrency();
   if (hardware == 0) hardware = 1;
   unsigned workers = mNumThreads;
@@ -656,6 +667,11 @@ void Model::RunSimulation() {
     threads.push_back(std::thread(&Model::SimulationThread, this, i));
   for (std::vector<std::thread>::iterator it = threads.begin();
        it != threads.end(); ++it) it->join();
+
+  if (mWorkerException) {
+    std::lock_guard<std::mutex> lock(mWorkerExceptionMutex);
+    if (mWorkerException) std::rethrow_exception(mWorkerException);
+  }
 
   std::cerr << "100% of " << mNumPhonons << " have been cast.\n";
   std::cout << "@@ __SIMULATION_COMPLETE__" << std::endl;

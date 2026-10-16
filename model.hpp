@@ -19,6 +19,8 @@
 #include <vector>
 #include <atomic>
 #include <cstdint>
+#include <exception>
+#include <mutex>
 #include "events.hpp"
 #include "scatterers.hpp"
 #include "grid.hpp"   /* includes ecs.hpp, elastic.hpp, geom.hpp */
@@ -348,6 +350,9 @@ private:;
   std::atomic<long> mPhononsRemain; // Threads deduct from this counter
   std::uint64_t      mRandomSeed;
   unsigned            mNumThreads;
+  std::atomic<bool>   mCancelSimulation;
+  std::exception_ptr  mWorkerException;
+  std::mutex          mWorkerExceptionMutex;
                                     // until all phonons simulated.
   void SimulationThread(unsigned worker_index);
 
