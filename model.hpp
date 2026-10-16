@@ -347,8 +347,9 @@ private:;
 
   std::atomic<long> mPhononsRemain; // Threads deduct from this counter
   std::uint64_t      mRandomSeed;
+  unsigned            mNumThreads;
                                     // until all phonons simulated.
-  void SimulationThread();
+  void SimulationThread(unsigned worker_index);
 
 
 public:

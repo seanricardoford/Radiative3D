@@ -233,6 +233,7 @@ Model::Model(const ModelParams & par) {
   // :
 
   mNumPhonons = par.NumPhonons;
+  mNumThreads = par.NumThreads;
 
 
   // ::::::
@@ -608,31 +609,18 @@ R3::XYZ Model::FindSurface(R3::XYZ loc) const {
 //////
 // METHOD:  Model :: SimulationThread()
 //
-void Model::SimulationThread() {
-
-  unsigned nph_byten = mNumPhonons / 10;  // For Progress Indicator
-  unsigned nph_by100 = mNumPhonons / 100; //
-  bool finegrain = (mNumPhonons > 9999);  // Threshold for hundredths indicator
-  if (nph_byten==0) nph_byten=1;          // Prevent div/0
-
-  long remain = mPhononsRemain.fetch_sub(1);
-  while (remain > 0) {
+void Model::SimulationThread(unsigned worker_index) {
+  RandomContext random(mRandomSeed + worker_index);
+  SetActiveRandomContext(&random);
+  while (true) {
+    long remain = mPhononsRemain.fetch_sub(1);
+    if (remain <= 0) break;
 
     Phonon P = mpEventSource->GenerateEventPhonon();
     P.Propagate();
 
-    int i = mNumPhonons - remain; // phonons complete
-    if ( finegrain && (i % nph_by100 == 0) && (i>0) ) {  // 1% mark
-      std::cerr << ".";                                  //
-    }
-    if ( i % nph_byten == 0 ) {   // 10% mark
-      unsigned pct = (i / nph_byten) * 10;      //
-      std::cerr << pct << "% of " << mNumPhonons
-                << " have been cast.\n";
-    }
-    remain = mPhononsRemain.fetch_sub(1);
-
   }
+  SetActiveRandomContext(0);
 }
 
 //////
@@ -642,23 +630,25 @@ void Model::SimulationThread() {
 //
 void Model::RunSimulation() {
 
-  bool finegrain = (mNumPhonons > 9999);  // Threshold for hundredths indicator
-
   std::cout << "@@ __BEGINNING_SIMULATION__" << std::endl << std::flush;
 
   mPhononsRemain = mNumPhonons;
+  unsigned hardware = std::thread::hardware_concurrency();
+  if (hardware == 0) hardware = 1;
+  unsigned workers = mNumThreads;
+  if (workers == 0) {
+    workers = hardware > 2 ? hardware - 1 : hardware;
+    if (mNumPhonons > 0 && workers > static_cast<unsigned>(mNumPhonons))
+      workers = static_cast<unsigned>(mNumPhonons);
+  }
+  if (workers == 0) workers = 1;
+  std::cout << "Workers: " << workers << "\n";
+  std::vector<std::thread> threads;
+  for (unsigned i = 0; i < workers; ++i)
+    threads.push_back(std::thread(&Model::SimulationThread, this, i));
+  for (std::vector<std::thread>::iterator it = threads.begin();
+       it != threads.end(); ++it) it->join();
 
-  std::thread thread1(&Model::SimulationThread, this);
-  std::thread thread2(&Model::SimulationThread, this);
-  std::thread thread3(&Model::SimulationThread, this);
-  std::thread thread4(&Model::SimulationThread, this);
-
-  thread1.join();
-  thread2.join();
-  thread3.join();
-  thread4.join();
-
-  if (finegrain) {std::cerr << ".";}
   std::cerr << "100% of " << mNumPhonons << " have been cast.\n";
   std::cout << "@@ __SIMULATION_COMPLETE__" << std::endl;
 
