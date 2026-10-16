@@ -25,6 +25,7 @@
 #include <fstream>
 #include <atomic>
 #include <mutex>
+#include <mutex>
 #include "geom.hpp"
 #include "tensors.hpp"
 #include "raytype.hpp"
@@ -166,11 +167,13 @@ public:
               const Real inner_radius[RAY_NBT],
               const Real outer_radius[RAY_NBT],
               std::string axes_desc = "UNK");
+  Seismometer(const Seismometer &);
               // Note: X3 Axis is assumed to be "Up", thus only neces-
               // sary to provide X1 axis, as X2 can be compute from X1
               // and X3.
 
   ~Seismometer();
+  void MergeFrom(const Seismometer &);
 
 
   // :::::::::::::::::::::::::::::::::::::::::::::::::
@@ -227,6 +230,14 @@ public:
 //
 class DataReporter {
 public:
+  class WorkerAccumulator {
+  public:
+    std::vector<Seismometer*> seismometers;
+    unsigned long lost, timeout, invalid;
+    unsigned int diagnostics;
+    WorkerAccumulator() : lost(0), timeout(0), invalid(0), diagnostics(0) {}
+    ~WorkerAccumulator();
+  };
 
   enum invalid_reason_e {
     INV_PATH_NAN = 0,   // Implies diag component 0x01
@@ -297,6 +308,7 @@ protected:
             // We shrink it in the destructor, which deletes the
              // Seismometers.)
   mutable std::mutex mReportMutex;
+  static thread_local WorkerAccumulator *mActiveAccumulator;
 
 
 public:
@@ -387,6 +399,9 @@ public:
                                    inner_radius, 
                                    outer_radius, axes_desc));
   }
+  WorkerAccumulator *CreateWorkerAccumulator() const;
+  void MergeWorkerAccumulator(const WorkerAccumulator &);
+  static void SetActiveWorkerAccumulator(WorkerAccumulator *acc) { mActiveAccumulator = acc; }
 
   void OutputPostSimSummary();
   //            Spits out a summary of all aggregate data collected

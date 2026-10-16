@@ -10,6 +10,28 @@
 #include "media.hpp"
 #include "ecs.hpp"
 
+thread_local DataReporter::WorkerAccumulator *DataReporter::mActiveAccumulator = 0;
+
+DataReporter::WorkerAccumulator::~WorkerAccumulator() {
+  for (size_t i=0; i<seismometers.size(); ++i) delete seismometers[i];
+}
+
+DataReporter::WorkerAccumulator *DataReporter::CreateWorkerAccumulator() const {
+  WorkerAccumulator *acc = new WorkerAccumulator;
+  for (size_t i=0; i<mSeismometers.size(); ++i)
+    acc->seismometers.push_back(new Seismometer(*mSeismometers[i]));
+  return acc;
+}
+
+void DataReporter::MergeWorkerAccumulator(const WorkerAccumulator &acc) {
+  for (size_t i=0; i<mSeismometers.size(); ++i)
+    mSeismometers[i]->MergeFrom(*acc.seismometers[i]);
+  mNumLost += acc.lost;
+  mNumTimeout += acc.timeout;
+  mNumInvalid += acc.invalid;
+  mDiagInvalid |= acc.diagnostics;
+}
+
 // In this file:
 // CLASS IMPLEMENTATIONS FOR:
 //
@@ -76,6 +98,24 @@ Seismometer::Seismometer(const R3::XYZ loc,
 //
 Seismometer::~Seismometer() {
   delete [] mTimeBins;
+}
+
+Seismometer::Seismometer(const Seismometer &other)
+  : mLoc(other.mLoc), mAxesX1(other.mAxesX1), mAxesX2(other.mAxesX2),
+    mAxesX3(other.mAxesX3), mAxesDesc(other.mAxesDesc), mBeginTime(other.mBeginTime),
+    mPassthrough(other.mPassthrough), mTimeBins(new BinRecord[cmNumBins]) {
+  for (int i=0; i<RAY_NBT; ++i) { mRadiusO[i]=other.mRadiusO[i]; mRadiusI[i]=other.mRadiusI[i]; mArea[i]=other.mArea[i]; }
+  for (Count i=0; i<cmNumBins; ++i) mTimeBins[i]=other.mTimeBins[i];
+}
+
+void Seismometer::MergeFrom(const Seismometer &other) {
+  for (Count i=0; i<cmNumBins; ++i) {
+    for (int a=0; a<NUM_AXES; ++a) mTimeBins[i].mEnergyAxes[a] += other.mTimeBins[i].mEnergyAxes[a];
+    for (int r=0; r<RAY_NUMBASICTYPES; ++r) {
+      mTimeBins[i].mEnergyByType[r] += other.mTimeBins[i].mEnergyByType[r];
+      mTimeBins[i].mCountByType[r] += other.mTimeBins[i].mCountByType[r];
+    }
+  }
 }
 
 
@@ -545,13 +585,12 @@ void DataReporter::ReportScatterEvent(const Phonon & phon) {
 // METHOD:  ReportPhononCollected()
 //
 void DataReporter::ReportPhononCollected(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
-
   // ::::
   // ::     Output immediate report of
   // ::     Phonon hitting surface:
   //
   if (mbReportCollect) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, 
                            mIDCollect, 
                            phon);
@@ -560,8 +599,9 @@ void DataReporter::ReportPhononCollected(const Phonon & phon) {
   // ::     Query each Seismometer for
   // ::     Phonon Detection:
   //
-  for (unsigned i = 0; i < mSeismometers.size(); i++) {
-    Seismometer & Seis = *mSeismometers[i];
+  std::vector<Seismometer*> *seis = mActiveAccumulator ? &mActiveAccumulator->seismometers : &mSeismometers;
+  for (unsigned i = 0; i < seis->size(); i++) {
+    Seismometer & Seis = *(*seis)[i];
     bool Stop = Seis.CatchPhonon(phon);
     if (Stop) {   // (Search until
       break;      //    we hit one.)
@@ -594,34 +634,34 @@ void DataReporter::ReportCellToCell(const Phonon & phon) {
 // METHOD:  ReportLostPhonon()
 //
 void DataReporter::ReportLostPhonon(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportLost) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDLost, phon);
   }
-  mNumLost += 1;
+  if (mActiveAccumulator) ++mActiveAccumulator->lost; else ++mNumLost;
 }
 
 //////
 // METHOD:  ReportPhononTimeout()
 //
 void DataReporter::ReportPhononTimeout(const Phonon & phon) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportTimeout) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDTimeout, phon);
   }
-  mNumTimeout += 1;
+  if (mActiveAccumulator) ++mActiveAccumulator->timeout; else ++mNumTimeout;
 }
 
 //////
 // METHOD:  ReportInvalidPhonon()
 //
 void DataReporter::ReportInvalidPhonon(const Phonon & phon, invalid_reason_e reason) {
-  std::lock_guard<std::mutex> lock(mReportMutex);
   if (mbReportInvalid) {
+    std::lock_guard<std::mutex> lock(mReportMutex);
     output_phonon_dataline(mposReports, mIDInvalid, phon);
   }
-  mDiagInvalid |= (1 << reason);
-  mNumInvalid += 1;
+  if (mActiveAccumulator) { mActiveAccumulator->diagnostics |= (1 << reason); ++mActiveAccumulator->invalid; }
+  else { mDiagInvalid |= (1 << reason); ++mNumInvalid; }
 }
 
 

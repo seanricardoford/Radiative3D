@@ -618,6 +618,8 @@ R3::XYZ Model::FindSurface(R3::XYZ loc) const {
 //
 void Model::SimulationThread(unsigned worker_index) {
   (void) worker_index;
+  DataReporter::WorkerAccumulator *acc = dataout.CreateWorkerAccumulator();
+  DataReporter::SetActiveWorkerAccumulator(acc);
   while (true) {
     if (mCancelSimulation.load()) break;
     long remain = mPhononsRemain.fetch_sub(1);
@@ -638,6 +640,8 @@ void Model::SimulationThread(unsigned worker_index) {
       break;
     }
   }
+  DataReporter::SetActiveWorkerAccumulator(0);
+  mWorkerAccumulators[worker_index] = acc;
 }
 
 //////
@@ -662,11 +666,26 @@ void Model::RunSimulation() {
   }
   if (workers == 0) workers = 1;
   std::cout << "Workers: " << workers << "\n";
+  std::cout << "Random seed: " << mRandomSeed << "\n";
   std::vector<std::thread> threads;
-  for (unsigned i = 0; i < workers; ++i)
-    threads.push_back(std::thread(&Model::SimulationThread, this, i));
+  mWorkerAccumulators.assign(workers, static_cast<DataReporter::WorkerAccumulator*>(0));
+  try {
+    for (unsigned i = 0; i < workers; ++i)
+      threads.push_back(std::thread(&Model::SimulationThread, this, i));
+  } catch (...) {
+    mCancelSimulation.store(true);
+    for (std::vector<std::thread>::iterator it = threads.begin(); it != threads.end(); ++it) it->join();
+    throw;
+  }
   for (std::vector<std::thread>::iterator it = threads.begin();
        it != threads.end(); ++it) it->join();
+
+  for (unsigned i = 0; i < workers; ++i) {
+    if (mWorkerAccumulators[i]) {
+      dataout.MergeWorkerAccumulator(*mWorkerAccumulators[i]);
+      delete mWorkerAccumulators[i];
+    }
+  }
 
   if (mWorkerException) {
     std::lock_guard<std::mutex> lock(mWorkerExceptionMutex);

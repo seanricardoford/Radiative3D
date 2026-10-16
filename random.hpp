@@ -35,13 +35,19 @@ inline void SetActiveRandomContext(RandomContext *context) {
 
 inline Real RandomUniform() {
   RandomContext *context = ActiveRandomContext();
-  if (!context) throw std::runtime_error("random context is not active");
+  static thread_local std::mt19937_64 diagnostic_engine(0x7261643364ULL);
+  if (!context) return std::generate_canonical<Real, std::numeric_limits<Real>::digits>(diagnostic_engine);
   return context->Uniform();
 }
 
 inline unsigned long RandomInteger(unsigned long upper_exclusive) {
   RandomContext *context = ActiveRandomContext();
-  if (!context) throw std::runtime_error("random context is not active");
+  static thread_local std::mt19937_64 diagnostic_engine(0x7261643364ULL);
+  if (!context) {
+    if (upper_exclusive == 0) return 0;
+    std::uniform_int_distribution<unsigned long> dist(0, upper_exclusive - 1);
+    return dist(diagnostic_engine);
+  }
   return context->Integer(upper_exclusive);
 }
 

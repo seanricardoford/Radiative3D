@@ -25,6 +25,7 @@
 #include "scatterers.hpp"
 #include "grid.hpp"   /* includes ecs.hpp, elastic.hpp, geom.hpp */
 #include "media.hpp"  /* includes raytype.hpp */
+#include "dataout.hpp"
 
 // In this file:
 // CLASS DEFINITIONS FOR:
@@ -353,6 +354,7 @@ private:;
   std::atomic<bool>   mCancelSimulation;
   std::exception_ptr  mWorkerException;
   std::mutex          mWorkerExceptionMutex;
+  std::vector<DataReporter::WorkerAccumulator*> mWorkerAccumulators;
                                     // until all phonons simulated.
   void SimulationThread(unsigned worker_index);
 
