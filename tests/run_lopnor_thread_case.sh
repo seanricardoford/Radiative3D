@@ -4,12 +4,15 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 threads=$1
 outdir=$2
-phonons=${3:-24}
+phonons=${3:-400000}
 mkdir -p "$outdir"
 
 # This is the simulation-only portion of do-lopnor.sh's Lop Nor waveform case.
 # The production do-script continues into Octave figure generation after this
 # command; this test intentionally stops after the executable returns.
+# It keeps do-lopnor.sh's 600 s recording window and 2 s bins so phonons
+# scatter and reach every seismometer; the default phonon count yields
+# thousands of caught phonons while keeping thread comparisons fast.
 LOPXYZ=492.31,-263.65,1.05
 XINXYZ=425.54,-169.53,0.98
 MAKXYZ=-102.27,430.84,0.60
@@ -31,8 +34,8 @@ set -- "$ROOT/main" \
   --source="$SOURCETYP" \
   --source-loc="$SOURCELOC" \
   --frequency=2.0 \
-  --timetolive=0.02 \
-  --binsize=0.001 \
+  --timetolive=600 \
+  --binsize=2.0 \
   --grid-compiled=1 \
   --range=1200 \
   --flatten \
