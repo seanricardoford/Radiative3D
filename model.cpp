@@ -1,6 +1,8 @@
 // model.cpp
 //
-#include <cstdlib>      /* rand(), srand(), RAND_MAX */
+#include <cstdlib>
+#include <chrono>
+#include <random>
 #include <ctime>        /* time() */
 #include <iomanip>
 #include <thread>
@@ -106,12 +108,16 @@ void ModelParams::Output() const
     << ((Frequency == def.Frequency) ? "(default)" : "") << endl
     << "Number of Phonons: " << NumPhonons << setw(22)
     << ((NumPhonons == def.NumPhonons) ? "(default)" : "") << endl
-    << "Time to Live: " << PhononTTL << setw(27)
+     << "Time to Live: " << PhononTTL << setw(27)
     << ((PhononTTL == def.PhononTTL) ? "(default)" : "") << endl
     << "Time Bin Size: " << GetBinSize() << setw(27)
     << ((GetBinSize() == def.GetBinSize()) ? "(default)" : "") 
     << endl
-    << "Cylinder Range: " << CylinderRange << setw(24)
+     << "Threads: " << NumThreads << setw(32)
+     << ((NumThreads == def.NumThreads) ? "(automatic)" : "") << endl
+     << "Random Seed: " << RandomSeed << setw(26)
+     << (SeedProvided ? "(provided)" : "(automatic)") << endl
+     << "Cylinder Range: " << CylinderRange << setw(24)
     << ((CylinderRange == def.CylinderRange) ? "(default)" : "") 
     << endl;
   std::cout << "Args provided for \"compiled\" model are: ";
@@ -233,10 +239,14 @@ Model::Model(const ModelParams & par) {
   // :: Initialize global standard-lib objects:
   // :
 
-  srand(time(NULL));  // Seed the random number generator.
-                      // (TODO: Look into better random number
-                      // implementations than the standard library
-                      // RNG.)
+  mRandomSeed = par.RandomSeed;
+  if (!par.SeedProvided) {
+    std::random_device rd;
+    mRandomSeed = (static_cast<std::uint64_t>(rd()) << 32)
+               ^ static_cast<std::uint64_t>(rd())
+               ^ static_cast<std::uint64_t>(
+                   std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  }
 
 
   // ::::::

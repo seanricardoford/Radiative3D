@@ -18,6 +18,7 @@
 #include <iostream>
 #include <vector>
 #include <atomic>
+#include <cstdint>
 #include "events.hpp"
 #include "scatterers.hpp"
 #include "grid.hpp"   /* includes ecs.hpp, elastic.hpp, geom.hpp */
@@ -118,6 +119,9 @@ public:
                                  //  Angles on which to define event
                                  //  source functions
   long              NumPhonons;  // Number of phonons to cast
+  unsigned           NumThreads; // Worker override; zero means automatic
+  std::uint64_t      RandomSeed; // Seed used by simulation random streams
+  bool               SeedProvided;
   Real               PhononTTL;  // Phonon Time-to-Live, this is the
                                  //  max propagation sim-time before a
                                  //  phonon is to be abandoned
@@ -168,6 +172,9 @@ public:
     EventSourceLoc   ( 0,0,-1              ),
     TOA_Degree       ( 7                   ),
     NumPhonons       ( 10                  ), // 
+    NumThreads       ( 0                   ),
+    RandomSeed       ( 0                   ),
+    SeedProvided     ( false               ),
     PhononTTL        ( 60.0                ), // Seconds
     Frequency        ( 4.0                 ), // Hertz
     TimeBinsPerCycle ( 0.0                 ), // Zero signals unset
@@ -339,6 +346,7 @@ private:;
   // Threads and coordination:
 
   std::atomic<long> mPhononsRemain; // Threads deduct from this counter
+  std::uint64_t      mRandomSeed;
                                     // until all phonons simulated.
   void SimulationThread();
 

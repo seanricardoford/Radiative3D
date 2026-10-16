@@ -1,7 +1,7 @@
 // probability.cpp
 //
 #include <iostream>
-#include <cstdlib>      /* rand(), srand(), RAND_MAX, exit() */
+#include <cstdlib>
 #include "probability.hpp"
 using namespace std;
 
@@ -108,7 +108,7 @@ Index ProbDist::GetRandomIndex() {
   Index k1 = 0;                 // Initial lower bound for search
   Index k2 = mDist.size() - 1;  // Initial upper bound
   Index k;
-  Real r = mDist[k2] * ((Real) rand() / RAND_MAX); 
+  Real r = mDist[k2] * RandomUniform();
              // A value between 0.0 and the final (and presumably
              // maximum) value of mDist.
 
