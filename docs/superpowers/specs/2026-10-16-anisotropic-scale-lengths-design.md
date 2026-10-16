@@ -549,8 +549,12 @@ Test scripts follow `tests/run_lopnor_thread_case.sh`: simulation only, fixed
   exercises the same isotropic code as at degree 9.
 - Every scenario run must show that real scattering occurred in its
   scattering regions, for example from scatter-event report counts.
-- The existing thread-equivalence case uses a 0.02 s time-to-live. Its traces
-  are all zero, so it neither scatters nor records anything.
+- `tests/test_lopnor_thread_equivalence.sh` runs the real Lop Nor case, with a
+  600 s window, 2 s bins, and 400,000 phonons at degree 5, about 10 s. It
+  fails if traces are all zero. The new Lop Nor checks can reuse
+  `tests/run_lopnor_thread_case.sh`. (Merged from `patch/multithread-srf`;
+  before that fix, the case used a 0.02 s time-to-live and compared all-zero
+  traces.)
 
 The design review confirmed these checks are achievable:
 
