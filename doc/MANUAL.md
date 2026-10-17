@@ -258,6 +258,20 @@ Each of the included example models (<tt>user.cpp</tt>) can alternatively be giv
 
 A seven-value layout with <tt>ax = ay = az = a</tt> for every region is isotropic and produces output byte-identical to the corresponding five-value layout. Grid dumps (<tt>--dump-grid</tt>) for a model containing any non-isotropic region add two extra columns, <tt>ay</tt> and <tt>az</tt>, following the existing <tt>a</tt> column (which, for an anisotropic region, holds <tt>ax</tt>).
 
+##### _Scatterer dump:_
+
+On every run, Radiative3D prints a scatterer dump (a table of the distinct <tt>Scatterer</tt> objects built for the model, headed <tt>BEGIN SCATTERER DUMP</tt>) before simulation begins. Each row's first 11 columns (<tt>nu, eps, a, kappa, el, gam0, address, MFP (P), MFP (S), DM (P), DM (S)</tt>) are unchanged from before anisotropic scale lengths were introduced; the <tt>a</tt> column holds <tt>ax</tt> (identical to <tt>a</tt> for an isotropic region).
+
+If a model contains any anisotropic region, the column-header line gains the text <tt>ay az mode directional-MFPs</tt>, and an anisotropic row (one built from a non-isotropic <tt>ScatterParams</tt>) appends, after its existing 11 columns:
+
+- <tt>ay</tt>, <tt>az</tt> -- the region's remaining two scale lengths.
+- A mode label, <tt>AXI</tt> for an axisymmetric spec (<tt>ax == ay != az</tt>) or <tt>ANI</tt> for any other (triaxial) anisotropic spec.
+- The row's directional mean free paths, computed by direct numerical integration of the anisotropic scattering coefficients over a fixed degree-6 direction set (81,920 directions, independent of the run's <tt>--toa-degree</tt>) at model build:
+  - For an <tt>AXI</tt> row, 8 values: P at incidence angles of 0, 45, and 90 degrees from vertical (the <tt>az</tt> axis), then S at 0 degrees (horizontally polarized -- SV and SH coincide there by the medium's symmetry about vertical), and SV and SH separately at 45 and at 90 degrees.
+  - For an <tt>ANI</tt> row, 9 values: P travelling along East, North, and Up, then S travelling along each of those three axes, polarized along each of the other two (e.g. S travelling East polarized Up is SV, polarized North is SH).
+
+For an anisotropic row, the leading <tt>MFP (P)</tt>, <tt>MFP (S)</tt>, <tt>DM (P)</tt>, and <tt>DM (S)</tt> columns are also computed by this same direct integration, independent of mode: <tt>MFP (P)</tt> is 3 divided by the sum of the three P-axis rates above (East, North, Up), <tt>MFP (S)</tt> is 6 divided by the sum of the six S-axis rates, and the <tt>DM</tt> columns are the plain mean of the corresponding dipoles. These values describe the underlying physical scattering pattern; they are distinct from the majorant mean free path the general sampler uses internally to draw tentative collision distances. A model with only isotropic regions prints exactly today's 11-column rows and header, with no appended text.
+
 ##### _Validity limits:_
 
 The Born/Bourret scattering approximation that Radiative3D's transport theory relies on requires <tt>k^2 * a_max^2 * eps^2 &lt;&lt; 1</tt>, where <tt>k</tt> is the background wavenumber and <tt>a_max</tt> is the largest of a region's scale lengths. Model parameters should be chosen so that this quantity stays well below one. Additionally, Margerin (2006) cautions that for extremely flat scatterers (<tt>az -&gt; 0</tt> with the horizontal scale lengths remaining large), the medium behaves like fine layering, a regime in which radiative transport theory itself breaks down; such parameter choices should be avoided.

@@ -140,6 +140,14 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
     mDipoles[RAY_S] = 1.0;  // riding them does not prevent deflection. A
   }                         // check in GRSPh() does that.
 
+  if (mAnisotropic) {       // Populate the reporting-only directional
+    ComputeReportStats();   // MFPs/DMs that PrintStats() shows for an
+  }                         // anisotropic Scatterer. Independent of the
+                            // override flags above: these values
+                            // describe the physical scattering pattern,
+                            // not the (possibly overridden) sampling
+                            // behavior.
+
   //
 }//
 //
@@ -577,6 +585,42 @@ Real Scatterer::IntegratedRate(raytype intype, const R3::XYZ & dir,
                                const R3::XYZ & pol,
                                const S2::S2Set & dirs) const {
 
+  Real rate, dipole;
+  IntegrateRateAndDipole(intype, dir, pol, dirs, rate, dipole);
+  return rate;
+
+}
+
+
+//////
+// METHOD:  Scatterer :: IntegrateRateAndDipole()              [const]
+//
+// PURPOSE: Computes the same exact total scattering rate as
+//          IntegratedRate() (see that method's header comment), and
+//          additionally the dipole moment of the corresponding
+//          integrated scattering pattern:
+//
+//              dipole = Sum( cos(psi) * G ) / Sum( G )
+//
+//          where, for each direction dirs[k] and each of the two
+//          conversions available to 'intype', G is the isotropic
+//          (a=a_min) GSATO() value times AnisoRatio() at the
+//          corresponding exchange wavevector (the same weight
+//          IntegratedRate() sums), and psi is the deflection angle
+//          between dirs[k] and the forward (incoming-ray) direction,
+//          i.e. dirs[k].z() in the take-off-angle frame (dirs[] is
+//          conventionally expressed with its own +z as the forward
+//          direction -- the same convention ComputeDipoles() relies on
+//          for the isotropic case).
+//
+//          IntegratedRate() is a thin wrapper around this method that
+//          discards 'dipole'.
+//
+void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
+                                       const R3::XYZ & pol,
+                                       const S2::S2Set & dirs,
+                                       Real & rate, Real & dipole) const {
+
   raytype out_types[4] = {RAY_P, RAY_S, RAY_P, RAY_S};  // (GPP,GPS,GSP,GSS)
 
   out_types_e c1, c2;
@@ -591,13 +635,15 @@ Real Scatterer::IntegratedRate(raytype intype, const R3::XYZ & dir,
   const R3::OrthoAxes AA(dirTP.Theta(), dirTP.Phi(), rot);  // Same
                               // construction as Phonon::Transform().
 
-  Real sum = 0;
+  Real sumRate = 0;
+  Real sumDip  = 0;
   const std::size_t n = dirs.size();
   for (std::size_t k = 0; k < n; k++) {
 
     Real gpp, gps, gsp, gss, spol;
     mParams.GSATO(dirs[k], gpp, gps, gsp, gss, spol);
     const Real gvals[NUM_OUTTYPES] = {gpp, gps, gsp, gss};
+    const Real costh = dirs[k].z();   // (Unit vec, so z is cos(psi))
 
     const R3::XYZ e_out = AA.Express(dirs[k].XYZ());
 
@@ -606,12 +652,134 @@ Real Scatterer::IntegratedRate(raytype intype, const R3::XYZ & dir,
       const Real k_out = (out_types[conv] == RAY_P) ?
                           mParams.GetKP() : mParams.GetKS();
       const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
-      sum += gvals[conv] * mParams.AnisoRatio(m);
+      const Real w = gvals[conv] * mParams.AnisoRatio(m);
+      sumRate += w;
+      sumDip  += w * costh;
     }
 
   }
 
-  return sum / (Real) n;
+  rate = sumRate / (Real) n;
+  dipole = (sumRate > 0) ? (sumDip / sumRate) : 0.0;
+
+}
+
+
+//////
+// METHOD:  Scatterer :: ReportDirs()                         [static]
+//
+// PURPOSE: Returns the fixed direction set ComputeReportStats() uses
+//          to integrate the directional mean free paths and dipoles
+//          shown by PrintStats() for an anisotropic Scatterer: a
+//          degree-6 icosahedral tessellation (81,920 directions),
+//          independent of a run's --toa-degree. Built lazily the first
+//          time an anisotropic Scatterer is constructed, during the
+//          single-threaded model build; see docs/superpowers/specs/
+//          2026-10-16-anisotropic-scale-lengths-design.md, "Output and
+//          reporting".
+//
+const S2::TesselSphere & Scatterer::ReportDirs() {
+  static S2::TesselSphere dirs(S2::TESS_ICO, 6);
+  return dirs;
+}
+
+
+//////
+// METHOD:  Scatterer :: ComputeReportStats()         [Helper Function]
+//
+// PURPOSE: Populates mReportMeanFreeP, mReportDipoles, and
+//          mReportMFPs, the reporting-only values PrintStats() shows
+//          for an anisotropic Scatterer. Called by the constructor
+//          whenever IsAnisotropic() is true.
+//
+//          Every anisotropic Scatterer evaluates the same 9 axis
+//          states over ReportDirs() -- P travelling along East, North,
+//          and Up; S travelling along each axis, polarized along each
+//          of the other two axes. The legacy-style "MFP (P)" is
+//          3/(sum of the 3 P rates); "MFP (S)" is 6/(sum of the 6 S
+//          rates); the legacy "DM (P)"/"DM (S)" are the plain mean of
+//          the corresponding dipoles.
+//
+//          An axisymmetric spec (IsAxisymmetric()) additionally
+//          evaluates 8 incidence-angle states referenced to the az
+//          axis (fabric Up): P at 0, 45, and 90 degrees from vertical;
+//          S at 0 degrees (SV and SH coincide there by the medium's
+//          axial symmetry, so only one value is computed), and SV, SH
+//          separately at 45 and 90 degrees. GetReportMFPs() returns
+//          these 8 values (instead of the 9 axis values, which still
+//          feed the legacy MFP/DM values above) for an axisymmetric
+//          spec.
+//
+void Scatterer::ComputeReportStats() {
+
+  const S2::TesselSphere & dirs = ReportDirs();
+
+  const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1);
+
+  struct AxisState {raytype in; R3::XYZ dir; R3::XYZ pol;};
+  const AxisState axis[9] = {
+    {RAY_P, E, E}, {RAY_P, N, N}, {RAY_P, U, U},
+    {RAY_S, E, N}, {RAY_S, E, U},
+    {RAY_S, N, E}, {RAY_S, N, U},
+    {RAY_S, U, E}, {RAY_S, U, N},
+  };
+
+  Real rate[9], dip[9];
+  for (int i = 0; i < 9; i++) {
+    IntegrateRateAndDipole(axis[i].in, axis[i].dir, axis[i].pol, dirs,
+                           rate[i], dip[i]);
+  }
+
+  const Real sumRateP = rate[0] + rate[1] + rate[2];
+  const Real sumRateS = rate[3] + rate[4] + rate[5]
+                       + rate[6] + rate[7] + rate[8];
+  mReportMeanFreeP[RAY_P] = 3.0 / sumRateP;
+  mReportMeanFreeP[RAY_S] = 6.0 / sumRateS;
+  mReportDipoles[RAY_P] = (dip[0] + dip[1] + dip[2]) / 3.0;
+  mReportDipoles[RAY_S] = (dip[3] + dip[4] + dip[5]
+                          + dip[6] + dip[7] + dip[8]) / 6.0;
+
+  mReportMFPs.clear();
+
+  if (mParams.IsAxisymmetric()) {
+
+    const S2::ThetaPhi tp0 (0.0,                  0.0);
+    const S2::ThetaPhi tp45(45.0*Geometry::DtoR,  0.0);
+    const S2::ThetaPhi tp90(90.0*Geometry::DtoR,  0.0);
+
+    const R3::XYZ d0  = tp0.XYZ();
+    const R3::XYZ d45 = tp45.XYZ();
+    const R3::XYZ d90 = tp90.XYZ();
+
+    Real r, d;
+
+    IntegrateRateAndDipole(RAY_P, d0,  d0,  dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // P0
+    IntegrateRateAndDipole(RAY_P, d45, d45, dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // P45
+    IntegrateRateAndDipole(RAY_P, d90, d90, dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // P90
+
+    IntegrateRateAndDipole(RAY_S, d0, tp0.ThetaHat().XYZ(), dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // S0
+
+    IntegrateRateAndDipole(RAY_S, d45, tp45.ThetaHat().XYZ(), dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // S45SV
+    IntegrateRateAndDipole(RAY_S, d45, tp45.PhiHat().XYZ(), dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // S45SH
+
+    IntegrateRateAndDipole(RAY_S, d90, tp90.ThetaHat().XYZ(), dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // S90SV
+    IntegrateRateAndDipole(RAY_S, d90, tp90.PhiHat().XYZ(), dirs, r, d);
+    mReportMFPs.push_back(1.0/r);                             // S90SH
+
+  } else {
+
+    for (int i = 0; i < 9; i++) {
+      mReportMFPs.push_back(1.0 / rate[i]);
+    }
+
+  }
 
 }
 
@@ -674,6 +842,11 @@ void Scatterer::PrintAllScatteringStats() {     // STATIC METHOD
 
   Scatterer * next = cm_ll_first;   // First object in linked list
 
+  bool anyAniso = false;            // Determines whether the header
+  for (Scatterer * s = cm_ll_first; s != 0; s = s->mpllNext) {
+    if (s->IsAnisotropic()) {anyAniso = true; break;}
+  }                                 // gets the appended columns below.
+
   cout << "#  BEGIN SCATTERER DUMP:\n";
   cout << "#  Overrides: "
        << ((cm_MFPOverride_b) ?
@@ -682,7 +855,11 @@ void Scatterer::PrintAllScatteringStats() {     // STATIC METHOD
        << std::endl;
   cout << "#  "
        << "    nu    eps        a    kappa         el       gam0    "
-       << "     address      MFP (P)    MFP (S)      DM (P)    DM (S)\n";
+       << "     address      MFP (P)    MFP (S)      DM (P)    DM (S)";
+  if (anyAniso) {
+    cout << " ay az mode directional-MFPs";
+  }
+  cout << "\n";
   cout << "#  "
        << "====== ====== ======== ======== ========== ==========    "
        << "============    =========  =========    ========  ========\n";
@@ -716,16 +893,43 @@ void Scatterer::PrintStats() {
        << setprecision(6)
        << setw(width1-2) << mParams.GetNu() << " "
        << setw(width1-2) << mParams.GetEps() << " "
-       << setw(width1)   << mParams.GetA() << " "
+       << setw(width1)   << mParams.GetAx() << " "
        << setw(width1)   << mParams.GetKappa() << " "
        << setw(width1+2) << mParams.GetL() << " "
        << setw(width1+2) << mParams.GetGam0() << "    "
-       << setw(width2)   << this << "    "
-       << setw(width1+1) << mMeanFreeP[RAY_P] << "  "
-       << setw(width1+1) << mMeanFreeP[RAY_S] << "    "
-       << setprecision(4)
-       << setw(width1)   << mDipoles[RAY_P] << "  "
-       << setw(width1)   << mDipoles[RAY_S] << "\n";
+       << setw(width2)   << this << "    ";
 
+  if (mAnisotropic) {          // The integrated legacy values from
+                                // Task 6, not the majorant MFP held in
+                                // mMeanFreeP[] (see GetMajorant-
+                                // MeanFreePath()).
+    cout << setw(width1+1) << mReportMeanFreeP[RAY_P] << "  "
+         << setw(width1+1) << mReportMeanFreeP[RAY_S] << "    "
+         << setprecision(4)
+         << setw(width1)   << mReportDipoles[RAY_P] << "  "
+         << setw(width1)   << mReportDipoles[RAY_S];
+  } else {
+    cout << setw(width1+1) << mMeanFreeP[RAY_P] << "  "
+         << setw(width1+1) << mMeanFreeP[RAY_S] << "    "
+         << setprecision(4)
+         << setw(width1)   << mDipoles[RAY_P] << "  "
+         << setw(width1)   << mDipoles[RAY_S];
+  }
+
+  if (mAnisotropic) {          // Append ay, az, mode, and the
+                                // directional mean free paths. Mode is
+                                // a property of the spec (Ruling R2),
+                                // not of which sampler is in use.
+    cout << "  "
+         << setprecision(6)
+         << setw(width1) << mParams.GetAy() << "  "
+         << setw(width1) << mParams.GetAz() << "  "
+         << setw(4) << (mParams.IsAxisymmetric() ? "AXI" : "ANI");
+    for (std::size_t i = 0; i < mReportMFPs.size(); i++) {
+      cout << "  " << setw(width1+1) << mReportMFPs[i];
+    }
+  }
+
+  cout << "\n";
 
 }

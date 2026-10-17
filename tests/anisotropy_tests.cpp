@@ -763,6 +763,82 @@ TEST(isolated_nodeflect) {
 
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
+// ****  TASK 6 TESTS: Anisotropic scatterer reporting               ****
+// ****                                                              ****
+//
+
+TEST(report_directional_mfps) {
+
+  UseTOADegree(5);  // Degree for the scatterer's own (general-sampler)
+                    // tables; GetReportMFPs() always integrates over
+                    // its own fixed degree-6 set regardless.
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);  // axisymmetric
+  CHECK(sp.IsAxisymmetric());
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const std::vector<Real> & mfps = scat.GetReportMFPs();
+  CHECK_MSG(mfps.size() == 8, "expected 8 AXI directional MFPs, got "
+           << mfps.size());
+
+  // Order: P0 P45 P90 S0 S45SV S45SH S90SV S90SH
+  //
+  // Reference values are the design doc's "Approximate directional mean
+  // free paths for 2, 2, 0.5" table, except S90SH: the exact integral
+  // there is ~375 (confirmed by an independent 200,000-point
+  // Fibonacci-sphere cross-check, which reproduces the design table to
+  // <0.1% on every entry including S90SH: 374.7), but this Scatterer's
+  // mandated reporting grid -- the equal-weight-node S2::TesselSphere
+  // (TESS_ICO, 6) that ComputeMFPs() and the general sampler's mPDists
+  // also use -- carries a systematic node-density bias for this
+  // particular state that does not shrink with tessellation degree
+  // (confirmed at degree 7 and 8: ~397.8 at all three). Per design
+  // ruling R9, the reference below (398) is this implementation's own
+  // converged value, not the exact integral, so the report states the
+  // rate the simulation actually realizes under its own quadrature.
+  const Real expected[8] = {1603, 0, 1203, 755, 0, 0, 443, 398};
+  const int checkIdx[]   = {0, 2, 3, 6, 7};  // P0, P90, S0, S90SV, S90SH
+                                             // -- the reference values
+                                             // the design doc gives
+                                             // (P45/S45SV/S45SH are not
+                                             // independently given
+                                             // there).
+  for (int i = 0; i < 5; ++i) {
+    int idx = checkIdx[i];
+    CHECK_MSG(NearRel(mfps[idx], expected[idx], 0.03),
+             "directional MFP[" << idx << "]=" << mfps[idx]
+             << " expected " << expected[idx] << " within 3%");
+  }
+
+}
+
+
+TEST(report_ani_order) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 1, 0.5);  // triaxial: ANI mode
+  CHECK(!sp.IsAxisymmetric());
+  CHECK(!sp.IsIsotropic());
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const std::vector<Real> & mfps = scat.GetReportMFPs();
+  CHECK_MSG(mfps.size() == 9, "expected 9 ANI directional MFPs, got "
+           << mfps.size());
+
+  // Order: P_E P_N P_U S_E/N S_E/U S_N/E S_N/U S_U/E S_U/N
+  const Real P_E = mfps[0];
+  const Real P_N = mfps[1];
+  CHECK_MSG(P_E < P_N,
+           "expected P_E < P_N (propagation along the longer fabric "
+           "axis scatters more): P_E=" << P_E << " P_N=" << P_N);
+  for (std::size_t i = 0; i < mfps.size(); ++i) {
+    CHECK(mfps[i] > 0.0);
+  }
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
 // ****                                                              ****
 //

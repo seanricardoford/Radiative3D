@@ -278,5 +278,80 @@ fi
 
 echo "  invalid scale-length rejection: PASS"
 
+##
+## Test: anisotropic scatterer dump (Task 6 reporting)
+##
+
+echo "Testing anisotropic scatterer dump..."
+
+# Zero-phonon run (PrintAllScatteringStats() always runs on model build,
+# regardless of phonon count): one isotropic, one axisymmetric (AXI,
+# ax=ay=2 != az=0.5), and one triaxial (ANI, 1.4/0.7/0.35) region.
+scatdump_args="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,2.0,2.0,0.5,0.3,1000,0.8,0.01,1.4,0.7,0.35,0.5,300"
+scatdump_dir="$work/scatterer-dump"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$scatdump_dir" 0 "$scatdump_args"
+dump="$scatdump_dir/stdout.txt"
+
+# Isotropic rows have 11 fields; AXI rows have 22; ANI rows have 23.
+# (Scatterer-dump data rows are the non-"#"-prefixed lines between the
+# BEGIN/END markers.)
+iso_count=$(awk '/^#  BEGIN SCATTERER DUMP/{f=1;next} /^#  END SCATTERERS/{f=0} f && $0 !~ /^#/ && NF==11 {c++} END{print c+0}' "$dump")
+if [ "$iso_count" -lt 1 ]; then
+  echo "FAIL: expected at least one isotropic (11-field) scatterer row, got $iso_count" >&2
+  exit 1
+fi
+
+axi_row=$(awk '/^#  BEGIN SCATTERER DUMP/{f=1;next} /^#  END SCATTERERS/{f=0} f && $0 !~ /^#/ && NF==22 {print; exit}' "$dump")
+if [ -z "$axi_row" ]; then
+  echo "FAIL: no AXI (22-field) scatterer row found" >&2
+  exit 1
+fi
+axi_mode=$(echo "$axi_row" | awk '{print $14}')
+if [ "$axi_mode" != "AXI" ]; then
+  echo "FAIL: AXI row field 14 is '$axi_mode', expected AXI" >&2
+  exit 1
+fi
+axi_ax=$(echo "$axi_row" | awk '{print $3}')
+if [ "$axi_ax" != "2" ]; then
+  echo "FAIL: AXI row field 3 (ax) is '$axi_ax', expected 2 (crust)" >&2
+  exit 1
+fi
+
+ani_row=$(awk '/^#  BEGIN SCATTERER DUMP/{f=1;next} /^#  END SCATTERERS/{f=0} f && $0 !~ /^#/ && NF==23 {print; exit}' "$dump")
+if [ -z "$ani_row" ]; then
+  echo "FAIL: no ANI (23-field) scatterer row found" >&2
+  exit 1
+fi
+ani_mode=$(echo "$ani_row" | awk '{print $14}')
+if [ "$ani_mode" != "ANI" ]; then
+  echo "FAIL: ANI row field 14 is '$ani_mode', expected ANI" >&2
+  exit 1
+fi
+
+# el * MFP(S) (field 5 * field 9) must be positive on every row -- this
+# is the same quantity do-halfspace-nearsrc50.sh computes from the
+# scatterer dump, so an anisotropic dump must keep it meaningful.
+neg_count=$(awk '/^#  BEGIN SCATTERER DUMP/{f=1;next} /^#  END SCATTERERS/{f=0} f && $0 !~ /^#/ && NF>=11 {if ($5*$9<=0) c++} END{print c+0}' "$dump")
+if [ "$neg_count" -ne 0 ]; then
+  echo "FAIL: found $neg_count scatterer row(s) with non-positive el*MFP(S)" >&2
+  exit 1
+fi
+
+echo "  anisotropic scatterer dump field counts and values: PASS"
+
+# The default (all-isotropic) layout's scatterer-dump header must not
+# gain the appended 'ay' column text.
+default_scat_dir="$work/scatterer-dump-default"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$default_scat_dir" 0 "$args_5_lopnor_15"
+header=$(awk '/^#  .*nu.*eps.*a.*kappa/{print; exit}' "$default_scat_dir/stdout.txt")
+case "$header" in
+  *ay*)
+    echo "FAIL: default (isotropic) scatterer-dump header unexpectedly contains 'ay': $header" >&2
+    exit 1
+    ;;
+esac
+
+echo "  default layout scatterer-dump header has no ay: PASS"
+
 echo ""
 echo "All test_aniso_inputs checks passed"

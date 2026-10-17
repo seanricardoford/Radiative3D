@@ -209,6 +209,31 @@ protected:
                                 // 'par' and the requested sampler_e
                                 // choice; see IsAnisotropic().
 
+  Real mReportMeanFreeP[RAY_NBT]; // Reporting-only mean free paths for
+                                  // an anisotropic Scatterer: legacy
+                                  // "MFP (P)"/"MFP (S)" values averaged
+                                  // over incidence along the three
+                                  // fabric axes (see ComputeReport-
+                                  // Stats()). Distinct from mMeanFreeP,
+                                  // which (for an anisotropic
+                                  // Scatterer) holds the majorant MFP
+                                  // used to draw tentative collision
+                                  // distances, not a value meant for
+                                  // display. Unset (and unused) for an
+                                  // isotropic Scatterer.
+
+  Real mReportDipoles[RAY_NBT];   // Reporting-only "DM (P)"/"DM (S)"
+                                  // values for an anisotropic
+                                  // Scatterer, the mean of the dipoles
+                                  // of the same axis states that feed
+                                  // mReportMeanFreeP. Unset (and
+                                  // unused) for an isotropic Scatterer.
+
+  std::vector<Real> mReportMFPs;  // Directional mean free paths, in
+                                  // dump order, for an anisotropic
+                                  // Scatterer; see GetReportMFPs().
+                                  // Empty for an isotropic Scatterer.
+
 
 public:
 
@@ -230,6 +255,16 @@ protected:
   void ComputeMFPs();
   void ComputeDipoles();
   void ComputeQuads();
+  void ComputeReportStats();   // Populates mReportMeanFreeP,
+                               // mReportDipoles, and mReportMFPs.
+                               // Called by the constructor whenever
+                               // IsAnisotropic() is true.
+
+  static const S2::TesselSphere & ReportDirs();
+                               // The fixed degree-6 direction set
+                               // ComputeReportStats() integrates over,
+                               // independent of a run's --toa-degree.
+                               // Built lazily on first use.
 
 
 public:
@@ -312,7 +347,32 @@ public:
                       // the corresponding exchange wavevector, summed
                       // over the two conversions available to
                       // 'intype'. Used to validate AttemptAnisotropic-
-                      // Scatter()'s realized event rate.
+                      // Scatter()'s realized event rate. A thin wrapper
+                      // around IntegrateRateAndDipole() that discards
+                      // the dipole.
+
+  void IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
+                              const R3::XYZ & pol, const S2::S2Set & dirs,
+                              Real & rate, Real & dipole) const;
+                      // Computes the same 'rate' as IntegratedRate(),
+                      // plus the dipole moment of the corresponding
+                      // integrated scattering pattern, Sum(cos(psi)*G)
+                      // / Sum(G), where psi is the deflection angle
+                      // (angle between 'dirs[k]' and the forward
+                      // direction, i.e. 'dirs[k].z()' in the local
+                      // take-off-angle frame) and G is each direction's
+                      // G-value*AnisoRatio() weight -- the same
+                      // convention ComputeDipoles() uses for the
+                      // isotropic case, applied here to the anisotropic
+                      // integral.
+
+  const std::vector<Real> & GetReportMFPs() const {return mReportMFPs;}
+                      // Directional mean free paths, in dump order:
+                      // for an axisymmetric spec, the 8 incidence-angle
+                      // values (P0,P45,P90,S0,S45SV,S45SH,S90SV,S90SH);
+                      // for any other anisotropic spec, the 9 axis
+                      // values (P_E,P_N,P_U,S_E/N,S_E/U,S_N/E,S_N/U,
+                      // S_U/E,S_U/N). Empty unless IsAnisotropic().
 
   static R3::XYZ ToFabric(const R3::XYZ & loc, const R3::XYZ & v);
                       // Expresses vector 'v' in the local fabric
