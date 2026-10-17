@@ -590,7 +590,7 @@ void Phonon::Propagate() {
     TravelRec travel =                  // Travel record to cell
       mpCell->GetPathToBoundary(mType,  // boundary. (Gets overridden
                                 mLoc,   // below if we scatter)
-                                mDir); 
+                                mDir);
 
     if (travel.PathLength == 1.0/0.0){
       dataout.ReportPhononTimeout(*this);
@@ -598,27 +598,43 @@ void Phonon::Propagate() {
     }
 
 
-    Real scatlen = mpScat->GetRandomPathLength(mType);
-    Real edgelen = travel.PathLength;
+    if (!mpScat->IsAnisotropic()) {
+      Real scatlen = mpScat->GetRandomPathLength(mType);
+      Real edgelen = travel.PathLength;
 
 
-    if (scatlen < edgelen) {  // true if we scattered,
-                              // false if we hit cell boundary
+      if (scatlen < edgelen) {  // true if we scattered,
+                                // false if we hit cell boundary
 
-      travel = mpCell->AdvanceLength(mType, scatlen, mLoc, mDir);
-      this->Move(travel);     // Move us to the scatterer
+        travel = mpCell->AdvanceLength(mType, scatlen, mLoc, mDir);
+        this->Move(travel);     // Move us to the scatterer
 
-      Phonon rph = mpScat->GetRandomScatteredRelativePhonon(mType);
-      this->Transform(rph);   // Re-orient and re-raytype us according
-                              // the results of the scattering event
-                              // (coded in 'rph').
+        Phonon rph = mpScat->GetRandomScatteredRelativePhonon(mType);
+        this->Transform(rph);   // Re-orient and re-raytype us according
+                                // the results of the scattering event
+                                // (coded in 'rph').
 
-      dataout.ReportScatterEvent(*this);
-     
-      continue;
+        dataout.ReportScatterEvent(*this);
 
-    } // If we get here, then we did NOT scatter. (We are
-      // at a cell boundary)
+        continue;
+
+      }
+    } else {
+      Real edgelen = travel.PathLength, s = 0;  bool scattered = false;
+      while (true) {
+        s += mpScat->GetRandomPathLength(mType);
+        if (!(s < edgelen)) break;                                     // boundary first
+        TravelRec tent = mpCell->AdvanceLength(mType, s, mLoc, mDir);
+        Scatterer::AnisoAttempt att =
+            mpScat->AttemptAnisotropicScatter(mType, tent.NewLoc, tent.NewDir, mPol);
+        if (att.IsReal) { Move(tent); mPol = att.InPol; Transform(att.Rel);
+                          dataout.ReportScatterEvent(*this); scattered = true; break; }
+      }                                                                // null collision: no move, no report
+      if (scattered) continue;
+    }
+
+    // If we get here, then we did NOT scatter. (We are
+    // at a cell boundary)
 
     this->Move(travel);       // Move us to the cell boundary
    
