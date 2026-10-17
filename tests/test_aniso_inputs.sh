@@ -138,45 +138,51 @@ if ! grep -E "nu.*eps.*a.*k.*ay.*az" "$grid_dir/stdout.txt" >/dev/null; then
 fi
 
 # Use awk to verify field counts and values
-# Anisotropic grid should have 17 fields per row
-node_count=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF}' "$grid_dir/stdout.txt" | sort -u | wc -l)
+# Anisotropic grid should have 17 fields per row (excluding *** rows which have 18 due to leading space)
+# Data starts after the header line and ends at "#  END"
+node_count=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==17 {print NF}' "$grid_dir/stdout.txt" | sort -u | wc -l)
 if [ "$node_count" -ne 1 ]; then
   echo "FAIL: node rows have inconsistent field counts" >&2
-  awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF}' "$grid_dir/stdout.txt" | sort -u >&2
+  # Debug output
+  echo "Field count distribution for rows with 15-18 fields:" >&2
+  awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF>=15 && NF<=18 {print NF}' "$grid_dir/stdout.txt" | sort | uniq -c >&2
   exit 1
 fi
 
-field_count=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF; exit}' "$grid_dir/stdout.txt")
+field_count=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==17 {print NF; exit}' "$grid_dir/stdout.txt")
 if [ "$field_count" -ne 17 ]; then
   echo "FAIL: node rows have $field_count fields, expected 17" >&2
   exit 1
 fi
 
 # Check crust rows (field 15 = 0.30000, which is k for crust) have correct ay,az (2.00000, 0.50000)
-crust_row=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ && $15 ~ /0.30000/ {print; found=1} END {if (!found) exit 1}' "$grid_dir/stdout.txt")
+crust_row=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==17 && $15 ~ /0.30000/ {print; exit}' "$grid_dir/stdout.txt")
 if [ -z "$crust_row" ]; then
   echo "FAIL: no crust rows (k=0.30000) found in grid dump" >&2
   exit 1
 fi
 
-crust_ok=$(echo "$crust_row" | awk '$14 == "2.00000" && $16 == "2.00000" && $17 == "0.50000" {found=1} END {exit !found}')
-if [ -z "$crust_ok" ]; then
-  echo "FAIL: crust rows do not have correct ay,az values (2.00000 2.00000 0.50000)" >&2
-  echo "$crust_row" >&2
+# Extract and verify the specific fields
+crust_ay=$(echo "$crust_row" | awk '{print $16}')
+crust_az=$(echo "$crust_row" | awk '{print $17}')
+if [ "$crust_ay" != "2.00000" ] || [ "$crust_az" != "0.50000" ]; then
+  echo "FAIL: crust row does not have correct ay,az values (expected 2.00000 0.50000, got $crust_ay $crust_az)" >&2
   exit 1
 fi
 
 # Check mantle rows (field 15 = 0.50000) have correct ax,ay,az (1.40000, 0.70000, 0.35000)
-mantle_row=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ && $15 ~ /0.50000/ {print; found=1} END {if (!found) exit 1}' "$grid_dir/stdout.txt")
+mantle_row=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==17 && $15 ~ /0.50000/ {print; exit}' "$grid_dir/stdout.txt")
 if [ -z "$mantle_row" ]; then
   echo "FAIL: no mantle rows (k=0.50000) found in grid dump" >&2
   exit 1
 fi
 
-mantle_ok=$(echo "$mantle_row" | awk '$14 == "1.40000" && $16 == "0.70000" && $17 == "0.35000" {found=1} END {exit !found}')
-if [ -z "$mantle_ok" ]; then
-  echo "FAIL: mantle rows do not have correct ax,ay,az values (1.40000 0.70000 0.35000)" >&2
-  echo "$mantle_row" >&2
+# Extract and verify the specific fields
+mantle_ax=$(echo "$mantle_row" | awk '{print $14}')
+mantle_ay=$(echo "$mantle_row" | awk '{print $16}')
+mantle_az=$(echo "$mantle_row" | awk '{print $17}')
+if [ "$mantle_ax" != "1.40000" ] || [ "$mantle_ay" != "0.70000" ] || [ "$mantle_az" != "0.35000" ]; then
+  echo "FAIL: mantle row does not have correct ax,ay,az values (expected 1.40000 0.70000 0.35000, got $mantle_ax $mantle_ay $mantle_az)" >&2
   exit 1
 fi
 
@@ -191,8 +197,8 @@ echo "Testing default layout grid dump..."
 grid_dir_default="$work/grid-dump-default"
 EXTRA_ARGS="--dump-grid" TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$grid_dir_default" 0 "$args_5_lopnor_15" || true
 
-# Check that default isotropic grid dump has 15 fields per row
-default_field_count=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF; exit}' "$grid_dir_default/stdout.txt")
+# Check that default isotropic grid dump has 15 fields per row (skip rows with leading space = ***)
+default_field_count=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==15 {print NF; exit}' "$grid_dir_default/stdout.txt")
 if [ "$default_field_count" -ne 15 ]; then
   echo "FAIL: default grid rows have $default_field_count fields, expected 15" >&2
   exit 1

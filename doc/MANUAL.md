@@ -43,6 +43,57 @@ Radiative3D models energy propagation through both deterministic and statistical
   simulation parameters so the run can be repeated. Event-report ordering is
   not guaranteed when multiple workers are active.
 
+#### Heterogeneity Modes
+
+Radiative3D supports two heterogeneity parameterization modes: **isotropic** (five values per layer) and **anisotropic** (seven values per layer).
+
+##### Isotropic Mode (Five-value layouts)
+
+Isotropic heterogeneity is specified using five parameters per region:
+
+    (nu, eps, a, kappa, Q)
+
+where:
+- **nu** = Poisson correlation length ([0,1]; typically 0.7-0.9)
+- **eps** = Correlation length anisotropy ratio ([0,1]; typically 0.01-0.1)
+- **a** = Horizontal correlation scale length in km (typically 0.1-1.0 km)
+- **kappa** = Vertical-to-horizontal correlation length ratio ([0,1]; typically 0.3-0.8)
+- **Q** = Seismic quality factor (typically 50-2000)
+
+The horizontal correlation scale length is denoted `a` in output grids (column header: `a`).
+
+##### Anisotropic Mode (Seven-value layouts)
+
+Anisotropic heterogeneity is specified using seven parameters per region:
+
+    (nu, eps, ax, ay, az, kappa, Q)
+
+where:
+- **nu** = Poisson correlation length ([0,1])
+- **eps** = Correlation length anisotropy ratio ([0,1])
+- **ax** = East-west correlation scale length in km (fabric frame)
+- **ay** = North-south correlation scale length in km (fabric frame)
+- **az** = Vertical correlation scale length in km (fabric frame)
+- **kappa** = Vertical-to-horizontal correlation length ratio ([0,1]; deprecated but preserved for API compatibility)
+- **Q** = Seismic quality factor
+
+In anisotropic mode, correlation scale lengths are specified in the **fabric frame** with axes:
+- **x** = East (range)
+- **y** = North (azimuth)
+- **z** = Up (vertical)
+
+Grid dumps for anisotropic models output the additional columns `ay` and `az` following the `a` column.
+
+##### Layout Compatibility
+
+Model layouts (number of arguments) must be compatible with the selected model variant:
+
+| Model | 5-value | 7-value |
+|-------|---------|---------|
+| Lop Nor Baseline | 15 args (3 regions) | 21 args (3 regions) |
+| Lop Nor Moho | 20 args (4 regions) | 28 args (4 regions) |
+| Crust Pinch | 25 args (5 regions) | 35 args (5 regions) |
+
 ### Multithreaded performance benchmark
 
 The simulation-only Lop Nor benchmark compares a serial reference run, an

@@ -50,6 +50,14 @@ SCAT5=0.8,0.01,0.20,0.5,900   # Scat Args in mantle layer
                               # (Note: Q's specified are Q_s values.
                               # Q_p is computed from assumption that
                               # Q_kappa is infinite.)
+# For anisotropic heterogeneity (seven-value layouts, 35 total):
+#SCAT1=0.8,0.01,0.20,0.20,0.2,0.2,200   # Seven-value: (nu,eps,ax,ay,az,k,Q) in sedi's
+#SCAT2=0.8,0.01,0.20,0.20,0.3,0.3,1500  # Seven-value in crust
+#SCAT3=0.8,0.01,0.20,0.20,0.3,0.3,1500  # Seven-value in crust, pinched region
+#SCAT4=0.8,0.01,0.20,0.20,0.4,0.4,1500  # Seven-value in moho
+#SCAT5=0.8,0.01,0.20,0.20,0.5,0.5,900   # Seven-value in mantle layer
+#COMPARGS=$SCAT1,$SCAT2,$SCAT3,$SCAT4,$SCAT5,$LAYERS,$PINCH  # Total: 35 values (7*5 regions)
+
 LAYERS=2.0,30.0,5.0           # SediThick,CrustThick,MohoThick
 PINCH=.3666667,.4736842,1,1   # PinchFrac,DepthFrac,SediFrac,MohoFrac
 

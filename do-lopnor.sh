@@ -60,6 +60,16 @@ SCAT3=0.8,0.01,0.7,0.5,300    # Scat Args (nu,eps,a,kappa) and Q in mantle
                               # Q_kappa is infinite.)
 # To enable Moho structure, uncomment the following:
 #SCAT3=$SCAT3,0.8,0.02,0.5,0.5,2000  # Scat Args in transition layers
+#
+# For anisotropic heterogeneity (seven-value layouts), use:
+#SCAT1=0.8,0.01,0.5,0.5,0.2,0.2,50   # Seven-value: (nu,eps,ax,ay,az,k,Q) in sedi's
+#SCAT2=0.8,0.01,0.5,0.5,0.3,0.3,1000 # Seven-value in crust
+#SCAT3=0.8,0.01,0.7,0.7,0.5,0.5,300  # Seven-value in mantle
+# For 21-value Baseline mode (3 regions, anisotropic):
+#SCAT1=0.8,0.01,0.5,0.5,0.2,0.2,50,$SCAT2,$SCAT3 # Total: 21 values
+# For 28-value Moho mode (4 regions, anisotropic):
+#SCAT1=0.8,0.01,0.5,0.5,0.2,0.2,50,$SCAT2,$SCAT3,0.8,0.02,0.5,0.5,0.5,0.5,2000  # Total: 28 values
+
 
 COMPARGS=$SCAT1,$SCAT2,$SCAT3
 
