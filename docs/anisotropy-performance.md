@@ -98,6 +98,26 @@ general (GENERAL) samplers:
 | S | 89 | 45 | 3.019 | 13.619 |
 | S | 89 | 90 | 3.15733 | 14.1717 |
 
+### Comparison against the spec's prototype table
+
+The design spec ("Axisymmetric sampler") gives a prototype measurement at
+fine degree 7, Lop Nor-like crust, kappa 0.5, covering P at 0-89 degrees
+incidence and S at 30 and 89 degrees with chi = 0, 45, 90 degrees:
+
+| `ah, az` (km) | General sampler (spec) | Axisymmetric sampler (spec) |
+|---|---:|---:|
+| 2, 0.5 | 4.5-9.1 | 1.5-1.9 |
+| 5, 0.5 | 13-53 | 2.7-5.1 |
+
+The measured ranges above (table rows for theta in {30, 89}, every chi) are,
+for comparison, AXI 1.31-1.71 / GENERAL 4.41-9.23 at (2, 0.5), and AXI
+1.99-4.60 / GENERAL 13.6-53.7 at (5, 0.5). Both samplers' measured draw
+counts agree with the spec's prototype table to within the expected
+run-to-run variation (different direction sets, random seeds, and a
+degree-6 rather than degree-7 fine tessellation here): AXI 1.3-1.7 against
+the spec's 1.5-1.9, and 2.0-4.6 against 2.7-5.1; GENERAL 4.4-9.2 against
+4.5-9.1, and 13.6-53.7 against 13-53.
+
 ## Measurement gate verdict
 
 **FAILED.** Every axisymmetric row in the benchmark table exceeds the 2×
@@ -108,7 +128,14 @@ Per the spec's measurement gate, the follow-up for a `GATE` row depends on
 which sampler is involved. Neither is implemented here:
 
 - Axisymmetric rows: revisit the axisymmetric sampler's cell and bin
-  resolution within its memory budget.
+  resolution within its memory budget. The diagnosis below finds the
+  axisymmetric gate failures are actually dominated by per-scatterer
+  `AxiProposal` construction cost, not sampling/bin-resolution cost, so
+  the more direct remedy is parallelizing or restructuring that
+  construction across scatterers (the spec's own suggested remedy, "if
+  that is material for a model with many axisymmetric layers, compute
+  them in parallel across scatterers"); that is a recommended follow-up,
+  not implemented in this fix pass.
 - The lopnor ε = 0.05 triaxial r = 10 row: consider extending
   incidence-tailored proposals to triaxial P waves, designed separately.
 
@@ -140,3 +167,44 @@ time (iso: 21.947 of 23.01 s; axi r=2: 108.125 of 109.68 s; tri r=2: 26.467
 of 27.71 s) — roughly 95-98%. This is consistent with the flat-in-r pattern
 above and suggests that reducing construction cost may matter more than
 reducing bin resolution for closing the axisymmetric gate.
+
+### Measured per-scatterer construction cost
+
+To measure the per-scatterer cost directly rather than infer it, the same
+zero-phonon lopnor axi r=2 ε=0.01 run (degree 9) was repeated and its
+scatterer dump inspected: it builds 20 axisymmetric (`AXI`) scatterers out
+of 21 total. Timed against the zero-phonon isotropic lopnor run on the same
+host:
+
+| Run | User+sys seconds (zero phonons, degree 9) |
+|---|---:|
+| iso | 21.70 |
+| axi r=2 | 106.11 |
+
+That is (106.11 - 21.70) / 20 ≈ **4.22 seconds per axisymmetric scatterer**
+for `AxiProposal` construction plus report-statistics integration combined,
+at degree 9. The spec's own estimate was "roughly 1 s per axisymmetric
+scatterer"; the measured cost here is about 4x that (consistent with the
+review's independent measurement of about 3.8 s/scatterer for `AxiProposal`
+alone plus about 0.3 s for report statistics, measured at degree 6 -- this
+construction cost does not depend on `--toa-degree`, since the bound-table
+build always uses a fixed degree-6 (or lower) set of representative
+directions regardless of the run's own take-off-angle degree). This
+confirms, with a direct per-scatterer measurement rather than an inference
+from the flat-in-r pattern, that per-scatterer construction cost -- not
+bin/cell resolution or sampling cost -- is what the axisymmetric gate
+failures above come from.
+
+### Status: axisymmetric construction-cost remedy not implemented
+
+The spec names the remedy for this cost directly: "if that is material for
+a model with many axisymmetric layers, compute them in parallel across
+scatterers." That parallelization (or an equivalent restructuring of the
+bound-table build, e.g. hoisting the per-representative invariants noted in
+the final review) is a recommended follow-up for closing the axisymmetric
+measurement gate. It is not implemented in this fix pass, which is scoped
+to correctness and documentation findings only; the axisymmetric sampler's
+*results* are unaffected and remain exact (see the sampler-correctness
+checks in `tests/anisotropy_tests.cpp`) -- only its one-time, per-scatterer
+model-build cost is unoptimized.
+

@@ -117,9 +117,13 @@ reserves one; the explicit 12-worker run was slightly faster in this sample.
 
   If specified, use the provided mean free path values for scattering model-wide, despite what the calculated mean free paths would be from the otherwise specified heterogeneity parameters.  Scattering shapes (deflection profiles) are unaffected by this argument.
 
+  For an anisotropic (axisymmetric or triaxial) region, phonons still draw path lengths directly from the override mean free path, with no null collisions; at each event the sampler redraws a proposal (conversion type and take-off angle) until one is accepted, so the deflection pattern still follows the region's direction- and polarization-dependent anisotropic rates, not a uniform distribution. Combining <tt>--overridemfp</tt> with an anisotropic region whose <tt>eps = 0</tt> fails at model-construction time with an explicit error (every scattering probability in such a region is identically zero, so the redraw-until-accepted loop above would otherwise either divide zero by zero or spin forever); use a positive <tt>eps</tt>, or an isotropic region, instead.
+
 * <tt>--nodeflect</tt>
 
   If specified, scattering deflections are "squashed," meaning that while scattering events still occur, they do not result in any deflection or other modifications (raytype or polarization changes) to the phonon's ray trajectory.  This is commonly used, sometimes in concert with <tt>--overridemfp</tt> for producing videos (which plot scattering events), to easily visualize "clean" (i.e. no scattering) wavefront propagation. Or in other words, this option changes scattering events into mere "checkpoint" events used to illustrate evolving wavefronts.
+
+  For an anisotropic region, delta tracking (null-collision thinning) still runs as normal, so the rate of (non-deflecting) scattering events still reflects the region's direction- and polarization-dependent anisotropic rates; only the deflection itself is suppressed. With both <tt>--overridemfp</tt> and <tt>--nodeflect</tt> given together, an anisotropic region collapses to the same single dummy isotropic scatterer it would without anisotropy, as before.
 
 ##### _Event args:_
 
@@ -242,11 +246,11 @@ Radiative3D auto-detects the heterogeneity mode of a region from its scale lengt
 - **axisymmetric** -- <tt>ax == ay != az</tt> (i.e., symmetric about the vertical axis, but distinct from horizontal). Scattering is sampled from the axisymmetric, incidence-tailored sampler.
 - **general (triaxial)** -- any other combination of distinct <tt>ax, ay, az</tt>. Scattering is sampled from the general anisotropic sampler.
 
-All three scale lengths must be strictly positive.
+All three scale lengths must be strictly positive. (This is a behavior change for the five-value layout: a region specified with <tt>a &lt;= 0</tt>, previously accepted, now fails construction with the "must be positive" message above. Scripts relying on the old behavior should use a small <tt>eps</tt> instead of a non-positive <tt>a</tt> -- an <tt>eps = 0</tt> region scatters at zero rate, same as before, without needing a workaround scale length.)
 
 ##### _Seven-value (anisotropic) model-args layouts:_
 
-Each of the included example models (<tt>user.cpp</tt>) can alternatively be given seven values per region, <tt>nu, eps, ax, ay, az, kappa, Q</tt>, in place of the usual five, <tt>nu, eps, a, kappa, Q</tt>, to specify per-axis heterogeneity scale lengths. Every region of a given model invocation uses the same layout width (all five-value, or all seven-value); the total argument count selects both the model variant and the layout width:
+Only three of the included example models accept the seven-value layout: Lop Nor Baseline, Lop Nor Moho, and Crust Pinch. Every other compiled-in model (Upthrust, Halfspace, SphereEarth, ToySphere, Lop Nor Moho2, and ScatParamsStudy) remains isotropic-only and still takes only the five-value layout, though hand-coded C++ models built directly against the <tt>Elastic::HetSpec</tt>/<tt>HSnexyzk</tt> API can still construct anisotropic specs. For the three models that do accept it, the seven-value layout gives <tt>nu, eps, ax, ay, az, kappa, Q</tt> per region, in place of the usual five, <tt>nu, eps, a, kappa, Q</tt>, to specify per-axis heterogeneity scale lengths. Every region of a given model invocation uses the same layout width (all five-value, or all seven-value); the total argument count selects both the model variant and the layout width:
 
 | Model | Regions | Five-value count | Seven-value count |
 |-------|--------:|------------------:|--------------------:|
@@ -256,7 +260,7 @@ Each of the included example models (<tt>user.cpp</tt>) can alternatively be giv
 | Crust Pinch + layer thicknesses (<tt>SediThick, CrustThick, MohoThick</tt>) | 5 | 28 | 38 |
 | Crust Pinch + layer thicknesses + pinch fractions (<tt>PinchFrac, DepthFrac, SediFrac, MohoFrac</tt>) | 5 | 32 | 42 |
 
-A seven-value layout with <tt>ax = ay = az = a</tt> for every region is isotropic and produces output byte-identical to the corresponding five-value layout. Grid dumps (<tt>--dump-grid</tt>) for a model containing any non-isotropic region add two extra columns, <tt>ay</tt> and <tt>az</tt>, following the existing <tt>a</tt> column (which, for an anisotropic region, holds <tt>ax</tt>).
+A seven-value layout with <tt>ax = ay = az = a</tt> for every region is isotropic and produces output byte-identical to the corresponding five-value layout. Grid dumps (<tt>--dump-grid</tt>) for a model containing any non-isotropic region add two extra columns, <tt>ay</tt> and <tt>az</tt>, following <tt>kappa</tt> (every row, including <tt>***</tt> missing-data rows, gets both columns, so the column count stays consistent for downstream tools such as Octave's <tt>load</tt>).
 
 ##### _Scatterer dump:_
 
@@ -275,6 +279,10 @@ For an anisotropic row, the leading <tt>MFP (P)</tt>, <tt>MFP (S)</tt>, <tt>DM (
 ##### _Validity limits:_
 
 The Born/Bourret scattering approximation that Radiative3D's transport theory relies on requires <tt>k^2 * a_max^2 * eps^2 &lt;&lt; 1</tt>, where <tt>k</tt> is the background wavenumber and <tt>a_max</tt> is the largest of a region's scale lengths. Model parameters should be chosen so that this quantity stays well below one. Additionally, Margerin (2006) cautions that for extremely flat scatterers (<tt>az -&gt; 0</tt> with the horizontal scale lengths remaining large), the medium behaves like fine layering, a regime in which radiative transport theory itself breaks down; such parameter choices should be avoided.
+
+Reported and simulated anisotropic rates (the scatterer-dump directional mean free paths, and the rates the simulation actually realizes) both use an equal-weight average over the run's icosahedral take-off-angle set -- the same convention <tt>ComputeMFPs()</tt> already uses for isotropic regions, where a fixed-angle average introduces no bias because the medium looks the same from every direction. For an anisotropic region this is no longer bias-free: the icosahedral node density is non-uniform and does not tend to a uniform limit as the degree increases, so a direction- and polarization-dependent quadrature bias of up to several percent persists at every degree. For example, for a <tt>(2, 2, 0.5)</tt> km Lop Nor-like crust, the horizontal-incidence, horizontally-polarized (SH) S mean free path converges (confirmed at <tt>--toa-degree</tt> 6, 7, and 8) to about 398 km under this quadrature, against an exact numerical integral of about 375 km -- roughly 6%, which is a sizeable fraction of the anisotropy signal at that aspect ratio. This does not violate exactness: the sampler realizes exactly the rate the report prints, so simulated and reported rates always agree with each other; it is a property of the fixed take-off-angle discretization, not a defect in the sampler. A future area-weighted take-off-angle quadrature, applied consistently to both the isotropic and anisotropic paths, is a possible follow-up; it has not been implemented.
+
+An axisymmetric region's proposal tables (built once per distinct axisymmetric <tt>Scatterer</tt>, not per phonon) cost on the order of several seconds of single-threaded construction time each (about 4 seconds measured; see <tt>docs/anisotropy-performance.md</tt> for the measurement), independent of <tt>--toa-degree</tt>. For a model with several axisymmetric regions -- a Lop Nor run with every layer axisymmetric, for example -- this construction cost dominates model-build time and can add on the order of a minute to startup. This is a one-time cost at model build, not a per-phonon cost, and does not affect simulated run time. Parallelizing or restructuring this construction across scatterers is a recommended follow-up, not implemented here.
 
 Radiative3D currently supports two distinct modeling and meshing approaches: stacked layers of spatially uniform elastic properties, or a warped cartesian grid (WCG) of nodes in which material properties vary linearly based on a tetrahedral tessellation of the space using the node locations as the corners of the tetrahedral model cells.  The former approach is more akin to "1-D" models, and the latter approach fully utilizes the 3-D modeling capabilities of Radiative3D.
 
