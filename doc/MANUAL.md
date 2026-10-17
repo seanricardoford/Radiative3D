@@ -43,57 +43,6 @@ Radiative3D models energy propagation through both deterministic and statistical
   simulation parameters so the run can be repeated. Event-report ordering is
   not guaranteed when multiple workers are active.
 
-#### Heterogeneity Modes
-
-Radiative3D supports two heterogeneity parameterization modes: **isotropic** (five values per layer) and **anisotropic** (seven values per layer).
-
-##### Isotropic Mode (Five-value layouts)
-
-Isotropic heterogeneity is specified using five parameters per region:
-
-    (nu, eps, a, kappa, Q)
-
-where:
-- **nu** = Poisson correlation length ([0,1]; typically 0.7-0.9)
-- **eps** = Correlation length anisotropy ratio ([0,1]; typically 0.01-0.1)
-- **a** = Horizontal correlation scale length in km (typically 0.1-1.0 km)
-- **kappa** = Vertical-to-horizontal correlation length ratio ([0,1]; typically 0.3-0.8)
-- **Q** = Seismic quality factor (typically 50-2000)
-
-The horizontal correlation scale length is denoted `a` in output grids (column header: `a`).
-
-##### Anisotropic Mode (Seven-value layouts)
-
-Anisotropic heterogeneity is specified using seven parameters per region:
-
-    (nu, eps, ax, ay, az, kappa, Q)
-
-where:
-- **nu** = Poisson correlation length ([0,1])
-- **eps** = Correlation length anisotropy ratio ([0,1])
-- **ax** = East-west correlation scale length in km (fabric frame)
-- **ay** = North-south correlation scale length in km (fabric frame)
-- **az** = Vertical correlation scale length in km (fabric frame)
-- **kappa** = Vertical-to-horizontal correlation length ratio ([0,1]; deprecated but preserved for API compatibility)
-- **Q** = Seismic quality factor
-
-In anisotropic mode, correlation scale lengths are specified in the **fabric frame** with axes:
-- **x** = East (range)
-- **y** = North (azimuth)
-- **z** = Up (vertical)
-
-Grid dumps for anisotropic models output the additional columns `ay` and `az` following the `a` column.
-
-##### Layout Compatibility
-
-Model layouts (number of arguments) must be compatible with the selected model variant:
-
-| Model | 5-value | 7-value |
-|-------|---------|---------|
-| Lop Nor Baseline | 15 args (3 regions) | 21 args (3 regions) |
-| Lop Nor Moho | 20 args (4 regions) | 28 args (4 regions) |
-| Crust Pinch | 25 args (5 regions) | 35 args (5 regions) |
-
 ### Multithreaded performance benchmark
 
 The simulation-only Lop Nor benchmark compares a serial reference run, an
@@ -274,6 +223,44 @@ reserves one; the explicit 12-worker run was slightly faster in this sample.
 #### Earth models
 
 Earth models are constructed as a mesh of nodal locations at which known or hypothesized material properties are specified. Based on these nodal locations, Radiative3D divides space into a set of model cells inside which material properties are interpolated based on the values specified at the nodes.  The material properties specified include the elastic properties of _Vp_, _Vs_, _density_, and _Q_, and four additional properties defining the [[heterogeneity spectrum]] of the material: _nu_, _epsilon_, _a_, and _kappa_.
+
+##### _Heterogeneity parameters and modes:_
+
+Each region's heterogeneity spectrum (a von Karman autocorrelation function, following Sato and Fehler) is given by:
+
+- **nu** -- the coupling between the fractional velocity and density perturbations (Sato and Fehler's Eq. 4.48).
+- **eps** -- the RMS fractional velocity perturbation of the heterogeneity.
+- **a** (or, anisotropically, **ax**, **ay**, **az**) -- the correlation (scale) length(s) of the heterogeneity, in the model's chosen length unit.
+- **kappa** -- the von Karman parameter (Hurst exponent) controlling the spectrum's high-wavenumber falloff.
+- **Q** -- the intrinsic (thermal) attenuation quality factor for the region.
+
+Scale lengths may be given either as a single isotropic value <tt>a</tt>, or as three separate values <tt>ax, ay, az</tt> along the region's **fabric frame**, an orthogonal triad of local East (<tt>x</tt>), local North (<tt>y</tt>), and local Up (<tt>z</tt>) directions at the scattering point. In flat and flattened coordinate mappings the fabric frame coincides everywhere with the model's internal <tt>+x, +y, +z</tt> axes. In curved mappings, the fabric frame instead follows the local vertical, so that horizontally-stretched heterogeneity remains horizontal (rather than tilting with the internal axes) as it is carried across the curvature of the Earth.
+
+Radiative3D auto-detects the heterogeneity mode of a region from its scale lengths, comparing <tt>ax</tt>, <tt>ay</tt>, and <tt>az</tt> exactly:
+
+- **isotropic** -- <tt>ax == ay == az</tt>. Scattering uses the same code path and random-draw sequence as before anisotropic scale lengths were introduced.
+- **axisymmetric** -- <tt>ax == ay != az</tt> (i.e., symmetric about the vertical axis, but distinct from horizontal). Scattering is sampled from the axisymmetric, incidence-tailored sampler.
+- **general (triaxial)** -- any other combination of distinct <tt>ax, ay, az</tt>. Scattering is sampled from the general anisotropic sampler.
+
+All three scale lengths must be strictly positive.
+
+##### _Seven-value (anisotropic) model-args layouts:_
+
+Each of the included example models (<tt>user.cpp</tt>) can alternatively be given seven values per region, <tt>nu, eps, ax, ay, az, kappa, Q</tt>, in place of the usual five, <tt>nu, eps, a, kappa, Q</tt>, to specify per-axis heterogeneity scale lengths. Every region of a given model invocation uses the same layout width (all five-value, or all seven-value); the total argument count selects both the model variant and the layout width:
+
+| Model | Regions | Five-value count | Seven-value count |
+|-------|--------:|------------------:|--------------------:|
+| Lop Nor Baseline | 3 | 15 | 21 |
+| Lop Nor Moho | 4 | 20 | 28 |
+| Crust Pinch | 5 | 25 | 35 |
+| Crust Pinch + layer thicknesses (<tt>SediThick, CrustThick, MohoThick</tt>) | 5 | 28 | 38 |
+| Crust Pinch + layer thicknesses + pinch fractions (<tt>PinchFrac, DepthFrac, SediFrac, MohoFrac</tt>) | 5 | 32 | 42 |
+
+A seven-value layout with <tt>ax = ay = az = a</tt> for every region is isotropic and produces output byte-identical to the corresponding five-value layout. Grid dumps (<tt>--dump-grid</tt>) for a model containing any non-isotropic region add two extra columns, <tt>ay</tt> and <tt>az</tt>, following the existing <tt>a</tt> column (which, for an anisotropic region, holds <tt>ax</tt>).
+
+##### _Validity limits:_
+
+The Born/Bourret scattering approximation that Radiative3D's transport theory relies on requires <tt>k^2 * a_max^2 * eps^2 &lt;&lt; 1</tt>, where <tt>k</tt> is the background wavenumber and <tt>a_max</tt> is the largest of a region's scale lengths. Model parameters should be chosen so that this quantity stays well below one. Additionally, Margerin (2006) cautions that for extremely flat scatterers (<tt>az -&gt; 0</tt> with the horizontal scale lengths remaining large), the medium behaves like fine layering, a regime in which radiative transport theory itself breaks down; such parameter choices should be avoided.
 
 Radiative3D currently supports two distinct modeling and meshing approaches: stacked layers of spatially uniform elastic properties, or a warped cartesian grid (WCG) of nodes in which material properties vary linearly based on a tetrahedral tessellation of the space using the node locations as the corners of the tetrahedral model cells.  The former approach is more akin to "1-D" models, and the latter approach fully utilizes the 3-D modeling capabilities of Radiative3D.
 

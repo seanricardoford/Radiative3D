@@ -202,6 +202,11 @@ public:
     return (mNextData == GN_NLAY);  // whether this node sits on a
   }                                 // first-order discontinuty.
 
+  bool HasData() const {            // Return true/false as to whether any
+    return (mNextData != GN_ABOVE); // attributes have been set for this
+  }                                 // node. (Same predicate Data() uses to
+                                    // decide whether to throw.)
+
 
   // :::::::::::::::::::::::::::::::::::::::::::
   // ::: Data-Dump Methods  (GridNode Class) :::

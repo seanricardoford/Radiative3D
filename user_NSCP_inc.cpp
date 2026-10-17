@@ -91,17 +91,17 @@ void CrustPinchWCG(Grid & gr, const std::vector<Real> & args) {
 
   case 42:  // 5 x neyxyzakq + layer thicks + pinch fractions
             //
-    PinchFrac = args.at(35);
-    DepthFrac = args.at(36);
-    SediFrac  = args.at(37);
-    MohoFrac  = args.at(38);
+    PinchFrac = args.at(38);
+    DepthFrac = args.at(39);
+    SediFrac  = args.at(40);
+    MohoFrac  = args.at(41);
     /* FALL THROUGH  - no break; */
 
   case 38:  // 5 x neyxyzakq + layer thicknesses
             //
-    SediThick  = args.at(32);
-    CrustThick = args.at(33);
-    MohoThick  = args.at(34);
+    SediThick  = args.at(35);
+    CrustThick = args.at(36);
+    MohoThick  = args.at(37);
     /* FALL THROUGH  - no break; */
 
   case 35:  // 5 x neyxyzakq

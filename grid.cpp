@@ -396,27 +396,20 @@ void Grid::DumpGridToAscii() const {
       for (Index i=0; i<mNi && !has_anisotropy; i++) {
         const GridNode & node = Node(i,j,k);
 
-        // Try to access ABOVE data; if it exists and is anisotropic, flag it
-        // Data() will raise if no data was set; catch that and skip the node
-        try {
-          if (!node.Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
-            has_anisotropy = true;
-            break;
-          }
-        } catch (...) {
-          // No data set for ABOVE, continue to next node
-          continue;
+        // Skip nodes with no attributes set (same predicate OutputAsAscii
+        // uses to decide whether to print "***" placeholder rows).
+        if (!node.HasData()) {continue;}
+
+        if (!node.Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
+          has_anisotropy = true;
+          break;
         }
 
         // For discontinuous nodes, also check BELOW
         if (node.IsDiscontinuous()) {
-          try {
-            if (!node.Data(GridNode::GN_BELOW).getHS().IsIsotropic()) {
-              has_anisotropy = true;
-              break;
-            }
-          } catch (...) {
-            // No data set for BELOW, continue
+          if (!node.Data(GridNode::GN_BELOW).getHS().IsIsotropic()) {
+            has_anisotropy = true;
+            break;
           }
         }
       }

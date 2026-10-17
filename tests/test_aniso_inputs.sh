@@ -63,8 +63,7 @@ if ! compare_runs "$dir_5" "$dir_7" noargs; then
 fi
 echo "  lopnor 20-value vs 28-value: PASS"
 
-# Crust pinch: 25-value vs 35-value only
-# (28→38 and 32→42 require matching specific thickness/fraction defaults that are complex)
+# Crust pinch: 25-value vs 35-value
 args_5_cp_25="0.8,0.01,0.20,0.2,200,0.8,0.01,0.20,0.3,1500,0.8,0.01,0.20,0.3,1500,0.8,0.01,0.20,0.4,1500,0.8,0.01,0.20,0.5,900"
 args_7_cp_35="0.8,0.01,0.20,0.20,0.20,0.2,200,0.8,0.01,0.20,0.20,0.20,0.3,1500,0.8,0.01,0.20,0.20,0.20,0.3,1500,0.8,0.01,0.20,0.20,0.20,0.4,1500,0.8,0.01,0.20,0.20,0.20,0.5,900"
 
@@ -78,6 +77,36 @@ if ! compare_runs "$dir_5" "$dir_7" noargs; then
   exit 1
 fi
 echo "  crustpinch 25-value vs 35-value: PASS"
+
+# Crust pinch: 28-value vs 38-value (adds SediThick, CrustThick, MohoThick)
+args_5_cp_28="${args_5_cp_25},2.0,30.0,10.0"
+args_7_cp_38="${args_7_cp_35},2.0,30.0,10.0"
+
+dir_5="$work/cp-28"
+dir_7="$work/cp-38"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" crustpinch 1 "$dir_5" 5000 "$args_5_cp_28"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" crustpinch 1 "$dir_7" 5000 "$args_7_cp_38"
+
+if ! compare_runs "$dir_5" "$dir_7" noargs; then
+  echo "FAIL: 5-value and 7-value (isotropic) crustpinch 28→38 output differ" >&2
+  exit 1
+fi
+echo "  crustpinch 28-value vs 38-value: PASS"
+
+# Crust pinch: 32-value vs 42-value (adds PinchFrac, DepthFrac, SediFrac, MohoFrac)
+args_5_cp_32="${args_5_cp_28},0.70,0.50,1.0,1.0"
+args_7_cp_42="${args_7_cp_38},0.70,0.50,1.0,1.0"
+
+dir_5="$work/cp-32"
+dir_7="$work/cp-42"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" crustpinch 1 "$dir_5" 5000 "$args_5_cp_32"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" crustpinch 1 "$dir_7" 5000 "$args_7_cp_42"
+
+if ! compare_runs "$dir_5" "$dir_7" noargs; then
+  echo "FAIL: 5-value and 7-value (isotropic) crustpinch 32→42 output differ" >&2
+  exit 1
+fi
+echo "  crustpinch 32-value vs 42-value: PASS"
 
 ##
 ## Test: dispatch selects correct model for count
