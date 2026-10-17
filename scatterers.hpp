@@ -12,8 +12,10 @@
 #ifndef SCATTERERS_H_
 #define SCATTERERS_H_
 //
+#include <memory>           /* std::unique_ptr */
 #include "sources.hpp"
 #include "scatparams.hpp"
+#include "aniso_axi.hpp"    /* AxiProposal: SAMPLER_AXISYMMETRIC tables */
 #include "phonons.hpp"      /* Needed for the Phonon member of
                                Scatterer::AnisoAttempt. */
 
@@ -209,6 +211,20 @@ protected:
                                 // 'par' and the requested sampler_e
                                 // choice; see IsAnisotropic().
 
+  bool  mUseAxi;               // True when this (necessarily
+                                // mAnisotropic) Scatterer uses the
+                                // axisymmetric sampler (mpAxi) rather
+                                // than the general sampler. Set at
+                                // construction: SAMPLER_AXISYMMETRIC
+                                // forces it; SAMPLER_AUTO sets it iff
+                                // par.IsAxisymmetric(); SAMPLER_GENERAL
+                                // never sets it.
+
+  std::unique_ptr<AxiProposal> mpAxi;  // Axisymmetric-sampler proposal
+                                       // tables; built in the
+                                       // constructor iff mUseAxi, null
+                                       // otherwise.
+
   Real mReportMeanFreeP[RAY_NBT]; // Reporting-only mean free paths for
                                   // an anisotropic Scatterer: legacy
                                   // "MFP (P)"/"MFP (S)" values averaged
@@ -386,6 +402,30 @@ public:
                       // is parallel to the projection of 's1' normal
                       // to 'dir'; returns 0 if that projection is
                       // ~zero (e.g. 's1' parallel to 'dir').
+
+  static Real CanonicalPPolarization(const S2::ThetaPhi & dir,
+                                     const R3::XYZ & up);
+                      // Returns RotationForS1(dir, (up.d)d - up), where
+                      // d=dir.XYZ(): the polarization-rotation angle
+                      // that puts the local vertical 'up' into the
+                      // (S1,S3) plane with a non-positive S1 component,
+                      // so the axisymmetric sampler's P tables (which
+                      // have no chi dimension) can assume chi==0. Used
+                      // in place of a real polarization angle for
+                      // incoming P phonons, which have none.
+
+protected:
+
+  AnisoAttempt AttemptAxisymmetricScatter(raytype intype,
+                                          const R3::XYZ & loc,
+                                          const S2::ThetaPhi & dir,
+                                          Real pol);
+                      // The SAMPLER_AXISYMMETRIC implementation of
+                      // AttemptAnisotropicScatter(); see that method's
+                      // header comment. Called from
+                      // AttemptAnisotropicScatter() when mUseAxi.
+
+public:
 
 
   // ::::::::::::::::::::::::::::::::::::::::::

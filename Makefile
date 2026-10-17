@@ -9,8 +9,8 @@ objdir = $(build_dir)
 OUT_EXEC = main
 objects  = geom_s2.o geom_r3.o geom_r4.o probability.o sources.o scatterers.o \
            events.o phonons.o grid.o raypath.o media_cellface.o media.o \
-	   model.o rtcoef.o dataout.o scatparams.o cmdline.o user.o global.o \
-           ecs.o elastic.o main.o
+	   model.o rtcoef.o dataout.o scatparams.o aniso_axi.o cmdline.o user.o \
+           global.o ecs.o elastic.o main.o
 
 objects := $(addprefix $(objdir)/,$(objects))
 
@@ -118,7 +118,8 @@ phonons_hpp = phonons.hpp $(geom_hpp) $(raytype_hpp)
 sources_hpp = sources.hpp $(geom_hpp) $(raytype_hpp) $(probability_hpp)
 events_hpp  = events.hpp  $(sources_hpp) $(tensors_hpp)
 scatparams_hpp = scatparams.hpp $(geom_hpp) $(elastic_hpp)
-scatterers_hpp = scatterers.hpp $(sources_hpp) $(scatparams_hpp)
+aniso_axi_hpp  = aniso_axi.hpp $(scatparams_hpp) $(probability_hpp) $(geom_hpp)
+scatterers_hpp = scatterers.hpp $(sources_hpp) $(scatparams_hpp) $(aniso_axi_hpp)
 grid_hpp    = grid.hpp    $(ecs_hpp)
 raypath_hpp = raypath.hpp $(geom_hpp)
 media_cellface_hpp = media_cellface.hpp $(geom_hpp)
@@ -184,6 +185,9 @@ $(objdir)/events.o : events.cpp $(events_hpp) $(phonons_hpp) $(dataout_hpp) $(co
 	$(CPP) -c $< $(FLAGS) -o $@
 
 $(objdir)/scatparams.o : scatparams.cpp $(scatparams_hpp) $(comd)
+	$(CPP) -c $< $(FLAGS) -o $@
+
+$(objdir)/aniso_axi.o : aniso_axi.cpp $(aniso_axi_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@
 
 $(objdir)/scatterers.o : scatterers.cpp $(scatterers_hpp) $(phonons_hpp) $(comd)

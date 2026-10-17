@@ -35,8 +35,10 @@
 // that signal failure by throwing TestFailure (directly, or via the
 // CHECK()/CHECK_MSG() macros below).
 //
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <random>
@@ -53,6 +55,7 @@
 #include "sources.hpp"
 #include "phonons.hpp"
 #include "scatterers.hpp"
+#include "aniso_axi.hpp"
 #include "ecs.hpp"
 
 
@@ -416,6 +419,30 @@ static Real MeanDistanceToRealEvent(Scatterer & s, raytype in,
     total += dist;
   }
   return total / n;
+}
+
+// ::: MeanDrawsPerRealEvent(s, in, dir, pol, n) :::
+//
+//   Sums AnisoAttempt.Draws over every AttemptAnisotropicScatter() call
+//   (thinned nulls contribute 0, a drawn-but-rejected or accepted
+//   proposal contributes its own Draws) made while chasing down n real
+//   (accepted) events, and returns the mean total per real event. Used
+//   by test_axi_draws_per_event and test_axi_extreme_ratio.
+//
+static Real MeanDrawsPerRealEvent(Scatterer & s, raytype in,
+                                  const S2::ThetaPhi & dir,
+                                  const R3::XYZ & pol, int n) {
+  const Real rot = Scatterer::RotationForS1(dir, pol);
+  const R3::XYZ origin(0, 0, 0);
+  long long totalDraws = 0;
+  for (int i = 0; i < n; ++i) {
+    Scatterer::AnisoAttempt att;
+    do {
+      att = s.AttemptAnisotropicScatter(in, origin, dir, rot);
+      totalDraws += att.Draws;
+    } while (!att.IsReal);
+  }
+  return (Real) totalDraws / n;
 }
 
 // ::: CheckDistributionMatchesTarget(...) :::
@@ -833,6 +860,627 @@ TEST(report_ani_order) {
   for (std::size_t i = 0; i < mfps.size(); ++i) {
     CHECK(mfps[i] > 0.0);
   }
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
+// ****  TASK 7 TESTS: Axisymmetric sampler                          ****
+// ****                                                              ****
+//
+
+TEST(probdist_range) {
+
+  ProbDist pd(10);
+  for (Index i = 0; i < 10; i++) {
+    pd.SetRelativeProb(i, (Real)(i+1));   // weights 1..10
+  }
+  pd.GetMagnitude();   // Force differential->cumulative conversion
+                       // (GetCumulative()/GetRangeMagnitude()/
+                       // GetRandomIndexInRange() require it, same as
+                       // Scatterer::PopulateWholeProbs() does for
+                       // mPDists before AxiProposal is built).
+
+  CHECK(pd.GetCumulative(3) == 10.0);      // 1+2+3+4
+  CHECK(pd.GetRangeMagnitude(2,5) == 12.0); // 3+4+5 (indices 2,3,4)
+
+  const int n = 100000;
+  int counts[3] = {0,0,0};
+  for (int i = 0; i < n; ++i) {
+    Index idx = pd.GetRandomIndexInRange(2,5);
+    CHECK(idx >= 2 && idx < 5);
+    counts[idx-2]++;
+  }
+
+  const Real expectedFrac[3] = {3.0/12.0, 4.0/12.0, 5.0/12.0};
+  for (int i = 0; i < 3; ++i) {
+    const Real p = expectedFrac[i];
+    const Real sigma = std::sqrt(p*(1.0-p)/n);
+    const Real frac = (Real) counts[i] / n;
+    CHECK_MSG(std::fabs(frac - p) < 4.0*sigma,
+             "index " << (i+2) << ": frac=" << frac << " expected=" << p
+             << " sigma=" << sigma);
+  }
+
+}
+
+
+// ::: BuildIsoPDists(sp, toas, pdists) :::
+//
+//   Populates 'pdists' (4 ProbDist objects, GPP,GPS,GSP,GSS) the same
+//   way Scatterer::PopulateProbDists() does, and forces integration
+//   (as Scatterer::PopulateWholeProbs() does via GetMagnitude()) so the
+//   result is suitable for passing straight into an AxiProposal
+//   constructor, exactly as Scatterer does with its own mPDists.
+//
+static void BuildIsoPDists(const ScatterParams & sp,
+                           const S2::TesselSphere & toas,
+                           std::vector<ProbDist> & pdists) {
+  pdists.clear();
+  for (int c = 0; c < 4; ++c) {pdists.push_back(ProbDist((int)toas.size()));}
+  for (Index k = 0; k < toas.size(); ++k) {
+    Real gpp,gps,gsp,gss,spol;
+    sp.GSATO(toas[k], gpp,gps,gsp,gss,spol);
+    pdists[0].SetRelativeProb(k, gpp);
+    pdists[1].SetRelativeProb(k, gps);
+    pdists[2].SetRelativeProb(k, gsp);
+    pdists[3].SetRelativeProb(k, gss);
+  }
+  for (int c = 0; c < 4; ++c) {pdists[c].GetMagnitude();} // force Integrate()
+}
+
+
+// ::: RatioForAxisymmetric(sp, m, u_rel) :::
+//
+//   sp.AnisoRatio() expects 'm' expressed in the fabric (East,North,Up)
+//   frame. 'm' here is expressed in the local ray frame instead (as
+//   AxiProposal's bound construction works entirely in that frame --
+//   see aniso_axi.cpp); 'u_rel' is the local vertical Û, also in the
+//   ray frame. Since the dot product m.u_rel (= m's true fabric-Up
+//   component) and |m| are both frame-invariant, and an axisymmetric
+//   spec's denominator only depends on |m| and the vertical component
+//   (any horizontal split works, as ax==ay), reconstructing a fabric-
+//   frame stand-in with z = m.u_rel and x = the remaining horizontal
+//   magnitude gives the exact same AnisoRatio() value a real
+//   ToFabric()-based 'm' would.
+//
+static Real RatioForAxisymmetric(const ScatterParams & sp, const R3::XYZ & m,
+                                 const R3::XYZ & u_rel) {
+  const Real s = m.Dot(u_rel);
+  const Real h2 = std::max(m.MagSquared() - s*s, (Real)0.0);
+  const R3::XYZ mFabric(std::sqrt(h2), 0.0, s);
+  return sp.AnisoRatio(mFabric);
+}
+
+
+// ::: CheckAxiBoundsValid(sp, toas, thetaDegsP, thetaChiPairsS, stride) :::
+//
+//   For each u_rel direction named by 'thetaDegsP' (P incidence angles,
+//   degrees, chi implicitly 0) and 'thetaChiPairsS' (S (theta,chi)
+//   incidence pairs, degrees), and for every stride'th fine take-off
+//   angle index, checks that the exact ratio R(k)=AnisoRatio(m) never
+//   exceeds the stored bound by more than the 1e-12 relative margin
+//   test 4g calls for: R(k)*CellSum(actual cell) <= Weight*(1+1e-12),
+//   equivalently (dividing by CellSum, skipped when CellSum==0 since
+//   both sides are then exactly 0) R(k) <= AcceptanceBound(..)*(1+1e-12).
+//
+static void CheckAxiBoundsValid(const ScatterParams & sp,
+                                const S2::TesselSphere & toas,
+                                const std::vector<Real> & thetaDegsP,
+                                const std::vector<std::pair<Real,Real> > & thetaChiPairsS,
+                                unsigned stride) {
+
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, toas, pdists);
+  AxiProposal axi(sp, toas, pdists);
+
+  const Real kP = sp.GetKP();
+  const Real kS = sp.GetKS();
+  const Real kOut[2] = {kP, kS};  // conv-local 0 -> P out, 1 -> S out
+
+  // P states (intype RAY_P: conv 0=GPP out P, conv1=GPS out S):
+  for (std::size_t ti = 0; ti < thetaDegsP.size(); ++ti) {
+    const Real theta = thetaDegsP[ti] * Geometry::DtoR;
+    const R3::XYZ u_rel(-std::sin(theta), 0.0, std::cos(theta));
+    for (Index k = 0; k < toas.size(); k += stride) {
+      const Index cell = axi.CellOf(k);
+      const R3::XYZ t = toas[k].XYZ();
+      for (int li = 0; li < 2; ++li) {
+        const int conv = li;  // GPP=0, GPS=1
+        const R3::XYZ m = t.ScaledBy(kOut[li]) + R3::XYZ(0,0,-kP);
+        const Real ratio = RatioForAxisymmetric(sp, m, u_rel);
+        const Real bound = axi.AcceptanceBound(RAY_P, u_rel, conv, cell);
+        const Real cellSum = pdists[conv].GetRangeMagnitude(
+          cell*(toas.size()/axi.NumCells()), (cell+1)*(toas.size()/axi.NumCells()));
+        if (cellSum <= 0.0) continue;
+        CHECK_MSG(ratio <= bound*(1.0+1e-12),
+                 "P bound violated: theta=" << thetaDegsP[ti]
+                 << " k=" << k << " conv=" << conv
+                 << " ratio=" << ratio << " bound=" << bound);
+      }
+    }
+  }
+
+  // S states (intype RAY_S: conv 2=GSP out P, conv3=GSS out S):
+  for (std::size_t si = 0; si < thetaChiPairsS.size(); ++si) {
+    const Real theta = thetaChiPairsS[si].first  * Geometry::DtoR;
+    const Real chi   = thetaChiPairsS[si].second * Geometry::DtoR;
+    const R3::XYZ u_rel(-std::sin(theta)*std::cos(chi),
+                        std::sin(theta)*std::sin(chi),
+                        std::cos(theta));
+    for (Index k = 0; k < toas.size(); k += stride) {
+      const Index cell = axi.CellOf(k);
+      const R3::XYZ t = toas[k].XYZ();
+      for (int li = 0; li < 2; ++li) {
+        const int conv = 2 + li;  // GSP=2, GSS=3
+        const R3::XYZ m = t.ScaledBy(kOut[li]) + R3::XYZ(0,0,-kS);
+        const Real ratio = RatioForAxisymmetric(sp, m, u_rel);
+        const Real bound = axi.AcceptanceBound(RAY_S, u_rel, conv, cell);
+        const Real cellSum = pdists[conv].GetRangeMagnitude(
+          cell*(toas.size()/axi.NumCells()), (cell+1)*(toas.size()/axi.NumCells()));
+        if (cellSum <= 0.0) continue;
+        CHECK_MSG(ratio <= bound*(1.0+1e-12),
+                 "S bound violated: theta=" << thetaChiPairsS[si].first
+                 << " chi=" << thetaChiPairsS[si].second
+                 << " k=" << k << " conv=" << conv
+                 << " ratio=" << ratio << " bound=" << bound);
+      }
+    }
+  }
+
+}
+
+
+TEST(axi_bounds_valid) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+
+  struct SpecCase {Real ax,ay,az;};
+  const SpecCase specs[3] = { {2,2,0.5}, {5,5,0.5}, {0.5,0.5,2} };
+  const Real kappas[2] = {0.3, 0.5};
+  const Real freqs[2]  = {1.0, 4.0};
+
+  // P: every bin corner (0,2,...,90) plus a handful past 90 (up to
+  // 180) to exercise the z<0 fold.
+  std::vector<Real> thetaDegsP;
+  for (int b = 0; b <= AxiProposal::kThetaBins; ++b) {thetaDegsP.push_back(2.0*b);}
+  const Real extra[] = {100, 135, 150, 170, 180};
+  for (std::size_t i = 0; i < sizeof(extra)/sizeof(extra[0]); ++i) {
+    thetaDegsP.push_back(extra[i]);
+  }
+
+  // S: a 3x3 subset of (theta,chi) bin corners, repeated into all four
+  // chi quadrants via the chi value itself (0-360).
+  std::vector<std::pair<Real,Real> > thetaChiS;
+  const Real thetaCorners[3] = {0.0, 44.0, 90.0};
+  const Real chiBase[3] = {0.0, 40.0, 90.0};
+  for (int qi = 0; qi < 4; ++qi) {
+    const Real qoff = 90.0*qi;
+    for (int ti = 0; ti < 3; ++ti) {
+      for (int ci = 0; ci < 3; ++ci) {
+        Real chi = qoff + ((qi%2==0) ? chiBase[ci] : (90.0-chiBase[ci]));
+        thetaChiS.push_back(std::make_pair(thetaCorners[ti], chi));
+      }
+    }
+  }
+
+  for (int si = 0; si < 3; ++si) {
+    for (int ki = 0; ki < 2; ++ki) {
+      for (int fi = 0; fi < 2; ++fi) {
+        ScatterParams::SetFrequencyHertz(freqs[fi]);
+        ScatterParams sp(Elastic::VpVs(6.2,3.6),
+                        Elastic::HSnexyzk(0.8,0.01,specs[si].ax,
+                                          specs[si].ay,specs[si].az,
+                                          kappas[ki]));
+        CheckAxiBoundsValid(sp, toas, thetaDegsP, thetaChiS, 5);
+      }
+    }
+  }
+
+}
+
+
+
+
+TEST(axi_matches_general) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer axiScat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  Scatterer genScat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1), D(Dir(60,30));
+  struct Case {raytype in; R3::XYZ dir; R3::XYZ pol;};
+  const Case cases[] = {
+    {RAY_P, E, E}, {RAY_P, N, N}, {RAY_P, U, U}, {RAY_P, D, D},
+    {RAY_S, E, N}, {RAY_S, E, U},
+    {RAY_S, N, E}, {RAY_S, N, U},
+    {RAY_S, U, E}, {RAY_S, U, N},
+  };
+  const int n = 20000;
+  int divisor = 1;
+  for (int i = 0; i < 5-2; ++i) divisor *= 4;  // 4^(5-2)=64
+
+  std::map<std::pair<int,int>, int> countsA, countsG; // (state*8+conv, coarse)
+
+  for (std::size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+    const S2::ThetaPhi dirTP(cases[i].dir.Theta(), cases[i].dir.Phi());
+
+    const Real meanA = MeanDistanceToRealEvent(axiScat, cases[i].in, dirTP,
+                                               cases[i].pol, n);
+    const Real meanG = MeanDistanceToRealEvent(genScat, cases[i].in, dirTP,
+                                               cases[i].pol, n);
+    const Real sigA = meanA/std::sqrt((Real)n);
+    const Real sigG = meanG/std::sqrt((Real)n);
+    const Real tol = 4.0*std::sqrt(sigA*sigA+sigG*sigG);
+    CHECK_MSG(std::fabs(meanA-meanG) < tol,
+             "case " << i << ": meanA=" << meanA << " meanG=" << meanG
+             << " tol=" << tol);
+
+    const Real rot = Scatterer::RotationForS1(dirTP, cases[i].pol);
+    const R3::XYZ origin(0,0,0);
+    const int targetReal = 50000;
+    int collectedA = 0, collectedG = 0;
+    while (collectedA < targetReal || collectedG < targetReal) {
+      if (collectedA < targetReal) {
+        Scatterer::AnisoAttempt a = axiScat.AttemptAnisotropicScatter(
+          cases[i].in, origin, dirTP, rot);
+        if (a.IsReal) {
+          countsA[std::make_pair((int)i*8+a.Conv, (int)(a.Toa/divisor))]++;
+          ++collectedA;
+        }
+      }
+      if (collectedG < targetReal) {
+        Scatterer::AnisoAttempt g = genScat.AttemptAnisotropicScatter(
+          cases[i].in, origin, dirTP, rot);
+        if (g.IsReal) {
+          countsG[std::make_pair((int)i*8+g.Conv, (int)(g.Toa/divisor))]++;
+          ++collectedG;
+        }
+      }
+    }
+  }
+
+  // Two-sample chi-square test for homogeneity between the two
+  // samplers' (Conv, degree-2 cell) distributions. The two samplers
+  // collect different total real-event counts out of the same number
+  // of attempts (different acceptance rates), so the standard
+  // unequal-N two-sample statistic is used:
+  //   chi2 = sum_i (a_i*Ng - g_i*Na)^2 / (Na*Ng*(a_i+g_i))
+  Real Na = 0, Ng = 0;
+  for (std::map<std::pair<int,int>,int>::const_iterator it = countsA.begin();
+       it != countsA.end(); ++it) {Na += it->second;}
+  for (std::map<std::pair<int,int>,int>::const_iterator it = countsG.begin();
+       it != countsG.end(); ++it) {Ng += it->second;}
+
+  Real chi2 = 0; int dof = 0;
+  std::map<std::pair<int,int>,int> keys = countsA;
+  for (std::map<std::pair<int,int>,int>::const_iterator it = countsG.begin();
+       it != countsG.end(); ++it) {keys[it->first] = 0;}
+  for (std::map<std::pair<int,int>,int>::const_iterator it = keys.begin();
+       it != keys.end(); ++it) {
+    const Real a = countsA.count(it->first) ? countsA[it->first] : 0;
+    const Real g = countsG.count(it->first) ? countsG[it->first] : 0;
+    if (a+g < 20.0) continue;
+    const Real num = a*Ng - g*Na;
+    chi2 += num*num/(Na*Ng*(a+g));
+    ++dof;
+  }
+  CHECK_MSG(dof > 0, "no bins had combined count >= 20");
+  const Real chi2_per_dof = chi2/dof;
+  CHECK_MSG(chi2_per_dof < 1.5,
+           "chi2/dof too large: " << chi2_per_dof << " (dof=" << dof << ")");
+
+}
+
+
+TEST(axi_draws_per_event) {
+
+  UseTOADegree(6);
+
+  struct SpecLimits {Real ax,ay,az; Real limitP, limitS;};
+  const SpecLimits specs[2] = {
+    {2,2,0.5, 2.2, 2.6},
+    {5,5,0.5, 3.6, 6.0},
+  };
+
+  std::ofstream out("build/aniso_draws.txt");
+  out << "# spec theta chi raytype sampler mean_draws\n";
+
+  const Real pThetas[4] = {0,30,60,89};
+  const Real sThetas[2] = {30,89};
+  const Real sChis[3]   = {0,45,90};
+  const int n = 3000;
+
+  for (int si = 0; si < 2; ++si) {
+    ScatterParams sp = LopNorCrust(specs[si].ax, specs[si].ay, specs[si].az);
+    Scatterer axiScat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+    Scatterer genScat(sp, Scatterer::SAMPLER_GENERAL);
+
+    Real maxP_axi = 0, maxS_axi = 0;
+
+    for (int ti = 0; ti < 4; ++ti) {
+      const S2::ThetaPhi dir(pThetas[ti]*Geometry::DtoR, 0.0);
+      const R3::XYZ pol = dir.XYZ();
+      const Real dAxi = MeanDrawsPerRealEvent(axiScat, RAY_P, dir, pol, n);
+      const Real dGen = MeanDrawsPerRealEvent(genScat, RAY_P, dir, pol, n);
+      out << "(" << specs[si].ax << "," << specs[si].ay << "," << specs[si].az
+          << ") " << pThetas[ti] << " - P AXI " << dAxi << "\n";
+      out << "(" << specs[si].ax << "," << specs[si].ay << "," << specs[si].az
+          << ") " << pThetas[ti] << " - P GENERAL " << dGen << "\n";
+      maxP_axi = std::max(maxP_axi, dAxi);
+      CHECK_MSG(dAxi < dGen, "P theta=" << pThetas[ti] << ": axi=" << dAxi
+               << " general=" << dGen);
+    }
+
+    for (int ti = 0; ti < 2; ++ti) {
+      for (int ci = 0; ci < 3; ++ci) {
+        const S2::ThetaPhi dir(sThetas[ti]*Geometry::DtoR, 0.0);
+        const R3::OrthoAxes rotAA(dir.Theta(), dir.Phi(),
+                                  sChis[ci]*Geometry::DtoR);
+        const R3::XYZ pol = rotAA.S1();
+        const Real dAxi = MeanDrawsPerRealEvent(axiScat, RAY_S, dir, pol, n);
+        const Real dGen = MeanDrawsPerRealEvent(genScat, RAY_S, dir, pol, n);
+        out << "(" << specs[si].ax << "," << specs[si].ay << "," << specs[si].az
+            << ") " << sThetas[ti] << " " << sChis[ci] << " S AXI " << dAxi << "\n";
+        out << "(" << specs[si].ax << "," << specs[si].ay << "," << specs[si].az
+            << ") " << sThetas[ti] << " " << sChis[ci] << " S GENERAL " << dGen << "\n";
+        maxS_axi = std::max(maxS_axi, dAxi);
+        CHECK_MSG(dAxi < dGen, "S theta=" << sThetas[ti] << " chi=" << sChis[ci]
+                 << ": axi=" << dAxi << " general=" << dGen);
+      }
+    }
+
+    CHECK_MSG(maxP_axi <= specs[si].limitP,
+             "spec " << si << ": max P draws " << maxP_axi
+             << " exceeds limit " << specs[si].limitP);
+    CHECK_MSG(maxS_axi <= specs[si].limitS,
+             "spec " << si << ": max S draws " << maxS_axi
+             << " exceeds limit " << specs[si].limitS);
+  }
+
+  out.close();
+
+}
+
+
+TEST(axi_mfp_curves) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  const S2::TesselSphere dirs6(S2::TESS_ICO, 6);
+
+  std::ofstream out("build/aniso_mfp_curves.txt");
+  out << "# theta mfp_P mfp_SV mfp_SH\n";
+
+  Real mfpP0 = 0, mfpP90 = 0;
+
+  for (int theta = 0; theta <= 180; theta += 5) {
+    const S2::ThetaPhi dirTP(theta*Geometry::DtoR, 0.0);
+    const R3::XYZ dXYZ = dirTP.XYZ();
+    const R3::XYZ svPol = dirTP.ThetaHat().XYZ();
+    const R3::XYZ shPol = dirTP.PhiHat().XYZ();
+
+    const Real rateP  = scat.IntegratedRate(RAY_P, dXYZ, dXYZ, dirs6);
+    const Real rateSV = scat.IntegratedRate(RAY_S, dXYZ, svPol, dirs6);
+    const Real rateSH = scat.IntegratedRate(RAY_S, dXYZ, shPol, dirs6);
+    const Real mfpP = 1.0/rateP, mfpSV = 1.0/rateSV, mfpSH = 1.0/rateSH;
+
+    CHECK(std::isfinite(mfpP)  && mfpP  > 0.0);
+    CHECK(std::isfinite(mfpSV) && mfpSV > 0.0);
+    CHECK(std::isfinite(mfpSH) && mfpSH > 0.0);
+
+    out << theta << " " << mfpP << " " << mfpSV << " " << mfpSH << "\n";
+
+    if (theta == 0)  mfpP0  = mfpP;
+    if (theta == 90) mfpP90 = mfpP;
+  }
+  out.close();
+
+  CHECK_MSG(mfpP90 < mfpP0, "P(90)=" << mfpP90 << " should be < P(0)=" << mfpP0);
+
+}
+
+
+TEST(axi_vertical_incidence) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+
+  const S2::ThetaPhi dir(0.0, 0.0);
+  const R3::XYZ origin(0,0,0);
+
+  for (int i = 0; i < 1000; ++i) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_P, origin, dir, 0.37);
+    CHECK(std::isfinite(att.InPol));
+    if (att.IsReal) {
+      CHECK(std::isfinite(att.Rel.GetDirection().Theta()));
+      CHECK(std::isfinite(att.Rel.GetDirection().Phi()));
+    }
+  }
+  for (int i = 0; i < 1000; ++i) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_S, origin, dir, 0.37);
+    CHECK(std::isfinite(att.InPol));
+    if (att.IsReal) {
+      CHECK(std::isfinite(att.Rel.GetDirection().Theta()));
+      CHECK(std::isfinite(att.Rel.GetDirection().Phi()));
+      CHECK(std::isfinite(att.Rel.GetPolarization()));
+    }
+  }
+
+}
+
+
+TEST(axi_curved_frame) {
+
+  ECS.SetMapping(EarthCoords::RAE_CURVED);
+
+  const R3::XYZ loc(950.0, 0.0, 0.0);
+  const R3::XYZ up = ECS.GetUp(loc);
+
+  const R3::XYZ dXYZ = Dir(70, 20);
+  const S2::ThetaPhi dir(dXYZ.Theta(), dXYZ.Phi());
+
+  const Real rot = Scatterer::CanonicalPPolarization(dir, up);
+  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), rot);
+
+  const R3::XYZ d = dir.XYZ();
+  const R3::XYZ target = d.ScaledBy(up.Dot(d)) + up.ScaledBy(-1.0);
+  const R3::XYZ targetUnit = target.Unit();
+  const R3::XYZ s1 = AA.S1();
+
+  CHECK(s1.Cross(targetUnit).Mag() < 1e-12);
+  CHECK(s1.Dot(targetUnit) > 0.0);
+
+  ECS.SetMapping(EarthCoords::ENU_ORTHO);
+
+}
+
+
+TEST(axi_low_degree) {
+
+  const S2::TesselSphere & toas = UseTOADegree(2);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, toas, pdists);
+  AxiProposal axi(sp, toas, pdists);
+  CHECK_MSG(axi.NumCells() == 320, "expected 320 cells, got " << axi.NumCells());
+
+  std::vector<Real> thetaDegsP;
+  for (Real t = 0; t <= 180; t += 15) {thetaDegsP.push_back(t);}
+  std::vector<std::pair<Real,Real> > thetaChiS;
+  for (Real t = 0; t <= 90; t += 30) {
+    for (Real c = 0; c <= 90; c += 30) {
+      thetaChiS.push_back(std::make_pair(t,c));
+    }
+  }
+  CheckAxiBoundsValid(sp, toas, thetaDegsP, thetaChiS, 1);
+
+  Scatterer scat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  const S2::ThetaPhi dir(37.0*Geometry::DtoR, 11.0*Geometry::DtoR);
+  const R3::XYZ origin(0,0,0);
+  int reals = 0;
+  for (int i = 0; i < 1000 && reals < 1000; ) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_P, origin, dir, 0.0);
+    ++i;
+    if (att.IsReal) {++reals;}
+  }
+  CHECK_MSG(reals > 0, "no real events observed at low degree");
+
+}
+
+
+TEST(axi_eps_zero) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5, 0.5, 0.0);  // eps=0
+  bool threw = false;
+  Scatterer * scat = 0;
+  try {
+    scat = new Scatterer(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  } catch (...) {
+    threw = true;
+  }
+  CHECK_MSG(!threw, "construction with eps=0 must not throw");
+  const Real mfpP = scat->GetMajorantMeanFreePath(RAY_P);
+  const Real mfpS = scat->GetMajorantMeanFreePath(RAY_S);
+  CHECK(std::isinf(mfpP) && mfpP > 0.0);
+  CHECK(std::isinf(mfpS) && mfpS > 0.0);
+  delete scat;
+
+}
+
+
+TEST(axi_extreme_ratio) {
+
+  const S2::TesselSphere & toas = UseTOADegree(4);
+  ScatterParams sp = LopNorCrust(10, 10, 0.5);
+
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, toas, pdists);
+  AxiProposal axi(sp, toas, pdists);  // must not throw
+
+  std::vector<Real> thetaDegsP;
+  for (Real t = 0; t <= 180; t += 20) {thetaDegsP.push_back(t);}
+  std::vector<std::pair<Real,Real> > thetaChiS;
+  for (Real t = 0; t <= 90; t += 30) {
+    for (Real c = 0; c <= 90; c += 30) {
+      thetaChiS.push_back(std::make_pair(t,c));
+    }
+  }
+  CheckAxiBoundsValid(sp, toas, thetaDegsP, thetaChiS, 3);
+
+  Scatterer scat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  const S2::ThetaPhi dirP(60.0*Geometry::DtoR, 0.0);
+  const Real meanP = MeanDrawsPerRealEvent(scat, RAY_P, dirP, dirP.XYZ(), 500);
+  CHECK_MSG(std::isfinite(meanP) && meanP < 50.0,
+           "mean P draws/event=" << meanP);
+
+  const S2::ThetaPhi dirS(60.0*Geometry::DtoR, 0.0);
+  const R3::OrthoAxes rotAA(dirS.Theta(), dirS.Phi(), 45.0*Geometry::DtoR);
+  const Real meanS = MeanDrawsPerRealEvent(scat, RAY_S, dirS, rotAA.S1(), 500);
+  CHECK_MSG(std::isfinite(meanS) && meanS < 50.0,
+           "mean S draws/event=" << meanS);
+
+}
+
+
+TEST(isolated_axi_overridemfp) {
+
+  UseTOADegree(5);
+  Scatterer::OverrideMFP(100, 50);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer axiScat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  Scatterer genScat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const int n = 20000;
+  Real total = 0;
+  for (int i = 0; i < n; ++i) {total += axiScat.GetRandomPathLength(RAY_P);}
+  const Real mean = total/n;
+  CHECK(NearRel(mean, 100.0, 0.03));
+
+  const R3::XYZ origin(0,0,0);
+  const S2::ThetaPhi dirP(60.0*Geometry::DtoR, 30.0*Geometry::DtoR);
+  int divisor = 1;
+  for (int i = 0; i < 5-2; ++i) divisor *= 4;
+
+  std::map<int,int> countsA, countsG;
+  for (int i = 0; i < 20000; ++i) {
+    Scatterer::AnisoAttempt a =
+      axiScat.AttemptAnisotropicScatter(RAY_P, origin, dirP, 0.0);
+    CHECK(a.IsReal);
+    countsA[a.Conv*100000 + (int)(a.Toa/divisor)]++;
+
+    Scatterer::AnisoAttempt g =
+      genScat.AttemptAnisotropicScatter(RAY_P, origin, dirP, 0.0);
+    CHECK(g.IsReal);
+    countsG[g.Conv*100000 + (int)(g.Toa/divisor)]++;
+  }
+
+  std::map<int,int> keys = countsA;
+  for (std::map<int,int>::const_iterator it = countsG.begin();
+       it != countsG.end(); ++it) {keys[it->first] = 0;}
+  Real chi2 = 0; int dof = 0;
+  for (std::map<int,int>::const_iterator it = keys.begin();
+       it != keys.end(); ++it) {
+    const Real a = countsA.count(it->first) ? countsA[it->first] : 0;
+    const Real g = countsG.count(it->first) ? countsG[it->first] : 0;
+    if (a+g < 20.0) continue;
+    const Real num = a-g;
+    chi2 += num*num/(a+g);
+    ++dof;
+  }
+  CHECK_MSG(dof > 0, "no bins had combined count >= 20");
+  const Real chi2_per_dof = chi2/dof;
+  CHECK_MSG(chi2_per_dof < 1.5,
+           "chi2/dof too large: " << chi2_per_dof << " (dof=" << dof << ")");
 
 }
 

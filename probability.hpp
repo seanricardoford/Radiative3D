@@ -161,6 +161,38 @@ public:
                             // based Probability Weights) index into
                             // the distribution.
 
+  // ::::::::::::::::::::::::::::::::::::::::::::::::::
+  // ::: Range-Query Methods  (ProbDist Class) :::
+  // ::::::::::::::::::::::::::::::::::::::::::::::::::
+  //
+  //   These assume the distribution is already in integrated
+  //   (cumulative) form -- true of any ProbDist by the time a
+  //   Scatterer has finished its constructor (PopulateWholeProbs()
+  //   forces integration of every mPDists[] entry via GetMagnitude()).
+  //   Used by AxiProposal (aniso_axi.hpp/cpp) to sum and sample the
+  //   isotropic take-off-angle tables over sub-ranges ("cells")
+  //   without duplicating storage.
+  //
+
+  bool IsIntegrated() const {return mbIntegrated;}
+                            // True once the differential-to-cumulative
+                            // conversion has happened.
+
+  Real GetCumulative(Index idx) const;
+                            // The cumulative (integrated) probability
+                            // at 'idx'. Requires IsIntegrated().
+
+  Real GetRangeMagnitude(Index begin, Index end) const;
+                            // Sum of relative probability weights over
+                            // the half-open index range [begin,end).
+                            // Requires IsIntegrated().
+
+  Index GetRandomIndexInRange(Index begin, Index end) const;
+                            // Like GetRandomIndex(), but restricted to
+                            // the half-open index range [begin,end).
+                            // Requires IsIntegrated() and
+                            // GetRangeMagnitude(begin,end) > 0.
+
 protected:
 
   // :::::::::::::::::::::::::::::::::::
@@ -175,7 +207,7 @@ protected:
   // ::: Error Handling  (ProbDist Class) :::
   // ::::::::::::::::::::::::::::::::::::::::
 
-  void AckSpit(); // Register a complaint if class used improperly
+  void AckSpit() const; // Register a complaint if class used improperly
 
 };
 

@@ -136,11 +136,80 @@ Index ProbDist::GetRandomIndex() {
 
 
 //////
-// METHOD:   ProbDist :: AckSpit()
+// METHOD:   ProbDist :: GetCumulative()                       [const]
+//
+//   Return the cumulative (integrated) probability at 'idx'. Requires
+//   the distribution to already be in integrated form (true of any
+//   mPDists[] entry in a Scatterer by the time its constructor has run
+//   PopulateWholeProbs(), which forces integration via GetMagnitude()).
+//
+Real ProbDist::GetCumulative(Index idx) const {
+
+  if (!mbIntegrated) {AckSpit();}
+  return mDist[idx];
+
+}//
+//
+
+
+//////
+// METHOD:   ProbDist :: GetRangeMagnitude()                   [const]
+//
+//   Return the sum of relative probability weights over the half-open
+//   index range [begin,end), as the difference of two cumulative
+//   values. Requires IsIntegrated().
+//
+Real ProbDist::GetRangeMagnitude(Index begin, Index end) const {
+
+  if (end <= begin) {return 0;}
+  Real hi = GetCumulative(end-1);
+  Real lo = (begin>0) ? GetCumulative(begin-1) : 0;
+  return hi - lo;
+
+}//
+//
+
+
+//////
+// METHOD:   ProbDist :: GetRandomIndexInRange()                [const]
+//
+//   Like GetRandomIndex(), but restricted to the half-open index range
+//   [begin,end): a binary search over mDist within that range, drawing
+//   with RandomUniform(). Requires IsIntegrated() and
+//   GetRangeMagnitude(begin,end) > 0.
+//
+Index ProbDist::GetRandomIndexInRange(Index begin, Index end) const {
+
+  if (!mbIntegrated) {AckSpit();}
+
+  Real lo = (begin>0) ? mDist[begin-1] : 0;
+  Real mag = GetRangeMagnitude(begin, end);
+  Real r = lo + mag * RandomUniform();
+
+  Index k1 = begin;
+  Index k2 = end - 1;
+  Index k;
+
+  while (k1 != k2) {
+    k = (k1 + k2) >> 1;
+    if (r <= mDist[k]) {
+      k2 = k;
+    } else {
+      k1 = k+1;
+    }
+  }
+  return k2;
+
+}//
+//
+
+
+//////
+// METHOD:   ProbDist :: AckSpit()                              [const]
 //
 //   Raise a complaint if class used improperly in some way.
 //
-void ProbDist::AckSpit() {
+void ProbDist::AckSpit() const {
 
   cerr << "ERROR: Improper use of ProbDist class.\n";
 

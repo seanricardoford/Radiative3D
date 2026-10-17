@@ -4,6 +4,7 @@
 #include <iomanip>      /* setw() */
 #include <cstdlib>
 #include <cstddef>      /* std::size_t */
+#include <sstream>      /* std::ostringstream */
 #include <stdexcept>    /* std::logic_error */
 #include "random.hpp"
 #include "scatterers.hpp"
@@ -103,30 +104,53 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
                         // Init base class for two input raytypes and
                         // four output raytypes.
   mParams(par),         // Record params for later use if needed
-  mAnisotropic( (choice != SAMPLER_AUTO) || !par.IsIsotropic() )
+  mAnisotropic( (choice != SAMPLER_AUTO) || !par.IsIsotropic() ),
                         // AUTO defers to the spec: isotropic specs
                         // keep today's exact path. Any explicit,
-                        // non-AUTO choice forces the anisotropic
-                        // (general, for now -- see sampler_e) path
-                        // even on an isotropic spec.
+                        // non-AUTO choice forces an anisotropic
+                        // sampling path even on an isotropic spec.
+  mUseAxi( choice == SAMPLER_AXISYMMETRIC ||
+          (choice == SAMPLER_AUTO && par.IsAxisymmetric()) )
+                        // AUTO selects the axisymmetric sampler for
+                        // axisymmetric specs; SAMPLER_AXISYMMETRIC
+                        // forces it; SAMPLER_GENERAL never selects it.
 {
 
   PopulateProbDists(par);   // Populate probability distributions
   PopulateWholeProbs();     //
 
+  if (mAnisotropic && mUseAxi) {   // Build the axisymmetric sampler's
+                                   // proposal tables. mPDists is
+                                   // already in integrated form (every
+                                   // entry's GetMagnitude() was called
+                                   // just above, in PopulateWhole-
+                                   // Probs()), as AxiProposal's
+                                   // GetRangeMagnitude()/GetRandom-
+                                   // IndexInRange() calls require.
+    mpAxi.reset(new AxiProposal(par, *pTOA, mPDists));
+  }
+
   if (!cm_MFPOverride_b) {  // Populate Mean Free Path values
-    ComputeMFPs();          //
-    if (mAnisotropic) {     // Anisotropic (general-sampler) scatterers
-                            // use the isotropic (a=a_min) MFP as the
-                            // basis for the majorant proposal
-                            // distribution, shortened by the factor
-                            // M = ax*ay*az/a_min^3 by which the
-                            // anisotropic spectrum can exceed the
-                            // isotropic one at the same |m| (see
-                            // ScatterParams::AnisoMajorantFactor()).
-      Real M = mParams.AnisoMajorantFactor();
-      mMeanFreeP[RAY_P] /= M;
-      mMeanFreeP[RAY_S] /= M;
+    if (mAnisotropic && mUseAxi) {
+      mMeanFreeP[RAY_P] = 1.0 / mpAxi->MajorantRate(RAY_P);
+      mMeanFreeP[RAY_S] = 1.0 / mpAxi->MajorantRate(RAY_S);
+                            // (+inf when the bin majorants are all 0,
+                            // e.g. eps==0 -- ordinary IEEE division,
+                            // no special-casing needed.)
+    } else {
+      ComputeMFPs();          //
+      if (mAnisotropic) {     // Anisotropic (general-sampler) scatterers
+                              // use the isotropic (a=a_min) MFP as the
+                              // basis for the majorant proposal
+                              // distribution, shortened by the factor
+                              // M = ax*ay*az/a_min^3 by which the
+                              // anisotropic spectrum can exceed the
+                              // isotropic one at the same |m| (see
+                              // ScatterParams::AnisoMajorantFactor()).
+        Real M = mParams.AnisoMajorantFactor();
+        mMeanFreeP[RAY_P] /= M;
+        mMeanFreeP[RAY_S] /= M;
+      }
     }
   } else {
     mMeanFreeP[RAY_P] = cm_MFPOverrides[RAY_P];   // Override values
@@ -456,6 +480,29 @@ Real Scatterer::RotationForS1(const S2::ThetaPhi & dir, const R3::XYZ & s1) {
 
 
 //////
+// METHOD:  Scatterer :: CanonicalPPolarization()              [static]
+//
+// PURPOSE: Returns the polarization-rotation angle that the
+//          axisymmetric sampler (SAMPLER_AXISYMMETRIC) uses in place of
+//          a real polarization for an incoming P phonon (which has
+//          none): the angle that puts the local vertical 'up' into the
+//          (S1,S3) plane, with a non-positive S1 component. This is
+//          RotationForS1(dir, (up.d)d - up), i.e. S1 is aligned with
+//          the normal component of -up (equivalently, of (up.d)d-up,
+//          the negative of up's component perpendicular to d). With
+//          this convention the local vertical always sits at chi==0
+//          (see AxiProposal's fold convention), so the P incidence
+//          tables need only a theta dimension.
+//
+Real Scatterer::CanonicalPPolarization(const S2::ThetaPhi & dir,
+                                       const R3::XYZ & up) {
+  const R3::XYZ d = dir.XYZ();
+  const R3::XYZ s1target = d.ScaledBy(up.Dot(d)) + up.ScaledBy(-1.0);
+  return RotationForS1(dir, s1target);
+}
+
+
+//////
 // METHOD:  Scatterer :: AttemptAnisotropicScatter()
 //
 // PURPOSE: Exact (thinning / delta-tracking) sampler for anisotropic
@@ -479,6 +526,10 @@ Real Scatterer::RotationForS1(const S2::ThetaPhi & dir, const R3::XYZ & s1) {
 Scatterer::AnisoAttempt
 Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
                                      const S2::ThetaPhi & dir, Real pol) {
+
+  if (mUseAxi) {
+    return AttemptAxisymmetricScatter(intype, loc, dir, pol);
+  }
 
   raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
                           RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
@@ -550,6 +601,134 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
 
     if (cm_NoDeflect_b) {     // Event rate stays anisotropic, but the
                               // reported deflection is suppressed:
+      result.Rel = Phonon(S2::ThetaPhi(0,0), intype);
+      result.Rel.SetPolarization(0);
+    } else {
+      result.Rel = Phonon((*pTOA)[toa_index], ort);
+      result.Rel.SetPolarization(relpol);
+    }
+  }
+
+  return result;
+
+}
+
+
+//////
+// METHOD:  Scatterer :: AttemptAxisymmetricScatter()         [protected]
+//
+// PURPOSE: The SAMPLER_AXISYMMETRIC implementation of
+//          AttemptAnisotropicScatter() (which dispatches here when
+//          mUseAxi): draws proposals from the incidence-tailored
+//          AxiProposal tables (mpAxi) instead of the general sampler's
+//          flat isotropic tables, then finishes with the same kind of
+//          exact accept/reject test. See docs/superpowers/specs/
+//          2026-10-16-anisotropic-scale-lengths-design.md, "Axisymmetric
+//          sampler".
+//
+// INPUTS:  Same as AttemptAnisotropicScatter().
+//
+Scatterer::AnisoAttempt
+Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
+                                      const S2::ThetaPhi & dir, Real pol) {
+
+  raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
+                          RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
+                                         // output raytypes (RAY_P or
+                                         // RAY_S)
+
+  const R3::XYZ up = ECS.GetUp(loc);
+  const Real pol_used = (intype == RAY_P) ?
+                        CanonicalPPolarization(dir, up) : pol;
+
+  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol_used);  // Same
+                              // construction as Phonon::Transform().
+  const R3::XYZ dirXYZ = dir.XYZ();
+  const R3::XYZ u_rel(up.Dot(AA.S1()), up.Dot(AA.S2()), up.Dot(AA.S3()));
+
+  const Real k_in = (intype == RAY_P) ? mParams.GetKP() : mParams.GetKS();
+
+  AnisoAttempt result;
+  result.InPol = pol_used;
+  result.Draws = 0;
+
+  if (!cm_MFPOverride_b) {
+    // 1. Thinning test, costing no table draw (step 4 of the brief):
+    const Real majorant = mpAxi->MajorantRate(intype);
+    const Real binrate  = mpAxi->BinRate(intype, u_rel);
+    if (RandomUniform() * majorant >= binrate) {
+      result.IsReal = false;
+      return result;             // Null collision: Draws stays 0.
+    }
+  }
+
+  out_types_e conv = GPP;
+  Index toa_index = 0;
+  bool accepted = false;
+
+  do {
+    result.Draws++;
+
+    // 2. Draw a (conversion, take-off-angle) proposal from the
+    //    incidence-tailored tables:
+    const AxiProposal::Draw d = mpAxi->DrawProposal(intype, u_rel);
+    conv = (out_types_e) d.Conv;
+    toa_index = d.Toa;
+
+    // 3. Compute the exchange wavevector m = k_out*e_out - k_in*dir:
+    const Real k_out = (out_types[conv] == RAY_P) ?
+                        mParams.GetKP() : mParams.GetKS();
+    const R3::XYZ e_out = AA.Express((*pTOA)[toa_index].XYZ());
+    const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
+
+    // 4. Exact accept/reject using the stored proposal weight and a
+    //    freshly-computed cell sum (never the stored one -- see
+    //    AxiProposal::Draw's header comment):
+    const Real ratio = mParams.AnisoRatio(ToFabric(loc, m));
+    const Real p = ratio * d.CellSum / d.Weight;
+
+    if (p > 1.0 + AxiProposal::kBoundMargin) {
+      std::ostringstream oss;
+      oss << "AxiProposal bound violated: ax=" << mParams.GetAx()
+          << " ay=" << mParams.GetAy() << " az=" << mParams.GetAz()
+          << " kappa=" << mParams.GetKappa()
+          << " u_rel=(" << u_rel.x() << "," << u_rel.y() << ","
+          << u_rel.z() << ")"
+          << " conv=" << (int)conv << " toa=" << toa_index
+          << " p=" << p;
+      throw std::logic_error(oss.str());
+    }
+
+    accepted = (RandomUniform() < p);
+
+  } while (!accepted && cm_MFPOverride_b);
+                              // Without an MFP override, a single
+                              // proposal/accept trial corresponds to
+                              // one majorant-distance draw (see
+                              // AttemptAnisotropicScatter()'s comment
+                              // on the general sampler's identical
+                              // loop). With an MFP override the path
+                              // length is fixed, so we must retry
+                              // internally until a real event is found.
+
+  result.Conv = (int) conv;
+  result.Toa = toa_index;
+  result.IsReal = accepted;
+
+  if (accepted) {
+    raytype ort = out_types[conv];
+
+    Real relpol = 0;
+    switch (conv) {
+    case GSS:
+      relpol = m_spol[toa_index];
+      break;
+    default:
+      relpol = 0;
+      break;
+    }
+
+    if (cm_NoDeflect_b) {
       result.Rel = Phonon(S2::ThetaPhi(0,0), intype);
       result.Rel.SetPolarization(0);
     } else {
