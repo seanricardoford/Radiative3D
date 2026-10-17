@@ -14,6 +14,8 @@
 //
 #include "sources.hpp"
 #include "scatparams.hpp"
+#include "phonons.hpp"      /* Needed for the Phonon member of
+                               Scatterer::AnisoAttempt. */
 
 //////
 // CLASSES: Forward Declarations
@@ -81,6 +83,25 @@ protected:
                                 // IN_P and IN_S agree with raytype
                                 // enum and can be used interchangably
                                 // where P/S raytypes needed.
+
+public:
+
+  enum sampler_e {SAMPLER_AUTO, SAMPLER_GENERAL, SAMPLER_AXISYMMETRIC};
+                                // Chooses which sampling algorithm a
+                                // Scatterer uses for anisotropic
+                                // ScatterParams (ax,ay,az not all
+                                // equal). AUTO defers to the spec:
+                                // isotropic specs use today's exact
+                                // path; axisymmetric specs use
+                                // SAMPLER_AXISYMMETRIC (falls back to
+                                // SAMPLER_GENERAL until that sampler
+                                // is implemented); all other specs use
+                                // SAMPLER_GENERAL. An explicit, non-
+                                // AUTO choice always forces the
+                                // anisotropic (general) sampling path,
+                                // even for an isotropic spec.
+
+protected:
 
   enum out_types_e {GPP, GPS, GSP, GSS, NUM_OUTTYPES};
                                 // Four basic conversions denote the
@@ -181,14 +202,21 @@ protected:
   std::vector<Real>  m_spol;    // Polarization angles for S->S
                                 // conversions
 
+  bool  mAnisotropic;          // True unless this Scatterer uses
+                                // today's exact isotropic sampling
+                                // path (GetRandomScatteredRelative-
+                                // Phonon()). Set at construction from
+                                // 'par' and the requested sampler_e
+                                // choice; see IsAnisotropic().
+
 
 public:
-  
+
   // :::::::::::::::::::::::::::::::::::::::
   // ::: Constructors  (Scatterer Class) :::
   // :::::::::::::::::::::::::::::::::::::::
 
-  Scatterer(ScatterParams par);
+  Scatterer(ScatterParams par, sampler_e choice = SAMPLER_AUTO);
 
 
 protected:
@@ -223,6 +251,81 @@ public:
 
   Real GetRandomPathLength(raytype intype);
   Phonon GetRandomScatteredRelativePhonon(raytype intype);
+
+  bool IsAnisotropic() const {return mAnisotropic;}
+                      // True unless this Scatterer is using today's
+                      // exact isotropic sampling path.
+
+  Real GetMajorantMeanFreePath(raytype rt) const {return mMeanFreeP[rt];}
+                      // The mean free path used to draw tentative
+                      // (proposal) collision distances. For an
+                      // anisotropic (general-sampler) Scatterer this
+                      // is the isotropic (a=a_min) mean free path
+                      // divided by mParams.AnisoMajorantFactor().
+
+  struct AnisoAttempt {
+    bool    IsReal;  // True if this attempt produced a real (accepted)
+                     // scattering event.
+    Real    InPol;   // The incoming polarization-rotation angle passed
+                     // in (echoed back for convenience).
+    Phonon  Rel;     // The "relative" phonon describing the proposed
+                     // (if IsReal) deflection/conversion, in the same
+                     // sense as GetRandomScatteredRelativePhonon()'s
+                     // return value. Meaningless when !IsReal.
+    int     Conv;    // The out_types_e conversion drawn on the final
+                     // (accepted, or -- without MFP override -- only)
+                     // attempt.
+    Index   Toa;     // The take-off-angle index drawn on that attempt.
+    int     Draws;   // Number of proposal draws made by this call (1
+                     // unless Scatterer::OverrideMFP() is in effect,
+                     // in which case draws repeat until accepted).
+
+    AnisoAttempt() :
+      IsReal(false), InPol(0),
+      Rel(S2::ThetaPhi(0,0), RAY_P),
+      Conv(-1), Toa(0), Draws(0)
+    {}
+  };
+
+  AnisoAttempt AttemptAnisotropicScatter(raytype intype,
+                                         const R3::XYZ & loc,
+                                         const S2::ThetaPhi & dir,
+                                         Real pol);
+                      // Exact (thinning/delta-tracking) sampler for
+                      // anisotropic ScatterParams. 'loc' is used only
+                      // to look up the local (East,North,Up) fabric
+                      // frame via ECS; 'dir' and 'pol' describe the
+                      // incoming phonon's direction and polarization-
+                      // rotation angle exactly as Phonon::Transform()
+                      // would construct them. Must not be called when
+                      // !IsAnisotropic().
+
+  Real IntegratedRate(raytype intype, const R3::XYZ & dir,
+                      const R3::XYZ & pol, const S2::S2Set & dirs) const;
+                      // Exact total scattering rate (1/mean-free-path)
+                      // for an incoming ray of type 'intype' travelling
+                      // in direction 'dir' with polarization direction
+                      // 'pol' (both already expressed in fabric
+                      // coordinates), computed by averaging, over the
+                      // relative-direction grid 'dirs', the isotropic
+                      // (a=a_min) GSATO() values times AnisoRatio() at
+                      // the corresponding exchange wavevector, summed
+                      // over the two conversions available to
+                      // 'intype'. Used to validate AttemptAnisotropic-
+                      // Scatter()'s realized event rate.
+
+  static R3::XYZ ToFabric(const R3::XYZ & loc, const R3::XYZ & v);
+                      // Expresses vector 'v' in the local fabric
+                      // (East,North,Up) frame at 'loc', i.e. returns
+                      // (v.Dot(ECS.GetEast(loc)), v.Dot(ECS.GetNorth(loc)),
+                      // v.Dot(ECS.GetUp(loc))).
+
+  static Real RotationForS1(const S2::ThetaPhi & dir, const R3::XYZ & s1);
+                      // Returns the rotation angle 'rot' such that
+                      // R3::OrthoAxes(dir.Theta(),dir.Phi(),rot).S1()
+                      // is parallel to the projection of 's1' normal
+                      // to 'dir'; returns 0 if that projection is
+                      // ~zero (e.g. 's1' parallel to 'dir').
 
 
   // ::::::::::::::::::::::::::::::::::::::::::

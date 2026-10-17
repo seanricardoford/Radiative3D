@@ -3,9 +3,12 @@
 #include <cmath>        /* log(), sqrt() */
 #include <iomanip>      /* setw() */
 #include <cstdlib>
+#include <cstddef>      /* std::size_t */
+#include <stdexcept>    /* std::logic_error */
 #include "random.hpp"
 #include "scatterers.hpp"
 #include "phonons.hpp"
+#include "ecs.hpp"      /* Global ECS object: GetEast/GetNorth/GetUp */
 
                         /* Assume srand() has been called elsewhere */
 
@@ -95,11 +98,17 @@ Scatterer::GetScattererMatchingParams(ScatterParams par) {
 //////
 // CONSTRUCTOR:  Scatterer()
 //
-Scatterer::Scatterer(ScatterParams par) :
-  PhononSource(NUM_INTYPES, NUM_OUTTYPES),  
+Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
+  PhononSource(NUM_INTYPES, NUM_OUTTYPES),
                         // Init base class for two input raytypes and
                         // four output raytypes.
-  mParams(par)          // Record params for later use if needed
+  mParams(par),         // Record params for later use if needed
+  mAnisotropic( (choice != SAMPLER_AUTO) || !par.IsIsotropic() )
+                        // AUTO defers to the spec: isotropic specs
+                        // keep today's exact path. Any explicit,
+                        // non-AUTO choice forces the anisotropic
+                        // (general, for now -- see sampler_e) path
+                        // even on an isotropic spec.
 {
 
   PopulateProbDists(par);   // Populate probability distributions
@@ -107,6 +116,18 @@ Scatterer::Scatterer(ScatterParams par) :
 
   if (!cm_MFPOverride_b) {  // Populate Mean Free Path values
     ComputeMFPs();          //
+    if (mAnisotropic) {     // Anisotropic (general-sampler) scatterers
+                            // use the isotropic (a=a_min) MFP as the
+                            // basis for the majorant proposal
+                            // distribution, shortened by the factor
+                            // M = ax*ay*az/a_min^3 by which the
+                            // anisotropic spectrum can exceed the
+                            // isotropic one at the same |m| (see
+                            // ScatterParams::AnisoMajorantFactor()).
+      Real M = mParams.AnisoMajorantFactor();
+      mMeanFreeP[RAY_P] /= M;
+      mMeanFreeP[RAY_S] /= M;
+    }
   } else {
     mMeanFreeP[RAY_P] = cm_MFPOverrides[RAY_P];   // Override values
     mMeanFreeP[RAY_S] = cm_MFPOverrides[RAY_S];   // if requested
@@ -366,6 +387,231 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
   phon.SetPolarization(pol);
 
   return phon;
+
+}
+
+
+//////
+// METHOD:  Scatterer :: ToFabric()                            [static]
+//
+// PURPOSE: Express vector 'v' in the local fabric (East, North, Up)
+//          frame at 'loc', using the global ECS object to determine
+//          the local East/North/Up directions. The fabric frame is
+//          what ScatterParams::AnisoRatio()/AnisoAcceptance() expect
+//          their wavevector argument to be expressed in.
+//
+R3::XYZ Scatterer::ToFabric(const R3::XYZ & loc, const R3::XYZ & v) {
+  return R3::XYZ(v.Dot(ECS.GetEast(loc)),
+                 v.Dot(ECS.GetNorth(loc)),
+                 v.Dot(ECS.GetUp(loc)));
+}
+
+
+//////
+// METHOD:  Scatterer :: RotationForS1()                       [static]
+//
+// PURPOSE: Return the rotation angle 'rot' such that
+//          R3::OrthoAxes(dir.Theta(),dir.Phi(),rot).S1() is parallel to
+//          the component of 's1' normal to 'dir' (i.e., with any
+//          component of 's1' along 'dir' removed). If that normal
+//          component is (numerically) zero -- e.g. because 's1' is
+//          parallel to 'dir', as happens when a caller has no
+//          meaningful polarization direction to offer (incoming
+//          P-waves) -- returns 0, matching OrthoAxes' own convention
+//          that rot=0 aligns S1 with E1 (theta-hat).
+//
+Real Scatterer::RotationForS1(const S2::ThetaPhi & dir, const R3::XYZ & s1) {
+
+  const R3::XYZ dhat = dir.XYZ();
+  const R3::XYZ proj = s1 + dhat.ScaledBy(-s1.Dot(dhat));
+                              // s1, with its component along dhat
+                              // removed.
+
+  if (proj.MagSquared() < 1.e-18) {
+    return 0;                // Degenerate: no meaningful normal
+                             // component to align S1 with.
+  }
+
+  const R3::OrthoAxes AA0(dir.Theta(), dir.Phi(), 0);
+                              // At rot=0, AA0.S1()==AA0.E1() and
+                              // AA0.S2()==AA0.E2() (see OrthoAxes'
+                              // constructor); E1,E2 don't depend on
+                              // rot, so we can read them straight off
+                              // this reference frame.
+  const R3::XYZ proj_hat = proj.Unit();
+  const Real cosrot = proj_hat.Dot(AA0.E1());
+  const Real sinrot = proj_hat.Dot(AA0.E2());
+
+  return atan2(sinrot, cosrot);
+
+}
+
+
+//////
+// METHOD:  Scatterer :: AttemptAnisotropicScatter()
+//
+// PURPOSE: Exact (thinning / delta-tracking) sampler for anisotropic
+//          (ax,ay,az not all equal) ScatterParams. Proposals are drawn
+//          from the same isotropic (a=a_min) tables that
+//          GetRandomScatteredRelativePhonon() uses, then accepted with
+//          probability ScatterParams::AnisoAcceptance() evaluated at
+//          the proposal's exchange wavevector, expressed in the local
+//          fabric frame. See docs/superpowers/specs/
+//          2026-10-16-anisotropic-scale-lengths-design.md, "Sampling
+//          method", for the derivation of why this is exact.
+//
+// INPUTS:  intype - Incoming ray type (RAY_P or RAY_S).
+//          loc    - Location of the tentative collision (used only to
+//                   look up the local fabric frame via ECS).
+//          dir    - Incoming phonon direction, exactly as
+//                   Phonon::Transform() would read it (mDir).
+//          pol    - Incoming polarization-rotation angle, exactly as
+//                   Phonon::Transform() would read it (mPol).
+//
+Scatterer::AnisoAttempt
+Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
+                                     const S2::ThetaPhi & dir, Real pol) {
+
+  raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
+                          RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
+                                         // output raytypes (RAY_P or
+                                         // RAY_S)
+
+  const Real k_in = (intype == RAY_P) ? mParams.GetKP() : mParams.GetKS();
+
+  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol);  // Same
+                              // construction as Phonon::Transform().
+  const R3::XYZ dirXYZ = dir.XYZ();
+
+  out_types_e conv = GPP;
+  Index toa_index = 0;
+  int draws = 0;
+  bool accepted = false;
+
+  do {
+    draws++;
+
+    // 1. Draw a proposal (conversion type, then take-off angle) from
+    //    the isotropic (a=a_min) tables:
+    conv = (out_types_e) mWholeProbs[intype].GetRandomIndex();
+    toa_index = mPDists[conv].GetRandomIndex();
+
+    // 2. Compute the exchange wavevector m = k_out*e_out - k_in*dir:
+    const Real k_out = (out_types[conv] == RAY_P) ?
+                        mParams.GetKP() : mParams.GetKS();
+    const R3::XYZ e_out = AA.Express((*pTOA)[toa_index].XYZ());
+    const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
+
+    // 3. Accept/reject using the anisotropic/isotropic spectrum ratio
+    //    at 'm', expressed in the local fabric frame:
+    const Real accept_prob = mParams.AnisoAcceptance(ToFabric(loc, m));
+    accepted = (RandomUniform() < accept_prob);
+
+  } while (!accepted && cm_MFPOverride_b);
+                              // Without an MFP override, a single
+                              // proposal/accept trial corresponds to
+                              // one majorant-distance draw: a
+                              // rejection is a null collision, and the
+                              // caller draws the next tentative
+                              // distance and tries again. With an MFP
+                              // override the path length is fixed, so
+                              // we must retry internally until a real
+                              // event is found.
+
+  AnisoAttempt result;
+  result.InPol = pol;
+  result.Conv = (int) conv;
+  result.Toa = toa_index;
+  result.Draws = draws;
+  result.IsReal = accepted;
+
+  if (accepted) {
+    raytype ort = out_types[conv];
+
+    // Ray polarization depends on conversion type (same rule as
+    // GetRandomScatteredRelativePhonon()):
+    Real relpol = 0;
+    switch (conv) {
+    case GSS:
+      relpol = m_spol[toa_index];
+      break;
+    default:
+      relpol = 0;
+      break;
+    }
+
+    if (cm_NoDeflect_b) {     // Event rate stays anisotropic, but the
+                              // reported deflection is suppressed:
+      result.Rel = Phonon(S2::ThetaPhi(0,0), intype);
+      result.Rel.SetPolarization(0);
+    } else {
+      result.Rel = Phonon((*pTOA)[toa_index], ort);
+      result.Rel.SetPolarization(relpol);
+    }
+  }
+
+  return result;
+
+}
+
+
+//////
+// METHOD:  Scatterer :: IntegratedRate()                     [const]
+//
+// PURPOSE: Exact total scattering rate (1/mean-free-path) for an
+//          incoming ray of type 'intype' travelling in direction 'dir'
+//          with polarization direction 'pol' (both already expressed
+//          in fabric coordinates), used to validate
+//          AttemptAnisotropicScatter()'s realized event rate.
+//
+//          Computed by averaging, over the relative-direction grid
+//          'dirs' (nominally the class-level take-off-angle set), the
+//          isotropic (a=a_min) GSATO() value times AnisoRatio() at the
+//          corresponding exchange wavevector, summed over the two
+//          conversions available to 'intype' (GPP+GPS for RAY_P,
+//          GSP+GSS for RAY_S). This mirrors ComputeMFPs(), but with
+//          each term weighted by the anisotropic/isotropic spectrum
+//          ratio instead of assuming it is 1.
+//
+Real Scatterer::IntegratedRate(raytype intype, const R3::XYZ & dir,
+                               const R3::XYZ & pol,
+                               const S2::S2Set & dirs) const {
+
+  raytype out_types[4] = {RAY_P, RAY_S, RAY_P, RAY_S};  // (GPP,GPS,GSP,GSS)
+
+  out_types_e c1, c2;
+  if (intype == RAY_P) { c1 = GPP; c2 = GPS; }
+  else                 { c1 = GSP; c2 = GSS; }
+  const out_types_e convs[2] = {c1, c2};
+
+  const Real k_in = (intype == RAY_P) ? mParams.GetKP() : mParams.GetKS();
+
+  const S2::ThetaPhi dirTP(dir.Theta(), dir.Phi());
+  const Real rot = RotationForS1(dirTP, pol);
+  const R3::OrthoAxes AA(dirTP.Theta(), dirTP.Phi(), rot);  // Same
+                              // construction as Phonon::Transform().
+
+  Real sum = 0;
+  const std::size_t n = dirs.size();
+  for (std::size_t k = 0; k < n; k++) {
+
+    Real gpp, gps, gsp, gss, spol;
+    mParams.GSATO(dirs[k], gpp, gps, gsp, gss, spol);
+    const Real gvals[NUM_OUTTYPES] = {gpp, gps, gsp, gss};
+
+    const R3::XYZ e_out = AA.Express(dirs[k].XYZ());
+
+    for (int ci = 0; ci < 2; ci++) {
+      const out_types_e conv = convs[ci];
+      const Real k_out = (out_types[conv] == RAY_P) ?
+                          mParams.GetKP() : mParams.GetKS();
+      const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
+      sum += gvals[conv] * mParams.AnisoRatio(m);
+    }
+
+  }
+
+  return sum / (Real) n;
 
 }
 

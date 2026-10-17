@@ -43,6 +43,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "elastic.hpp"
@@ -52,6 +53,7 @@
 #include "sources.hpp"
 #include "phonons.hpp"
 #include "scatterers.hpp"
+#include "ecs.hpp"
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -381,6 +383,380 @@ TEST(scatterer_guard) {
     }
   }
   CHECK_MSG(threw, "GetRandomScatteredRelativePhonon should throw std::logic_error for anisotropic params");
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
+// ****  TASK 4 TESTS: General anisotropic sampler                   ****
+// ****                                                              ****
+//
+
+// ::: MeanDistanceToRealEvent(s, in, dir, pol, n) :::
+//
+//   Sums GetRandomPathLength(in) draws until AttemptAnisotropicScatter()
+//   returns a real (accepted) event, and averages the per-event total
+//   distance over n events. Thinning preserves memorylessness, so this
+//   mean should converge to 1/IntegratedRate(in, dir.XYZ(), pol, ...).
+//
+static Real MeanDistanceToRealEvent(Scatterer & s, raytype in,
+                                    const S2::ThetaPhi & dir,
+                                    const R3::XYZ & pol, int n) {
+  const Real rot = Scatterer::RotationForS1(dir, pol);
+  const R3::XYZ origin(0, 0, 0);
+  Real total = 0;
+  for (int i = 0; i < n; ++i) {
+    Real dist = 0;
+    Scatterer::AnisoAttempt att;
+    do {
+      dist += s.GetRandomPathLength(in);
+      att = s.AttemptAnisotropicScatter(in, origin, dir, rot);
+    } while (!att.IsReal);
+    total += dist;
+  }
+  return total / n;
+}
+
+// ::: CheckDistributionMatchesTarget(...) :::
+//
+//   Shared body for test 4b ("test_general_distribution_matches_target")
+//   and the matching repeat under --overridemfp ("isolated_overridemfp").
+//   Draws 'ndraws' *accepted* events from 'scat' for incoming state
+//   (intype, dir, pol), bins them by (conversion, coarse take-off-angle),
+//   and compares against the expected distribution computed directly
+//   from GSATO() (isotropic, a=a_min) times AnisoRatio() at the
+//   corresponding exchange wavevector -- the same quantity
+//   IntegratedRate() sums, just binned rather than totalled. 'divisor'
+//   coarsens the fine (degree-5) take-off-angle index down to a coarser
+//   grid (e.g. 4^(5-2)=64 maps degree 5 down to degree 2) so that bins
+//   collect enough counts for a meaningful chi-square test.
+//
+//   Conversions are identified by the raw out_types_e integer codes
+//   Scatterer::AnisoAttempt::Conv uses (GPP=0, GPS=1, GSP=2, GSS=3),
+//   since out_types_e itself is a protected implementation detail of
+//   Scatterer.
+//
+static void CheckDistributionMatchesTarget(Scatterer & scat,
+                                           const ScatterParams & sp,
+                                           raytype intype,
+                                           const S2::ThetaPhi & dir,
+                                           const R3::XYZ & pol,
+                                           const S2::TesselSphere & toas,
+                                           int divisor, int ndraws) {
+  const Real rot = Scatterer::RotationForS1(dir, pol);
+  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), rot);
+  const R3::XYZ dirXYZ = dir.XYZ();
+  const Real k_in = (intype == RAY_P) ? sp.GetKP() : sp.GetKS();
+
+  int convs[2];
+  if (intype == RAY_P) { convs[0] = 0; convs[1] = 1; }  // GPP, GPS
+  else                 { convs[0] = 2; convs[1] = 3; }  // GSP, GSS
+  const raytype outrt[4] = {RAY_P, RAY_S, RAY_P, RAY_S};
+
+  // Expected weight (proportional to the probability of landing in
+  // that bin, given acceptance) summed over the fine take-off-angle
+  // grid:
+  std::map<std::pair<int,int>, Real> expectedWeight;
+  Real totalWeight = 0;
+  const std::size_t n = toas.size();
+  for (std::size_t t = 0; t < n; ++t) {
+    Real gpp, gps, gsp, gss, spol;
+    sp.GSATO(toas[t], gpp, gps, gsp, gss, spol);
+    const Real gvals[4] = {gpp, gps, gsp, gss};
+    const R3::XYZ e_out = AA.Express(toas[t].XYZ());
+    const int coarse = (int)(t / divisor);
+    for (int ci = 0; ci < 2; ++ci) {
+      const int conv = convs[ci];
+      const Real k_out = (outrt[conv] == RAY_P) ? sp.GetKP() : sp.GetKS();
+      const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
+      const Real w = gvals[conv] * sp.AnisoRatio(m);
+      expectedWeight[std::make_pair(ci, coarse)] += w;
+      totalWeight += w;
+    }
+  }
+
+  // Observed counts, drawn from the actual sampler:
+  std::map<std::pair<int,int>, int> observed;
+  const R3::XYZ origin(0, 0, 0);
+  int collected = 0;
+  while (collected < ndraws) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(intype, origin, dir, rot);
+    if (!att.IsReal) continue;
+    const int ci = (att.Conv == convs[0]) ? 0 : 1;
+    const int coarse = (int)(att.Toa / divisor);
+    observed[std::make_pair(ci, coarse)]++;
+    ++collected;
+  }
+
+  // Chi-square over bins with expected count >= 20:
+  Real chi2 = 0;
+  int dof = 0;
+  for (std::map<std::pair<int,int>, Real>::const_iterator it = expectedWeight.begin();
+       it != expectedWeight.end(); ++it) {
+    const Real expectedCount = ndraws * (it->second / totalWeight);
+    if (expectedCount < 20.0) continue;
+    std::map<std::pair<int,int>, int>::const_iterator oit = observed.find(it->first);
+    const int obs = (oit == observed.end()) ? 0 : oit->second;
+    const Real diff = obs - expectedCount;
+    chi2 += diff * diff / expectedCount;
+    ++dof;
+  }
+  CHECK_MSG(dof > 0, "no bins had expected count >= 20");
+  const Real chi2_per_dof = chi2 / dof;
+  CHECK_MSG(chi2_per_dof < 1.5,
+           "chi2/dof too large: " << chi2_per_dof << " (dof=" << dof << ")");
+}
+
+
+TEST(general_iso_forced) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(0.5, 0.5, 0.5);  // isotropic spec
+  Scatterer general(sp, Scatterer::SAMPLER_GENERAL);
+  Scatterer autoSc(sp, Scatterer::SAMPLER_AUTO);
+
+  CHECK(general.IsAnisotropic());
+  CHECK(!autoSc.IsAnisotropic());
+  CHECK(NearRel(general.GetMajorantMeanFreePath(RAY_P),
+               autoSc.GetMajorantMeanFreePath(RAY_P), 1e-12));
+  CHECK(NearRel(general.GetMajorantMeanFreePath(RAY_S),
+               autoSc.GetMajorantMeanFreePath(RAY_S), 1e-12));
+
+  const R3::XYZ origin(0, 0, 0);
+  const S2::ThetaPhi dir(60.0 * Geometry::DtoR, 30.0 * Geometry::DtoR);
+  for (int i = 0; i < 2000; ++i) {
+    Scatterer::AnisoAttempt att =
+      general.AttemptAnisotropicScatter(RAY_P, origin, dir, 0.0);
+    CHECK(att.IsReal);
+  }
+
+}
+
+
+TEST(general_rate_matches_integration) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1), D(Dir(60,30));
+
+  struct Case { raytype in; R3::XYZ dir; R3::XYZ pol; };
+  const Case cases[] = {
+    {RAY_P, E, E}, {RAY_P, N, N}, {RAY_P, U, U}, {RAY_P, D, D},
+    {RAY_S, E, N}, {RAY_S, E, U},
+    {RAY_S, N, E}, {RAY_S, N, U},
+    {RAY_S, U, E}, {RAY_S, U, N},
+  };
+  const int n = 20000;
+
+  for (std::size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+    const S2::ThetaPhi dirTP(cases[i].dir.Theta(), cases[i].dir.Phi());
+    const Real g0 = scat.IntegratedRate(cases[i].in, cases[i].dir,
+                                        cases[i].pol, toas);
+    const Real expected = 1.0 / g0;
+    const Real mean = MeanDistanceToRealEvent(scat, cases[i].in, dirTP,
+                                              cases[i].pol, n);
+    const Real tol = 4.0 * expected / std::sqrt((Real) n);
+    CHECK_MSG(std::fabs(mean - expected) < tol,
+             "case " << i << ": mean=" << mean << " expected=" << expected
+             << " tol=" << tol);
+  }
+
+}
+
+
+TEST(general_distribution_matches_target) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+  int divisor = 1;
+  for (int i = 0; i < 5-2; ++i) divisor *= 4;  // 4^(5-2) = 64
+
+  const S2::ThetaPhi dirP(60.0 * Geometry::DtoR, 30.0 * Geometry::DtoR);
+  CheckDistributionMatchesTarget(scat, sp, RAY_P, dirP, dirP.XYZ(),
+                                 toas, divisor, 200000);
+
+  const S2::ThetaPhi dirS(Geometry::Pi90, 0.0);  // E
+  const R3::XYZ polU(0, 0, 1);                   // U
+  CheckDistributionMatchesTarget(scat, sp, RAY_S, dirS, polU,
+                                 toas, divisor, 200000);
+
+}
+
+
+TEST(general_symmetry) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+
+  {
+    ScatterParams sp = LopNorCrust(2, 2, 0.5);  // axisymmetric
+    Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+    const R3::XYZ E(1,0,0), N(0,1,0);
+    const Real rE = scat.IntegratedRate(RAY_P, E, E, toas);
+    const Real rN = scat.IntegratedRate(RAY_P, N, N, toas);
+    CHECK(NearRel(rE, rN, 1e-9));
+  }
+
+  {
+    ScatterParams sp = LopNorCrust(2, 2, 0.5);  // axisymmetric
+    Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+    const R3::XYZ d1 = Dir(60, 30);
+    const R3::XYZ d2 = Dir(60, -30);  // x-mirror
+    const Real r1 = scat.IntegratedRate(RAY_P, d1, d1, toas);
+    const Real r2 = scat.IntegratedRate(RAY_P, d2, d2, toas);
+    CHECK(NearRel(r1, r2, 1e-9));
+  }
+
+  {
+    ScatterParams sp = LopNorCrust(2, 1, 0.5);  // triaxial
+    Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+    const R3::XYZ E(1,0,0), negE(-1,0,0);
+    const Real rE = scat.IntegratedRate(RAY_P, E, E, toas);
+    const Real rNegE = scat.IntegratedRate(RAY_P, negE, negE, toas);
+    CHECK(NearRel(rE, rNegE, 1e-9));
+  }
+
+}
+
+
+TEST(general_vertical_incidence) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const S2::ThetaPhi dir(0.0, 0.0);  // U
+  const R3::XYZ pol(1, 0, 0);        // E
+  const Real rot = Scatterer::RotationForS1(dir, pol);
+  const R3::XYZ origin(0, 0, 0);
+
+  for (int i = 0; i < 1000; ++i) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_S, origin, dir, rot);
+    CHECK(std::isfinite(att.InPol));
+    if (att.IsReal) {
+      CHECK(std::isfinite(att.Rel.GetDirection().Theta()));
+      CHECK(std::isfinite(att.Rel.GetDirection().Phi()));
+      CHECK(std::isfinite(att.Rel.GetPolarization()));
+    }
+  }
+
+  const Real rate = scat.IntegratedRate(RAY_S, R3::XYZ(0,0,1), pol, toas);
+  CHECK(std::isfinite(rate));
+  CHECK(rate > 0.0);
+
+}
+
+
+TEST(general_curved_frame) {
+
+  ECS.SetMapping(EarthCoords::RAE_CURVED);
+
+  const R3::XYZ loc(950.0, 0.0, 0.0);
+  const R3::XYZ up = ECS.GetUp(loc);
+  const R3::XYZ fab = Scatterer::ToFabric(loc, up);
+
+  CHECK(std::fabs(fab.x()) < 1e-12);
+  CHECK(std::fabs(fab.y()) < 1e-12);
+  CHECK(std::fabs(fab.z() - 1.0) < 1e-12);
+  CHECK(up.z() < std::cos(8.0 * Geometry::DtoR));
+
+  ECS.SetMapping(EarthCoords::ENU_ORTHO);  // restore for later tests
+
+}
+
+
+TEST(general_eps_zero) {
+
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5, 0.5, 0.0);  // eps=0
+  bool threw = false;
+  Scatterer * scat = 0;
+  try {
+    scat = new Scatterer(sp, Scatterer::SAMPLER_GENERAL);
+  } catch (...) {
+    threw = true;
+  }
+  CHECK_MSG(!threw, "construction with eps=0 must not throw");
+  const Real mfp = scat->GetMajorantMeanFreePath(RAY_P);
+  CHECK(std::isinf(mfp));
+  CHECK(mfp > 0.0);
+  delete scat;
+
+}
+
+
+TEST(isolated_overridemfp) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  Scatterer::OverrideMFP(100, 50);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const int n = 20000;
+  Real total = 0;
+  for (int i = 0; i < n; ++i) total += scat.GetRandomPathLength(RAY_P);
+  const Real mean = total / n;
+  CHECK(NearRel(mean, 100.0, 0.03));
+
+  const R3::XYZ origin(0, 0, 0);
+  const S2::ThetaPhi dirP(60.0 * Geometry::DtoR, 30.0 * Geometry::DtoR);
+  for (int i = 0; i < 2000; ++i) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_P, origin, dirP, 0.0);
+    CHECK(att.IsReal);
+  }
+
+  int divisor = 1;
+  for (int i = 0; i < 5-2; ++i) divisor *= 4;  // 4^(5-2) = 64
+  CheckDistributionMatchesTarget(scat, sp, RAY_P, dirP, dirP.XYZ(),
+                                 toas, divisor, 200000);
+
+}
+
+
+TEST(isolated_nodeflect) {
+
+  UseTOADegree(5);
+  Scatterer::SetNoDeflect();
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const R3::XYZ origin(0, 0, 0);
+  const S2::ThetaPhi dirP(60.0 * Geometry::DtoR, 30.0 * Geometry::DtoR);
+  const Real pol = 0.37;
+
+  int realCountP = 0;
+  for (int i = 0; i < 2000; ++i) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_P, origin, dirP, pol);
+    if (att.IsReal) {
+      ++realCountP;
+      CHECK(att.Rel.GetDirection().Theta() < 1.e-6);  // nudge_if_singular() keeps
+                                                      // theta slightly off zero
+      CHECK(att.Rel.GetRaytype() == RAY_P);
+      CHECK(att.InPol == pol);
+    }
+  }
+  CHECK_MSG(realCountP > 0, "no real P attempts observed");
+
+  int realCountS = 0;
+  for (int i = 0; i < 2000; ++i) {
+    Scatterer::AnisoAttempt att =
+      scat.AttemptAnisotropicScatter(RAY_S, origin, dirP, pol);
+    if (att.IsReal) {
+      ++realCountS;
+      CHECK(att.Rel.GetDirection().Theta() < 1.e-6);  // nudge_if_singular() keeps
+                                                      // theta slightly off zero
+      CHECK(att.Rel.GetRaytype() == RAY_S);
+      CHECK(att.InPol == pol);
+    }
+  }
+  CHECK_MSG(realCountS > 0, "no real S attempts observed");
 
 }
 
