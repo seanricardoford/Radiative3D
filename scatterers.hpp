@@ -115,6 +115,17 @@ protected:
                                 // distinguish polarization via a
                                 // separate m_spol array.)
 
+  static const raytype kOutTypes[4];   // Maps conversion types (GPP,
+                                       // GPS, GSP, GSS) to output
+                                       // raytypes (RAY_P or RAY_S).
+                                       // Shared by
+                                       // GetRandomScatteredRelative-
+                                       // Phonon(), AttemptAnisotropic-
+                                       // Scatter(), and
+                                       // AttemptAxisymmetricScatter()
+                                       // (previously three identical
+                                       // local copies).
+
 
   // ::::::::::::::::::::::::::::::::::::::::::::::::::::::
   // ::: Class-Static Infrastructure  (Scatterer Class) :::
@@ -424,6 +435,18 @@ protected:
                       // AttemptAnisotropicScatter(); see that method's
                       // header comment. Called from
                       // AttemptAnisotropicScatter() when mUseAxi.
+
+  Phonon BuildRelativePhonon(out_types_e conv, Index toa_index,
+                            raytype intype) const;
+                      // Builds the "relative" Phonon for an accepted
+                      // anisotropic-scatter event: looks up the output
+                      // raytype via kOutTypes[conv], the polarization
+                      // (m_spol[toa_index] for GSS, else 0), and -- if
+                      // Scatterer::SetNoDeflect() is in effect -- a
+                      // non-deflected dummy Phonon instead. Shared by
+                      // AttemptAnisotropicScatter() and
+                      // AttemptAxisymmetricScatter() (previously two
+                      // identical finishing blocks).
 
 public:
 

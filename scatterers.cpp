@@ -39,6 +39,11 @@ bool Scatterer::cm_MFPOverride_b = false;
 Real Scatterer::cm_MFPOverrides[] = {0,0};
 bool Scatterer::cm_NoDeflect_b = false;
 
+const raytype Scatterer::kOutTypes[4] = {RAY_P, RAY_S, RAY_P, RAY_S};
+                                // Maps conversion types (GPP, GPS, GSP,
+                                // GSS) to output raytypes (RAY_P or
+                                // RAY_S).
+
 //////
 // STATIC METHOD:  Scatterer :: GetScattererMatchingParams()
 //
@@ -115,6 +120,21 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
                         // axisymmetric specs; SAMPLER_AXISYMMETRIC
                         // forces it; SAMPLER_GENERAL never selects it.
 {
+
+  if (cm_MFPOverride_b && mAnisotropic && mParams.GetEps() == 0.0) {
+    // Controller ruling R11: with eps==0, every GSATO()/mPDists value
+    // (and, for the axisymmetric sampler, every AxiProposal bin weight)
+    // is identically 0 -- see ScatterParams::PSATO()'s eps^2 prefactor
+    // -- so --overridemfp's skip-the-thinning-test loop (both samplers;
+    // see AttemptAnisotropicScatter()/AttemptAxisymmetricScatter())
+    // would otherwise either compute 0/0 (axisymmetric: NaN never
+    // satisfies p>1+kBoundMargin OR RandomUniform()<p, hanging forever)
+    // or spin on a degenerate, meaningless all-mass-at-index-0
+    // distribution (general). Neither is useful, so fail loudly at
+    // construction instead of silently hanging or scattering nonsense.
+    throw std::logic_error(
+      "--overridemfp requires eps > 0 in anisotropic regions");
+  }
 
   PopulateProbDists(par);   // Populate probability distributions
   PopulateWholeProbs();     //
@@ -377,10 +397,6 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
   }
 
   S2::S2Set & toa = (*pTOA);             // Alias
-  raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
-                          RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
-                                         // output raytypes (RAY_P or
-                                         // RAY_S)
 
   if (cm_NoDeflect_b) {     // First, check if deflection is overridden:
     Phonon nodeflect = Phonon(S2::ThetaPhi(0,0),intype);
@@ -390,7 +406,7 @@ Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
 
   // Get output conversion type and corresponding output ray type:
   out_types_e conv = (out_types_e) mWholeProbs[intype].GetRandomIndex();
-  raytype ort = out_types[conv];
+  raytype ort = kOutTypes[conv];
 
   // Get take-off-angle index for output ray:
   Index toa_index = mPDists[conv].GetRandomIndex();
@@ -503,6 +519,49 @@ Real Scatterer::CanonicalPPolarization(const S2::ThetaPhi & dir,
 
 
 //////
+// METHOD:  Scatterer :: BuildRelativePhonon()                 [const]
+//
+// PURPOSE: Builds the "relative" Phonon for an accepted anisotropic-
+//          scatter event (general or axisymmetric sampler alike):
+//          looks up the output raytype via kOutTypes[conv] and the
+//          polarization (m_spol[toa_index] for a GSS conversion, else
+//          0), or -- if Scatterer::SetNoDeflect() is in effect -- a
+//          non-deflected dummy Phonon of raytype 'intype' instead (the
+//          event rate stays anisotropic; only the reported deflection
+//          is suppressed). Factored out of AttemptAnisotropicScatter()
+//          and AttemptAxisymmetricScatter(), which were otherwise
+//          identical here.
+//
+Phonon Scatterer::BuildRelativePhonon(out_types_e conv, Index toa_index,
+                                      raytype intype) const {
+
+  if (cm_NoDeflect_b) {
+    Phonon rel(S2::ThetaPhi(0,0), intype);
+    rel.SetPolarization(0);
+    return rel;
+  }
+
+  const raytype ort = kOutTypes[conv];
+
+  Real relpol = 0;
+  switch (conv) {
+  case GSS:
+    relpol = m_spol[toa_index];
+    break;
+  default:
+    relpol = 0;
+    break;
+  }
+
+  Phonon rel((*pTOA)[toa_index], ort);
+  rel.SetPolarization(relpol);
+  return rel;
+
+}
+
+
+
+//////
 // METHOD:  Scatterer :: AttemptAnisotropicScatter()
 //
 // PURPOSE: Exact (thinning / delta-tracking) sampler for anisotropic
@@ -531,11 +590,6 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
     return AttemptAxisymmetricScatter(intype, loc, dir, pol);
   }
 
-  raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
-                          RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
-                                         // output raytypes (RAY_P or
-                                         // RAY_S)
-
   const Real k_in = (intype == RAY_P) ? mParams.GetKP() : mParams.GetKS();
 
   const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol);  // Same
@@ -556,7 +610,7 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
     toa_index = mPDists[conv].GetRandomIndex();
 
     // 2. Compute the exchange wavevector m = k_out*e_out - k_in*dir:
-    const Real k_out = (out_types[conv] == RAY_P) ?
+    const Real k_out = (kOutTypes[conv] == RAY_P) ?
                         mParams.GetKP() : mParams.GetKS();
     const R3::XYZ e_out = AA.Express((*pTOA)[toa_index].XYZ());
     const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
@@ -585,28 +639,7 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
   result.IsReal = accepted;
 
   if (accepted) {
-    raytype ort = out_types[conv];
-
-    // Ray polarization depends on conversion type (same rule as
-    // GetRandomScatteredRelativePhonon()):
-    Real relpol = 0;
-    switch (conv) {
-    case GSS:
-      relpol = m_spol[toa_index];
-      break;
-    default:
-      relpol = 0;
-      break;
-    }
-
-    if (cm_NoDeflect_b) {     // Event rate stays anisotropic, but the
-                              // reported deflection is suppressed:
-      result.Rel = Phonon(S2::ThetaPhi(0,0), intype);
-      result.Rel.SetPolarization(0);
-    } else {
-      result.Rel = Phonon((*pTOA)[toa_index], ort);
-      result.Rel.SetPolarization(relpol);
-    }
+    result.Rel = BuildRelativePhonon(conv, toa_index, intype);
   }
 
   return result;
@@ -631,11 +664,6 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
 Scatterer::AnisoAttempt
 Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
                                       const S2::ThetaPhi & dir, Real pol) {
-
-  raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
-                          RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to
-                                         // output raytypes (RAY_P or
-                                         // RAY_S)
 
   const R3::XYZ up = ECS.GetUp(loc);
   const Real pol_used = (intype == RAY_P) ?
@@ -676,14 +704,33 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
     toa_index = d.Toa;
 
     // 3. Compute the exchange wavevector m = k_out*e_out - k_in*dir:
-    const Real k_out = (out_types[conv] == RAY_P) ?
+    const Real k_out = (kOutTypes[conv] == RAY_P) ?
                         mParams.GetKP() : mParams.GetKS();
     const R3::XYZ e_out = AA.Express((*pTOA)[toa_index].XYZ());
     const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
 
     // 4. Exact accept/reject using the stored proposal weight and a
     //    freshly-computed cell sum (never the stored one -- see
-    //    AxiProposal::Draw's header comment):
+    //    AxiProposal::Draw's header comment). A non-positive Weight
+    //    would make p a 0/0 (or negative) NaN/garbage value that
+    //    neither the bound-violation check below nor the acceptance
+    //    test can catch (NaN compares false to everything), so fail
+    //    loudly instead: DrawProposal() must never actually hand back
+    //    such an entry (the Scatterer constructor's eps==0+
+    //    --overridemfp guard rules out the one known way to reach an
+    //    identically-zero table), so this is a belt-and-braces check.
+    if (d.Weight <= 0.0) {
+      std::ostringstream oss;
+      oss << "AxiProposal drew a non-positive Weight: ax=" << mParams.GetAx()
+          << " ay=" << mParams.GetAy() << " az=" << mParams.GetAz()
+          << " kappa=" << mParams.GetKappa()
+          << " u_rel=(" << u_rel.x() << "," << u_rel.y() << ","
+          << u_rel.z() << ")"
+          << " conv=" << (int)conv << " toa=" << toa_index
+          << " Weight=" << d.Weight;
+      throw std::logic_error(oss.str());
+    }
+
     const Real ratio = mParams.AnisoRatio(ToFabric(loc, m));
     const Real p = ratio * d.CellSum / d.Weight;
 
@@ -716,25 +763,7 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
   result.IsReal = accepted;
 
   if (accepted) {
-    raytype ort = out_types[conv];
-
-    Real relpol = 0;
-    switch (conv) {
-    case GSS:
-      relpol = m_spol[toa_index];
-      break;
-    default:
-      relpol = 0;
-      break;
-    }
-
-    if (cm_NoDeflect_b) {
-      result.Rel = Phonon(S2::ThetaPhi(0,0), intype);
-      result.Rel.SetPolarization(0);
-    } else {
-      result.Rel = Phonon((*pTOA)[toa_index], ort);
-      result.Rel.SetPolarization(relpol);
-    }
+    result.Rel = BuildRelativePhonon(conv, toa_index, intype);
   }
 
   return result;
@@ -800,8 +829,6 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
                                        const S2::S2Set & dirs,
                                        Real & rate, Real & dipole) const {
 
-  raytype out_types[4] = {RAY_P, RAY_S, RAY_P, RAY_S};  // (GPP,GPS,GSP,GSS)
-
   out_types_e c1, c2;
   if (intype == RAY_P) { c1 = GPP; c2 = GPS; }
   else                 { c1 = GSP; c2 = GSS; }
@@ -828,7 +855,7 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
 
     for (int ci = 0; ci < 2; ci++) {
       const out_types_e conv = convs[ci];
-      const Real k_out = (out_types[conv] == RAY_P) ?
+      const Real k_out = (kOutTypes[conv] == RAY_P) ?
                           mParams.GetKP() : mParams.GetKS();
       const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
       const Real w = gvals[conv] * mParams.AnisoRatio(m);

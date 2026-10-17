@@ -1485,6 +1485,88 @@ TEST(isolated_axi_overridemfp) {
 }
 
 
+// ::: Fix round 1, controller ruling R11 :::
+//
+//   --overridemfp + eps==0 on an anisotropic Scatterer must throw
+//   std::logic_error at construction (both samplers), rather than the
+//   axisymmetric sampler's accept/reject step computing a silent 0/0
+//   NaN that can't trip the bound-violation check and hangs
+//   --overridemfp's "loop until accepted" forever (every AxiProposal
+//   bin weight, and every general-sampler mPDists entry, is identically
+//   0 when eps==0 -- see ScatterParams::PSATO()'s eps^2 prefactor).
+//   Each needs its own fresh process (Scatterer::OverrideMFP() is
+//   class-static and unresettable within one run), hence isolated_*.
+//
+
+TEST(isolated_axi_overridemfp_eps_zero_throws) {
+
+  UseTOADegree(5);
+  Scatterer::OverrideMFP(100, 50);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5, 0.5, 0.0);  // eps=0
+
+  bool threw = false;
+  std::string what;
+  try {
+    Scatterer scat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+  } catch (const std::logic_error & e) {
+    threw = true;
+    what = e.what();
+  }
+  CHECK_MSG(threw, "SAMPLER_AXISYMMETRIC construction under "
+           "--overridemfp + eps=0 should throw std::logic_error");
+  CHECK_MSG(what.find("eps") != std::string::npos,
+           "exception message should mention eps: " << what);
+
+}
+
+
+TEST(isolated_general_overridemfp_eps_zero_throws) {
+
+  UseTOADegree(5);
+  Scatterer::OverrideMFP(100, 50);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5, 0.5, 0.0);  // eps=0
+
+  bool threw = false;
+  std::string what;
+  try {
+    Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+  } catch (const std::logic_error & e) {
+    threw = true;
+    what = e.what();
+  }
+  CHECK_MSG(threw, "SAMPLER_GENERAL construction under "
+           "--overridemfp + eps=0 should throw std::logic_error");
+  CHECK_MSG(what.find("eps") != std::string::npos,
+           "exception message should mention eps: " << what);
+
+}
+
+
+TEST(isolated_isotropic_overridemfp_eps_zero_unaffected) {
+
+  // Controller ruling R11 only targets anisotropic scatterers:
+  // isotropic behavior (today's exact path) must stay untouched, even
+  // under --overridemfp with eps=0.
+  UseTOADegree(5);
+  Scatterer::OverrideMFP(100, 50);
+  ScatterParams sp = LopNorCrust(0.5, 0.5, 0.5, 0.5, 0.0);  // isotropic, eps=0
+
+  bool threw = false;
+  Scatterer * scat = 0;
+  try {
+    scat = new Scatterer(sp, Scatterer::SAMPLER_AUTO);
+  } catch (...) {
+    threw = true;
+  }
+  CHECK_MSG(!threw, "isotropic construction under --overridemfp + eps=0 "
+           "must not throw");
+  CHECK(!scat->IsAnisotropic());
+  CHECK(NearRel(scat->GetMajorantMeanFreePath(RAY_P), 100.0, 1e-12));
+  delete scat;
+
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
