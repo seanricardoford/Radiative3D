@@ -389,32 +389,35 @@ Grid::model_target_e Grid::GetModelType() const {
 //
 void Grid::DumpGridToAscii() const {
 
-  // Detect if any node has anisotropic heterogeneity
+  // Detect if any node has anisotropic heterogeneity by checking nodes with data
   bool has_anisotropy = false;
   for (Index k=0; k<mNk && !has_anisotropy; k++) {
     for (Index j=0; j<mNj && !has_anisotropy; j++) {
       for (Index i=0; i<mNi && !has_anisotropy; i++) {
-        if (!Node(i,j,k).IsDiscontinuous()) {
-          // For continuous nodes, check the ABOVE data
+        const GridNode & node = Node(i,j,k);
+
+        // Try to access ABOVE data; if it exists and is anisotropic, flag it
+        // Data() will raise if no data was set; catch that and skip the node
+        try {
+          if (!node.Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
+            has_anisotropy = true;
+            break;
+          }
+        } catch (...) {
+          // No data set for ABOVE, continue to next node
+          continue;
+        }
+
+        // For discontinuous nodes, also check BELOW
+        if (node.IsDiscontinuous()) {
           try {
-            if (!Node(i,j,k).Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
+            if (!node.Data(GridNode::GN_BELOW).getHS().IsIsotropic()) {
               has_anisotropy = true;
+              break;
             }
           } catch (...) {
-            // Skip nodes without data
+            // No data set for BELOW, continue
           }
-        } else {
-          // For discontinuous nodes, check both ABOVE and BELOW
-          try {
-            if (!Node(i,j,k).Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
-              has_anisotropy = true;
-            }
-          } catch (...) {}
-          try {
-            if (!Node(i,j,k).Data(GridNode::GN_BELOW).getHS().IsIsotropic()) {
-              has_anisotropy = true;
-            }
-          } catch (...) {}
         }
       }
     }

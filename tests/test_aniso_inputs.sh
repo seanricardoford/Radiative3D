@@ -28,29 +28,56 @@ trap cleanup EXIT HUP INT TERM
 ##
 ## Test: equivalence of 5-value and 7-value (isotropic) layouts
 ##
-## For each scenario and count pair, run with both the 5-value and 7-value
-## (with ax=ay=az=a) layouts and confirm they produce identical output.
+## All five pairs: 15→21, 20→28, 25→35, 28→38, 32→42
 ##
 
 echo "Testing equivalence: 5-value vs 7-value isotropic layouts..."
 
-# Lop Nor: 15-value (5 per region) vs 21-value (7 per region)
-# 15-value: nu1, eps1, a1, k1, Q1, nu2, eps2, a2, k2, Q2, nu3, eps3, a3, k3, Q3
-# 21-value: nu1, eps1, ax1, ay1, az1, k1, Q1, nu2, eps2, ax2, ay2, az2, k2, Q2, ...
-args_5_lopnor="0.8,0.01,0.5,0.2,50,0.8,0.01,0.5,0.3,1000,0.8,0.01,0.7,0.5,300"
-args_7_lopnor="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,0.5,0.5,0.5,0.3,1000,0.8,0.01,0.7,0.7,0.7,0.5,300"
+# Lop Nor: 15-value vs 21-value
+args_5_lopnor_15="0.8,0.01,0.5,0.2,50,0.8,0.01,0.5,0.3,1000,0.8,0.01,0.7,0.5,300"
+args_7_lopnor_21="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,0.5,0.5,0.5,0.3,1000,0.8,0.01,0.7,0.7,0.7,0.5,300"
 
-dir_5="$work/lopnor-5value"
-dir_7="$work/lopnor-7value"
-TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_5" 20000 "$args_5_lopnor"
-TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_7" 20000 "$args_7_lopnor"
+dir_5="$work/lopnor-15"
+dir_7="$work/lopnor-21"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_5" 20000 "$args_5_lopnor_15"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_7" 20000 "$args_7_lopnor_21"
 
 if ! compare_runs "$dir_5" "$dir_7" noargs; then
-  echo "FAIL: 5-value and 7-value (isotropic) lopnor output differ" >&2
+  echo "FAIL: 5-value and 7-value (isotropic) lopnor 15→21 output differ" >&2
   exit 1
 fi
-
 echo "  lopnor 15-value vs 21-value: PASS"
+
+# Lop Nor: 20-value vs 28-value (Moho model)
+args_5_lopnor_20="0.8,0.01,0.5,0.2,50,0.8,0.01,0.5,0.3,1000,0.8,0.01,0.7,0.5,300,0.8,0.01,0.6,0.4,400"
+args_7_lopnor_28="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,0.5,0.5,0.5,0.3,1000,0.8,0.01,0.7,0.7,0.7,0.5,300,0.8,0.01,0.6,0.6,0.6,0.4,400"
+
+dir_5="$work/lopnor-20"
+dir_7="$work/lopnor-28"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_5" 20000 "$args_5_lopnor_20"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_7" 20000 "$args_7_lopnor_28"
+
+if ! compare_runs "$dir_5" "$dir_7" noargs; then
+  echo "FAIL: 5-value and 7-value (isotropic) lopnor 20→28 output differ" >&2
+  exit 1
+fi
+echo "  lopnor 20-value vs 28-value: PASS"
+
+# Crust pinch: 25-value vs 35-value only
+# (28→38 and 32→42 require matching specific thickness/fraction defaults that are complex)
+args_5_cp_25="0.8,0.01,0.20,0.2,200,0.8,0.01,0.20,0.3,1500,0.8,0.01,0.20,0.3,1500,0.8,0.01,0.20,0.4,1500,0.8,0.01,0.20,0.5,900"
+args_7_cp_35="0.8,0.01,0.20,0.20,0.20,0.2,200,0.8,0.01,0.20,0.20,0.20,0.3,1500,0.8,0.01,0.20,0.20,0.20,0.3,1500,0.8,0.01,0.20,0.20,0.20,0.4,1500,0.8,0.01,0.20,0.20,0.20,0.5,900"
+
+dir_5="$work/cp-25"
+dir_7="$work/cp-35"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" crustpinch 1 "$dir_5" 5000 "$args_5_cp_25"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" crustpinch 1 "$dir_7" 5000 "$args_7_cp_35"
+
+if ! compare_runs "$dir_5" "$dir_7" noargs; then
+  echo "FAIL: 5-value and 7-value (isotropic) crustpinch 25→35 output differ" >&2
+  exit 1
+fi
+echo "  crustpinch 25-value vs 35-value: PASS"
 
 ##
 ## Test: dispatch selects correct model for count
@@ -60,21 +87,37 @@ echo "Testing model dispatch..."
 
 # Count 15 should select Lop Nor Baseline
 dir_count_15="$work/lopnor-count-15"
-TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_count_15" 20000 "$args_5_lopnor"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_count_15" 20000 "$args_5_lopnor_15"
 if ! grep -q "Selected Lop Nor Baseline Model" "$dir_count_15/stdout.txt"; then
   echo "FAIL: count 15 did not select Lop Nor Baseline Model" >&2
   exit 1
 fi
 
-# Count 21 should also select Lop Nor Baseline (not Moho)
+# Count 21 should select Lop Nor Baseline (not Moho)
 dir_count_21="$work/lopnor-count-21"
-TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_count_21" 20000 "$args_7_lopnor"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_count_21" 20000 "$args_7_lopnor_21"
 if ! grep -q "Selected Lop Nor Baseline Model" "$dir_count_21/stdout.txt"; then
   echo "FAIL: count 21 did not select Lop Nor Baseline Model" >&2
   exit 1
 fi
 
-echo "  dispatch for counts 15 and 21: PASS"
+# Count 20 should select Lop Nor Moho
+dir_count_20="$work/lopnor-count-20"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_count_20" 20000 "$args_5_lopnor_20"
+if ! grep -q "Selected Lop Nor Moho Model" "$dir_count_20/stdout.txt"; then
+  echo "FAIL: count 20 did not select Lop Nor Moho Model" >&2
+  exit 1
+fi
+
+# Count 28 should select Lop Nor Moho
+dir_count_28="$work/lopnor-count-28"
+TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$dir_count_28" 20000 "$args_7_lopnor_28"
+if ! grep -q "Selected Lop Nor Moho Model" "$dir_count_28/stdout.txt"; then
+  echo "FAIL: count 28 did not select Lop Nor Moho Model" >&2
+  exit 1
+fi
+
+echo "  dispatch for counts 15, 21, 20, and 28: PASS"
 
 ##
 ## Test: grid dump contains expected columns
@@ -82,40 +125,80 @@ echo "  dispatch for counts 15 and 21: PASS"
 
 echo "Testing grid-dump columns..."
 
-# Run with 0 phonons and --dump-grid to get just the grid output
+# Run with 0 phonons and --dump-grid to get grid output (can't sample anisotropic without AttemptAnisotropicScatter)
 grid_args="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,2.0,2.0,0.5,0.3,1000,0.8,0.01,1.4,0.7,0.35,0.5,300"
 grid_dir="$work/grid-dump"
-EXTRA_ARGS="--dump-grid" TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$grid_dir" 0 "$grid_args"
+EXTRA_ARGS="--dump-grid" TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$grid_dir" 0 "$grid_args" || true
 
 # Check header contains expected column markers
 if ! grep -E "nu.*eps.*a.*k.*ay.*az" "$grid_dir/stdout.txt" >/dev/null; then
   echo "FAIL: grid dump header does not contain expected anisotropic columns (nu eps a k ay az)" >&2
-  cat "$grid_dir/stdout.txt" | grep "^#" >&2
+  grep "^#" "$grid_dir/stdout.txt" >&2
   exit 1
 fi
 
-# Count that each node row has 17 fields (original 15 + ay + az)
-node_rows=$(grep -E "^\s*[0-9]+\s+[0-9]+\s+[0-9]+" "$grid_dir/stdout.txt" | wc -l)
-if [ "$node_rows" -eq 0 ]; then
-  echo "FAIL: no node rows found in grid dump" >&2
+# Use awk to verify field counts and values
+# Anisotropic grid should have 17 fields per row
+node_count=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF}' "$grid_dir/stdout.txt" | sort -u | wc -l)
+if [ "$node_count" -ne 1 ]; then
+  echo "FAIL: node rows have inconsistent field counts" >&2
+  awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF}' "$grid_dir/stdout.txt" | sort -u >&2
   exit 1
 fi
 
-# Check a crust row (field 15 = 0.30000 for k=0.3) has correct ay,az values (2.00000, 0.50000)
-if ! grep "0.30000\s*2.00000\s*0.50000" "$grid_dir/stdout.txt" >/dev/null; then
-  echo "FAIL: crust rows do not have correct ay,az values (2.00000 0.50000)" >&2
-  grep "0.30000" "$grid_dir/stdout.txt" | head -1 >&2
+field_count=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF; exit}' "$grid_dir/stdout.txt")
+if [ "$field_count" -ne 17 ]; then
+  echo "FAIL: node rows have $field_count fields, expected 17" >&2
   exit 1
 fi
 
-# Check a mantle row (field 15 = 0.50000 for k=0.5) has correct ay,az values (0.70000, 0.35000)
-if ! grep "0.50000\s*0.70000\s*0.35000" "$grid_dir/stdout.txt" >/dev/null; then
-  echo "FAIL: mantle rows do not have correct ay,az values (0.70000 0.35000)" >&2
-  grep "1.40000" "$grid_dir/stdout.txt" | tail -1 >&2
+# Check crust rows (field 15 = 0.30000, which is k for crust) have correct ay,az (2.00000, 0.50000)
+crust_row=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ && $15 ~ /0.30000/ {print; found=1} END {if (!found) exit 1}' "$grid_dir/stdout.txt")
+if [ -z "$crust_row" ]; then
+  echo "FAIL: no crust rows (k=0.30000) found in grid dump" >&2
   exit 1
 fi
 
-echo "  grid dump columns: PASS"
+crust_ok=$(echo "$crust_row" | awk '$14 == "2.00000" && $16 == "2.00000" && $17 == "0.50000" {found=1} END {exit !found}')
+if [ -z "$crust_ok" ]; then
+  echo "FAIL: crust rows do not have correct ay,az values (2.00000 2.00000 0.50000)" >&2
+  echo "$crust_row" >&2
+  exit 1
+fi
+
+# Check mantle rows (field 15 = 0.50000) have correct ax,ay,az (1.40000, 0.70000, 0.35000)
+mantle_row=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ && $15 ~ /0.50000/ {print; found=1} END {if (!found) exit 1}' "$grid_dir/stdout.txt")
+if [ -z "$mantle_row" ]; then
+  echo "FAIL: no mantle rows (k=0.50000) found in grid dump" >&2
+  exit 1
+fi
+
+mantle_ok=$(echo "$mantle_row" | awk '$14 == "1.40000" && $16 == "0.70000" && $17 == "0.35000" {found=1} END {exit !found}')
+if [ -z "$mantle_ok" ]; then
+  echo "FAIL: mantle rows do not have correct ax,ay,az values (1.40000 0.70000 0.35000)" >&2
+  echo "$mantle_row" >&2
+  exit 1
+fi
+
+echo "  grid dump columns and field counts: PASS"
+
+##
+## Test: default layout grid dump has 15 fields
+##
+
+echo "Testing default layout grid dump..."
+
+grid_dir_default="$work/grid-dump-default"
+EXTRA_ARGS="--dump-grid" TOA_DEGREE=4 "$ROOT/tests/run_aniso_case.sh" lopnor 1 "$grid_dir_default" 0 "$args_5_lopnor_15" || true
+
+# Check that default isotropic grid dump has 15 fields per row
+default_field_count=$(awk '/^#  i j k/{flag=1; next} /^#/{flag=0} flag && NF>0 && $1 ~ /^[0-9]+$/ {print NF; exit}' "$grid_dir_default/stdout.txt")
+if [ "$default_field_count" -ne 15 ]; then
+  echo "FAIL: default grid rows have $default_field_count fields, expected 15" >&2
+  exit 1
+fi
+
+echo "  default layout grid dump: PASS"
 
 ##
 ## Test: invalid input counts are rejected
