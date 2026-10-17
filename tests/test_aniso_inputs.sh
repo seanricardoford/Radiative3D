@@ -167,14 +167,35 @@ if ! grep -E "nu.*eps.*a.*k.*ay.*az" "$grid_dir/stdout.txt" >/dev/null; then
 fi
 
 # Use awk to verify field counts and values
-# Anisotropic grid should have 17 fields per row (excluding *** rows which have 18 due to leading space)
+# Anisotropic grid rows (both real-data rows and "***" missing-data
+# placeholder rows) must all have exactly 17 fields: the spec says every
+# row, including "***" rows, gets two extra columns (ay, az) after
+# kappa, so do-lopnor.sh's Octave `load` keeps working after its
+# `sed 's/\*\*\*/000/g'` pass (which only substitutes values, never
+# changes field counts).
+#
+# I1 regression: this must check EVERY non-comment data row in the
+# block (both data and "***" rows), not just the ones that already
+# happen to have 17 fields -- filtering to NF==17 first, as an earlier
+# version of this check did, can never fail no matter how many fields
+# the "***" rows actually have. The two non-data header lines right
+# after the column-name comment ("ni nj nk" and the index-base "0",
+# see Grid::DumpGridToAscii()) are excluded by requiring NF>=15, which
+# is below any real or placeholder row's field count.
 # Data starts after the header line and ends at "#  END"
-node_count=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==17 {print NF}' "$grid_dir/stdout.txt" | sort -u | wc -l)
-if [ "$node_count" -ne 1 ]; then
-  echo "FAIL: node rows have inconsistent field counts" >&2
-  # Debug output
-  echo "Field count distribution for rows with 15-18 fields:" >&2
-  awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF>=15 && NF<=18 {print NF}' "$grid_dir/stdout.txt" | sort | uniq -c >&2
+bad_field_counts=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0}
+  flag && $0 !~ /^#/ && NF>=15 && NF!=17 {print NF}' "$grid_dir/stdout.txt" | sort -u)
+if [ -n "$bad_field_counts" ]; then
+  echo "FAIL: some grid-dump rows (data or ***) do not have 17 fields" >&2
+  echo "Field count distribution for all data/placeholder rows:" >&2
+  awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0}
+    flag && $0 !~ /^#/ && NF>=15 {print NF}' "$grid_dir/stdout.txt" | sort | uniq -c >&2
+  exit 1
+fi
+
+field_count=$(awk '/^#  i j k/{flag=1; next} /^#  END/{flag=0} flag && NF==17 {print NF; exit}' "$grid_dir/stdout.txt")
+if [ "$field_count" -ne 17 ]; then
+  echo "FAIL: node rows have $field_count fields, expected 17" >&2
   exit 1
 fi
 

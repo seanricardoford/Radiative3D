@@ -254,8 +254,16 @@ Real ScatterParams::PSATO_Aniso(const R3::XYZ & m) const {
 // denominator term along the shortest fabric axis dominates, e.g. m
 // purely along that axis, or trivially at m=0).
 //
+// Computed as AnisoMajorantFactor()*AnisoAcceptance(m) rather than
+// PSATO_Aniso(m)/PSATO(m.Mag()): algebraically identical (the eps^2 and
+// Gamma-function prefactors in PSATO_Aniso and PSATO cancel exactly,
+// leaving the ax*ay*az/a^3 majorant factor times the acceptance-ratio
+// bracket), but this form is well-defined at eps=0 -- PSATO_Aniso/PSATO
+// is 0/0 there -- and it skips the tgamma/pow calls PSATO_Aniso and
+// PSATO otherwise repeat on every call.
+//
 Real ScatterParams::AnisoRatio(const R3::XYZ & m) const {
-  return PSATO_Aniso(m) / PSATO(m.Mag());
+  return AnisoMajorantFactor() * AnisoAcceptance(m);
 }
 
 

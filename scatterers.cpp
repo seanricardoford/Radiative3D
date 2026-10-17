@@ -121,6 +121,18 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
                         // forces it; SAMPLER_GENERAL never selects it.
 {
 
+  if (choice == SAMPLER_AXISYMMETRIC && par.GetAx() != par.GetAy()) {
+    // AxiProposal always builds with ah=GetAx(), silently ignoring ay.
+    // On a spec where ax!=ay that bound is invalid for the actual
+    // spectrum, which would later surface as a bound-violation throw in
+    // AttemptAxisymmetricScatter() (or worse, a wrong-but-undetected
+    // bound). SAMPLER_AXISYMMETRIC is test-only API (production always
+    // goes through SAMPLER_AUTO, which never selects it for a
+    // non-axisymmetric spec), so reject the misuse here instead.
+    throw std::logic_error(
+      "SAMPLER_AXISYMMETRIC requires ax == ay");
+  }
+
   if (cm_MFPOverride_b && mAnisotropic && mParams.GetEps() == 0.0) {
     // Controller ruling R11: with eps==0, every GSATO()/mPDists value
     // (and, for the axisymmetric sampler, every AxiProposal bin weight)

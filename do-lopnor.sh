@@ -61,14 +61,30 @@ SCAT3=0.8,0.01,0.7,0.5,300    # Scat Args (nu,eps,a,kappa) and Q in mantle
 # To enable Moho structure, uncomment the following:
 #SCAT3=$SCAT3,0.8,0.02,0.5,0.5,2000  # Scat Args in transition layers
 #
-# For anisotropic heterogeneity (seven-value layouts), use:
-#SCAT1=0.8,0.01,0.5,0.5,0.2,0.2,50   # Seven-value: (nu,eps,ax,ay,az,k,Q) in sedi's
-#SCAT2=0.8,0.01,0.5,0.5,0.3,0.3,1000 # Seven-value in crust
-#SCAT3=0.8,0.01,0.7,0.7,0.5,0.5,300  # Seven-value in mantle
-# For 21-value Baseline mode (3 regions, anisotropic):
-#SCAT1=0.8,0.01,0.5,0.5,0.2,0.2,50,$SCAT2,$SCAT3 # Total: 21 values
-# For 28-value Moho mode (4 regions, anisotropic):
-#SCAT1=0.8,0.01,0.5,0.5,0.2,0.2,50,$SCAT2,$SCAT3,0.8,0.02,0.5,0.5,0.5,0.5,2000  # Total: 28 values
+# For anisotropic heterogeneity (seven-value layouts: nu,eps,ax,ay,az,
+# kappa,Q per region), redefine SCAT1/SCAT2/SCAT3 directly with seven
+# values each -- COMPARGS below just concatenates whatever SCAT1,
+# SCAT2,SCAT3 hold, so there is no separate "21-value"/"28-value"
+# variable to build; redefining SCAT1..SCAT3 in place gives the right
+# count automatically (3 regions x 7 = 21 for Baseline, or 4 x 7 = 28
+# with Moho, below).
+#
+# Isotropic-equivalent example (ax=ay=az=a matches the 5-value defaults
+# above exactly -- useful for checking the seven-value parser without
+# changing physics):
+#SCAT1=0.8,0.01,0.5,0.5,0.5,0.2,50    # Seven-value, isotropic-equivalent, sedi's
+#SCAT2=0.8,0.01,0.5,0.5,0.5,0.3,1000  # Seven-value, isotropic-equivalent, crust
+#SCAT3=0.8,0.01,0.7,0.7,0.7,0.5,300   # Seven-value, isotropic-equivalent, mantle
+#
+# Axisymmetric example: crust heterogeneity stretched 4:1 horizontally
+# (ax=ay=2.0 km, az=0.5 km -- az is a scale length here, not the kappa
+# value; compare the design spec's own example):
+#SCAT2=0.8,0.01,2.0,2.0,0.5,0.3,1000  # Axisymmetric, horizontally stretched, crust
+#
+# To also enable Moho structure under the seven-value layout (4 regions,
+# 28 values total), append a seven-value transition-layer spec to SCAT3
+# (after SCAT3 above is set to a seven-value spec):
+#SCAT3=$SCAT3,0.8,0.02,0.5,0.5,0.5,0.5,2000  # Seven-value Scat Args in transition layer
 
 
 COMPARGS=$SCAT1,$SCAT2,$SCAT3

@@ -712,7 +712,42 @@ TEST(general_eps_zero) {
   const Real mfp = scat->GetMajorantMeanFreePath(RAY_P);
   CHECK(std::isinf(mfp));
   CHECK(mfp > 0.0);
+
+  // I3: eps=0 must not leak NaN into the reported (axis-averaged and
+  // directional) mean free paths -- AnisoRatio() used to compute
+  // PSATO_Aniso(m)/PSATO(|m|), a 0/0 NaN at eps=0. +inf is the correct,
+  // isotropic-convention value for a zero scattering rate.
+  const std::vector<Real> & mfps = scat->GetReportMFPs();
+  CHECK_MSG(mfps.size() == 8, "expected 8 AXI directional MFPs, got "
+           << mfps.size());
+  for (std::size_t i = 0; i < mfps.size(); ++i) {
+    CHECK_MSG(!std::isnan(mfps[i]), "GetReportMFPs()[" << i << "] is NaN");
+    CHECK_MSG(mfps[i] > 0.0, "GetReportMFPs()[" << i << "] is not positive");
+  }
   delete scat;
+
+}
+
+
+TEST(general_eps_zero_triaxial_ani) {
+
+  // I3 (triaxial/ANI path): the review's reproduction was specifically a
+  // triaxial (ax != ay != az) eps=0 crust row, which exercises the ANI
+  // (9-column) branch of ComputeReportStats()/GetReportMFPs(), not just
+  // the axisymmetric 8-column branch general_eps_zero already covers.
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 1, 0.5, 0.5, 0.0);  // eps=0, triaxial
+  CHECK(!sp.IsAxisymmetric());
+  CHECK(!sp.IsIsotropic());
+  Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+
+  const std::vector<Real> & mfps = scat.GetReportMFPs();
+  CHECK_MSG(mfps.size() == 9, "expected 9 ANI directional MFPs, got "
+           << mfps.size());
+  for (std::size_t i = 0; i < mfps.size(); ++i) {
+    CHECK_MSG(!std::isnan(mfps[i]), "GetReportMFPs()[" << i << "] is NaN");
+    CHECK_MSG(mfps[i] > 0.0, "GetReportMFPs()[" << i << "] is not positive");
+  }
 
 }
 
@@ -915,7 +950,7 @@ TEST(probdist_range) {
 //   constructor, exactly as Scatterer does with its own mPDists.
 //
 static void BuildIsoPDists(const ScatterParams & sp,
-                           const S2::TesselSphere & toas,
+                           const S2::S2Set & toas,
                            std::vector<ProbDist> & pdists) {
   pdists.clear();
   for (int c = 0; c < 4; ++c) {pdists.push_back(ProbDist((int)toas.size()));}
@@ -1081,6 +1116,69 @@ TEST(axi_bounds_valid) {
 }
 
 
+TEST(axi_sampler_rejects_ax_ne_ay) {
+
+  // M4: forcing SAMPLER_AXISYMMETRIC onto a non-axisymmetric (ax!=ay)
+  // spec must throw at construction rather than silently build
+  // AxiProposal with ah=GetAx() (ignoring ay), which gives an invalid
+  // bound for the actual spectrum.
+  UseTOADegree(5);
+  ScatterParams sp = LopNorCrust(2, 1, 0.5);  // ax=2 != ay=1
+  CHECK(!sp.IsAxisymmetric());
+  bool threw = false;
+  try {
+    Scatterer scat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
+    (void) scat;
+  } catch (const std::logic_error & e) {
+    threw = true;
+  }
+  CHECK_MSG(threw, "SAMPLER_AXISYMMETRIC on ax!=ay spec should throw "
+           "std::logic_error");
+
+  // Sanity: the same spec through SAMPLER_GENERAL (or AUTO) must not be
+  // affected by the new guard.
+  bool threwGeneral = false;
+  try {
+    Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+    (void) scat;
+  } catch (...) {
+    threwGeneral = true;
+  }
+  CHECK_MSG(!threwGeneral, "SAMPLER_GENERAL on ax!=ay spec must not throw");
+
+}
+
+
+TEST(axi_proposal_rejects_non_icosahedral_toa) {
+
+  // M5: AxiProposal's cell/block arithmetic assumes an icosahedral
+  // (TESS_ICO, size = 20*4^D) take-off-angle set. A non-icosahedral set
+  // must not be silently accepted -- it would make mCellBlock truncate
+  // (integer division), dropping the tail directions from every cell's
+  // range, a silent bias rather than a loud failure. S2::S2Set is just
+  // a std::vector<ThetaPhi> (see geom.hpp's typedef), so build one by
+  // hand at a size (100) that isn't a multiple of 20.
+  S2::S2Set oddToas;
+  for (int i = 0; i < 100; ++i) {
+    const Real theta = Geometry::Pi * (i + 0.5) / 100.0;
+    const Real phi    = 2.0 * Geometry::Pi * 0.61803398875 * i; // golden-angle spiral
+    oddToas.push_back(S2::ThetaPhi(theta, phi));
+  }
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, oddToas, pdists);
+
+  bool threw = false;
+  try {
+    AxiProposal axi(sp, oddToas, pdists);
+    (void) axi;
+  } catch (const std::logic_error & e) {
+    threw = true;
+  }
+  CHECK_MSG(threw, "AxiProposal on a non-icosahedral TOA set should throw "
+           "std::logic_error");
+
+}
 
 
 TEST(axi_matches_general) {
@@ -1393,6 +1491,17 @@ TEST(axi_eps_zero) {
   const Real mfpS = scat->GetMajorantMeanFreePath(RAY_S);
   CHECK(std::isinf(mfpP) && mfpP > 0.0);
   CHECK(std::isinf(mfpS) && mfpS > 0.0);
+
+  // I3: no NaN in the reported directional MFPs either (see
+  // general_eps_zero's comment -- same AnisoRatio() fix, exercised here
+  // via IntegrateRateAndDipole() on the axisymmetric sampler's path).
+  const std::vector<Real> & mfps = scat->GetReportMFPs();
+  CHECK_MSG(mfps.size() == 8, "expected 8 AXI directional MFPs, got "
+           << mfps.size());
+  for (std::size_t i = 0; i < mfps.size(); ++i) {
+    CHECK_MSG(!std::isnan(mfps[i]), "GetReportMFPs()[" << i << "] is NaN");
+    CHECK_MSG(mfps[i] > 0.0, "GetReportMFPs()[" << i << "] is not positive");
+  }
   delete scat;
 
 }

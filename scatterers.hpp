@@ -94,14 +94,14 @@ public:
                                 // ScatterParams (ax,ay,az not all
                                 // equal). AUTO defers to the spec:
                                 // isotropic specs use today's exact
-                                // path; axisymmetric specs use
-                                // SAMPLER_AXISYMMETRIC (falls back to
-                                // SAMPLER_GENERAL until that sampler
-                                // is implemented); all other specs use
-                                // SAMPLER_GENERAL. An explicit, non-
-                                // AUTO choice always forces the
-                                // anisotropic (general) sampling path,
-                                // even for an isotropic spec.
+                                // path; axisymmetric specs (ax==ay!=az)
+                                // use SAMPLER_AXISYMMETRIC; all other
+                                // specs use SAMPLER_GENERAL. An
+                                // explicit, non-AUTO choice always
+                                // forces the named sampling path, even
+                                // for an isotropic spec; forcing
+                                // SAMPLER_AXISYMMETRIC on a spec with
+                                // ax!=ay throws (see the constructor).
 
 protected:
 
@@ -270,6 +270,20 @@ public:
 
   Scatterer(ScatterParams par, sampler_e choice = SAMPLER_AUTO);
 
+  // Scatterers are always heap-allocated via GetScattererMatchingParams()
+  // and managed through the intrusive mpllPrev/mpllNext linked list
+  // (never copied or moved); an anisotropic, axisymmetric-sampler
+  // instance's mpAxi (AxiProposal) holds a const reference directly
+  // into this object's mPDists member, which a move would silently
+  // invalidate (the vector's contents move with the source object's
+  // mPDists, leaving mpAxi's reference pointing at the moved-from,
+  // now-empty vector). Delete copy and move explicitly so that
+  // invariant can't be broken by a future caller.
+  Scatterer(const Scatterer &) = delete;
+  Scatterer & operator=(const Scatterer &) = delete;
+  Scatterer(Scatterer &&) = delete;
+  Scatterer & operator=(Scatterer &&) = delete;
+
 
 protected:
 ;
@@ -321,9 +335,12 @@ public:
   Real GetMajorantMeanFreePath(raytype rt) const {return mMeanFreeP[rt];}
                       // The mean free path used to draw tentative
                       // (proposal) collision distances. For an
-                      // anisotropic (general-sampler) Scatterer this
-                      // is the isotropic (a=a_min) mean free path
-                      // divided by mParams.AnisoMajorantFactor().
+                      // anisotropic Scatterer this is the isotropic
+                      // (a=a_min) mean free path divided by the
+                      // sampler's majorant factor: mParams.
+                      // AnisoMajorantFactor() for the general sampler,
+                      // or mpAxi->MajorantRate(rt)'s reciprocal for the
+                      // axisymmetric sampler (see the constructor).
 
   struct AnisoAttempt {
     bool    IsReal;  // True if this attempt produced a real (accepted)

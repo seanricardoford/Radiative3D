@@ -157,7 +157,7 @@ void GridNode::OutputAsAscii(std::ostream & out,
         << std::setw(11) << oloc.x3() << "  "
         << "        ***       ***       ***         ***       *** ";
     if (aniso_columns) {
-      out << "        ***       ***       *** ";
+      out << "        ***       *** ";
     }
     out << "        ***       ***       ***       ***\n";
   }

@@ -50,13 +50,26 @@ SCAT5=0.8,0.01,0.20,0.5,900   # Scat Args in mantle layer
                               # (Note: Q's specified are Q_s values.
                               # Q_p is computed from assumption that
                               # Q_kappa is infinite.)
-# For anisotropic heterogeneity (seven-value layouts, 35 total):
-#SCAT1=0.8,0.01,0.20,0.20,0.2,0.2,200   # Seven-value: (nu,eps,ax,ay,az,k,Q) in sedi's
-#SCAT2=0.8,0.01,0.20,0.20,0.3,0.3,1500  # Seven-value in crust
-#SCAT3=0.8,0.01,0.20,0.20,0.3,0.3,1500  # Seven-value in crust, pinched region
-#SCAT4=0.8,0.01,0.20,0.20,0.4,0.4,1500  # Seven-value in moho
-#SCAT5=0.8,0.01,0.20,0.20,0.5,0.5,900   # Seven-value in mantle layer
-#COMPARGS=$SCAT1,$SCAT2,$SCAT3,$SCAT4,$SCAT5,$LAYERS,$PINCH  # Total: 35 values (7*5 regions)
+# For anisotropic heterogeneity (seven-value layouts: nu,eps,ax,ay,az,
+# kappa,Q per region), redefine SCAT1..SCAT5 directly with seven values
+# each. Isotropic-equivalent example (ax=ay=az=a matches the 5-value
+# defaults above exactly -- useful for checking the seven-value parser
+# without changing physics):
+#SCAT1=0.8,0.01,0.20,0.20,0.20,0.2,200   # Seven-value, isotropic-equivalent, sedi's
+#SCAT2=0.8,0.01,0.20,0.20,0.20,0.3,1500  # Seven-value, isotropic-equivalent, crust
+#SCAT3=0.8,0.01,0.20,0.20,0.20,0.3,1500  # Seven-value, isotropic-equivalent, crust, pinched region
+#SCAT4=0.8,0.01,0.20,0.20,0.20,0.4,1500  # Seven-value, isotropic-equivalent, moho
+#SCAT5=0.8,0.01,0.20,0.20,0.20,0.5,900   # Seven-value, isotropic-equivalent, mantle layer
+#
+# Axisymmetric example: crust heterogeneity stretched 4:1 horizontally
+# (ax=ay=0.80 km, az=0.20 km -- az is a scale length here, not the
+# kappa value; compare the design spec's own example):
+#SCAT2=0.8,0.01,0.80,0.80,0.20,0.3,1500  # Axisymmetric, horizontally stretched, crust
+#
+# COMPARGS below concatenates SCAT1..SCAT5 (5 regions x 7 = 35 values),
+# then LAYERS (+3 = 38), then PINCH (+4 = 42 total), so with both
+# LAYERS and PINCH included -- as COMPARGS is assigned below -- the
+# seven-value form passes 42 values, not 35.
 
 LAYERS=2.0,30.0,5.0           # SediThick,CrustThick,MohoThick
 PINCH=.3666667,.4736842,1,1   # PinchFrac,DepthFrac,SediFrac,MohoFrac

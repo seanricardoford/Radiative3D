@@ -67,6 +67,19 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   mNumCells  = 20 * Pow4(coarseDeg);
   mCellBlock = mToaSize / mNumCells;
 
+  if (mToaSize != mNumCells * mCellBlock) {
+    // The cell/block arithmetic throughout this class (hierarchical
+    // TesselSphere ordering, contiguous per-cell blocks of fine
+    // directions) assumes toa.size() is exactly 20*4^D for some D, as
+    // TESS_ICO always produces. A non-icosahedral take-off-angle set
+    // would silently drop the tail directions from every cell's range,
+    // which is a silent bias rather than a loud failure. Production
+    // always uses TESS_ICO; this is a belt-and-braces guard.
+    throw std::logic_error(
+      "AxiProposal requires an icosahedral (TESS_ICO) take-off-angle "
+      "set: toa.size() is not a multiple of mNumCells");
+  }
+
   BuildMirrorPerms(coarseDeg);
 
   // Representative directions (for bound construction only -- these
