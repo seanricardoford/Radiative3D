@@ -50,6 +50,8 @@
 #include "geom_s2.hpp"
 #include "scatparams.hpp"
 #include "sources.hpp"
+#include "phonons.hpp"
+#include "scatterers.hpp"
 
 
 //////////////////////////////////////////////////////////////////////////
@@ -353,6 +355,32 @@ TEST(matching_distinguishes) {
   CHECK(spA.CompareRoughly(spPerm) > 0.0);
   CHECK(spA.CompareRoughly(spIso)  > 0.0);
   CHECK(spA.CompareRoughly(spA2) == 0.0);
+
+}
+
+
+TEST(scatterer_guard) {
+
+  // When a Scatterer is constructed with anisotropic HetSpec parameters,
+  // GetRandomScatteredRelativePhonon() must throw std::logic_error rather
+  // than silently proceeding with isotropic sampling.
+
+  ScatterParams aniso = LopNorCrust(2, 2, 0.5);  // anisotropic: ax != az
+  CHECK(!aniso.IsIsotropic());
+
+  UseTOADegree(2);  // Set up TOA array for Scatterer
+  Scatterer scatt(aniso);
+
+  bool threw = false;
+  try {
+    scatt.GetRandomScatteredRelativePhonon(RAY_P);
+  } catch (const std::logic_error & e) {
+    const std::string msg(e.what());
+    if (msg.find("anisotropic scatterers must be sampled through AttemptAnisotropicScatter") != std::string::npos) {
+      threw = true;
+    }
+  }
+  CHECK_MSG(threw, "GetRandomScatteredRelativePhonon should throw std::logic_error for anisotropic params");
 
 }
 

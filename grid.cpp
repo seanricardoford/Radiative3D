@@ -133,8 +133,9 @@ GridData GridNode::Data(layers_e lay) const {
 //   Earth Coordinate System (ECS) in which the node locations and
 //   data are stored.  (See ecs.hpp for more.)
 //
-void GridNode::OutputAsAscii(std::ostream & out, 
-                             const std::string & prefix) const {
+void GridNode::OutputAsAscii(std::ostream & out,
+                             const std::string & prefix,
+                             bool aniso_columns) const {
 
   int num_lines = 2;
   if (mNextData == GN_BELOW) {num_lines = 1;}
@@ -150,12 +151,15 @@ void GridNode::OutputAsAscii(std::ostream & out,
   EarthCoords::Generic oloc = ECS.OutConvert(iloc); // ...and from ICS to OCS.
 
   if (num_lines == 0) {             // Then data is missing...
-    out << prefix 
+    out << prefix
         << std::setw(11) << oloc.x1() << " "
         << std::setw(11) << oloc.x2() << " "
         << std::setw(11) << oloc.x3() << "  "
-        << "        ***       ***       ***         ***       *** "
-        << "        ***       ***       ***       ***\n";
+        << "        ***       ***       ***         ***       *** ";
+    if (aniso_columns) {
+      out << "        ***       ***       *** ";
+    }
+    out << "        ***       ***       ***       ***\n";
   }
   else {
     for (int iside = 0; iside < num_lines; iside++) {
@@ -173,12 +177,22 @@ void GridNode::OutputAsAscii(std::ostream & out,
           << std::setw(9) << odat.Qs() << "   ";
       out.precision(5);
       out << std::setw(9) << odat.getHS().nu() << " "
-          << std::setw(9) << odat.getHS().eps() << " "
-          << std::setw(9) << odat.getHS().a() << " "
-          << std::setw(9) << odat.getHS().kappa() << "\n" ;
+          << std::setw(9) << odat.getHS().eps() << " ";
+      if (aniso_columns) {
+        out << std::setw(9) << odat.getHS().ax() << " ";
+      } else {
+        out << std::setw(9) << odat.getHS().a() << " ";
+      }
+      out << std::setw(9) << odat.getHS().kappa() << " ";
+      if (aniso_columns) {
+        out << std::setw(9) << odat.getHS().ay() << " "
+            << std::setw(9) << odat.getHS().az() << "\n";
+      } else {
+        out << "\n";
+      }
     }
   }
-                    
+
   out.flags(flags);                 // Restore ostream state
 }
 
@@ -374,28 +388,63 @@ Grid::model_target_e Grid::GetModelType() const {
 // METHOD:  Grid :: DumpGridToAscii()
 //
 void Grid::DumpGridToAscii() const {
-  
+
+  // Detect if any node has anisotropic heterogeneity
+  bool has_anisotropy = false;
+  for (Index k=0; k<mNk && !has_anisotropy; k++) {
+    for (Index j=0; j<mNj && !has_anisotropy; j++) {
+      for (Index i=0; i<mNi && !has_anisotropy; i++) {
+        if (!Node(i,j,k).IsDiscontinuous()) {
+          // For continuous nodes, check the ABOVE data
+          try {
+            if (!Node(i,j,k).Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
+              has_anisotropy = true;
+            }
+          } catch (...) {
+            // Skip nodes without data
+          }
+        } else {
+          // For discontinuous nodes, check both ABOVE and BELOW
+          try {
+            if (!Node(i,j,k).Data(GridNode::GN_ABOVE).getHS().IsIsotropic()) {
+              has_anisotropy = true;
+            }
+          } catch (...) {}
+          try {
+            if (!Node(i,j,k).Data(GridNode::GN_BELOW).getHS().IsIsotropic()) {
+              has_anisotropy = true;
+            }
+          } catch (...) {}
+        }
+      }
+    }
+  }
+
   std::ostream & out = std::cout;
   std::ostringstream nodeprefix;
 
   out << "#  R3D_GRID:\n"
       << "#  Line 1:  ni nj nk\n"
       << "#  Line 2:  Index_Base\n"
-      << "#  Lines 3 and up describe grid nodes:\n"
-      << "#  i j k    x y x    vp vs rho qp qs    nu eps a k\n"
-      << "#\n"
+      << "#  Lines 3 and up describe grid nodes:\n";
+  if (has_anisotropy) {
+    out << "#  i j k    x y x    vp vs rho qp qs    nu eps a k ay az\n";
+  } else {
+    out << "#  i j k    x y x    vp vs rho qp qs    nu eps a k\n";
+  }
+  out << "#\n"
       << mNi << " " << mNj << " " << mNk << "\n"
       << 0 << "\n";
- 
+
   for (Index k=0; k<mNk; k++) {
     for (Index j=0; j<mNj; j++) {
       for (Index i=0; i<mNi; i++) {
         nodeprefix.str(""); // Clear nodeprefix
         nodeprefix << std::right
-                   << std::setw(3) << i << " " 
-                   << std::setw(3) << j << " " 
+                   << std::setw(3) << i << " "
+                   << std::setw(3) << j << " "
                    << std::setw(3) << k << "  ";
-        Node(i,j,k).OutputAsAscii(out, nodeprefix.str());
+        Node(i,j,k).OutputAsAscii(out, nodeprefix.str(), has_anisotropy);
       }
     }
   }

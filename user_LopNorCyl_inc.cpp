@@ -35,6 +35,7 @@ void LopNorCylinder(Grid & gr, const std::vector<Real> & args) {
   using Elastic::QmQk;
   using Elastic::HetSpec;
   using Elastic::HSneak;
+  using Elastic::HSnexyzk;
 
   // Grid Dimension:
 
@@ -59,20 +60,29 @@ void LopNorCylinder(Grid & gr, const std::vector<Real> & args) {
   // Scattering Params, defaults and argument processing:
 
   Real CrustNu  = 0.8;          // Crustal Region Defaults
-  Real CrustEps = 0.05;         // 
-  Real CrustA   = 0.50;         // 
-  Real CrustK   = 0.5;          // 
-  Real CrustQ   = 1.0/0.0;      // 
+  Real CrustEps = 0.05;         //
+  Real CrustA   = 0.50;         //
+  Real CrustAx  = CrustA;       //
+  Real CrustAy  = CrustA;       //
+  Real CrustAz  = CrustA;       //
+  Real CrustK   = 0.5;          //
+  Real CrustQ   = 1.0/0.0;      //
 
   Real SediNu  = CrustNu;       // Sediments layer defaults
   Real SediEps = 0.06;
   Real SediA   = 0.25;
+  Real SediAx  = SediA;         //
+  Real SediAy  = SediA;         //
+  Real SediAz  = SediA;         //
   Real SediK   = CrustK;
   Real SediQ   = CrustQ;
 
   Real MantNu  = CrustNu;       // Mantle region defaults
   Real MantEps = 0.04;
   Real MantA   = 1.0;
+  Real MantAx  = MantA;         //
+  Real MantAy  = MantA;         //
+  Real MantAz  = MantA;         //
   Real MantK   = CrustK;
   Real MantQ   = CrustQ;
 
@@ -118,18 +128,52 @@ void LopNorCylinder(Grid & gr, const std::vector<Real> & args) {
     SediNu  = args.at(0);
     SediEps = args.at(1);
     SediA   = args.at(2);
+    SediAx  = SediA;
+    SediAy  = SediA;
+    SediAz  = SediA;
     SediK   = args.at(3);
     SediQ   = args.at(4);
     CrustNu  = args.at(5);
     CrustEps = args.at(6);
     CrustA   = args.at(7);
+    CrustAx  = CrustA;
+    CrustAy  = CrustA;
+    CrustAz  = CrustA;
     CrustK   = args.at(8);
     CrustQ   = args.at(9);
     MantNu  = args.at(10);
     MantEps = args.at(11);
     MantA   = args.at(12);
+    MantAx  = MantA;
+    MantAy  = MantA;
+    MantAz  = MantA;
     MantK   = args.at(13);
     MantQ   = args.at(14);
+    break;
+
+  case 21:  // Specified nu,eps,ax,ay,az,k,Q for three regions
+            //
+    SediNu  = args.at(0);
+    SediEps = args.at(1);
+    SediAx  = args.at(2);
+    SediAy  = args.at(3);
+    SediAz  = args.at(4);
+    SediK   = args.at(5);
+    SediQ   = args.at(6);
+    CrustNu  = args.at(7);
+    CrustEps = args.at(8);
+    CrustAx  = args.at(9);
+    CrustAy  = args.at(10);
+    CrustAz  = args.at(11);
+    CrustK   = args.at(12);
+    CrustQ   = args.at(13);
+    MantNu  = args.at(14);
+    MantEps = args.at(15);
+    MantAx  = args.at(16);
+    MantAy  = args.at(17);
+    MantAz  = args.at(18);
+    MantK   = args.at(19);
+    MantQ   = args.at(20);
     break;
 
   default:  // Unrecognized pattern of values
@@ -162,7 +206,7 @@ void LopNorCylinder(Grid & gr, const std::vector<Real> & args) {
   // Sheet 0: between: Surface/Air       <-- Name of "layer" above
   //              and: Soft-Sediments    <-- Name of "layer" below
 
-  HS = HSneak(SediNu,SediEps,SediA,SediK);
+  HS = HSnexyzk(SediNu,SediEps,SediAx,SediAy,SediAz,SediK);
   Q  = QmQk(SediQ);     // Parameter values in the "sediments" layer
 
   gr.WNode(0,0,0).SetLocation(LopX,LopY,LopZ[0]);
@@ -181,7 +225,7 @@ void LopNorCylinder(Grid & gr, const std::vector<Real> & args) {
   //              and: Upper-Crust
   //                                        
 
-  HS = HSneak(CrustNu, CrustEps, CrustA, CrustK);
+  HS = HSnexyzk(CrustNu,CrustEps,CrustAx,CrustAy,CrustAz,CrustK);
   Q  = QmQk(CrustQ);    // Parameter values in the "crust" layers
 
   gr.WNode(0,0,1).SetLocation(LopX,LopY,LopZ[1]);
@@ -229,7 +273,7 @@ void LopNorCylinder(Grid & gr, const std::vector<Real> & args) {
 
   gr.WNode(0,0,4).SetAttributes(VpVs(7.23, 4.00), 3.10, Q, HS);
 
-  HS = HSneak(MantNu, MantEps, MantA, MantK);
+  HS = HSnexyzk(MantNu,MantEps,MantAx,MantAy,MantAz,MantK);
   Q  = QmQk(MantQ);     // Parameter values in the "mantle" layers
                         //
                         //    |

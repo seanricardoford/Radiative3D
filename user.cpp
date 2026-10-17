@@ -71,7 +71,7 @@ void Grid::ConstructGridManual(int Selection, const std::vector<Real> &args) {
   case 2:                       // Officially ID 1, but set up some aliases in
   case 3:                       // case I want to differentiate in the future
   case 4:
-    if (args.size() >= 20) {
+    if (args.size() == 20 || args.size() == 28) {
       std::cout << LineHead << "Selected Lop Nor Moho Model (Layered).\n";
       LopNorCylinderMoho(*this, args);
     } else {

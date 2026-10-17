@@ -317,6 +317,12 @@ Real Scatterer::GetRandomPathLength(raytype intype) {
 //          incoming phonon.
 //
 Phonon Scatterer::GetRandomScatteredRelativePhonon(raytype intype) {
+  // Guard against anisotropic scattering via the isotropic path.
+  // Anisotropic scatterers must use AttemptAnisotropicScatter instead.
+  if (!mParams.IsIsotropic()) {
+    throw std::logic_error("anisotropic scatterers must be sampled through AttemptAnisotropicScatter");
+  }
+
   S2::S2Set & toa = (*pTOA);             // Alias
   raytype out_types[4] = {RAY_P, RAY_S,  // Maps conversion types
                           RAY_P, RAY_S}; // (GPP, GPS, GSP, GSS) to

@@ -18,6 +18,7 @@ void CrustPinchWCG(Grid & gr, const std::vector<Real> & args) {
   using Elastic::QmQk;
   using Elastic::HetSpec;
   using Elastic::HSneak;
+  using Elastic::HSnexyzk;
 
   Real sc_nu  = 0.8;    // Default scat params -
   Real sc_eps = 0.01;   // we'll scan args for user values
@@ -86,6 +87,35 @@ void CrustPinchWCG(Grid & gr, const std::vector<Real> & args) {
     QMo  = QmQk(args.at(19));
     HSMa = HSneak(args.at(20), args.at(21), args.at(22), args.at(23));
     QMa  = QmQk(args.at(24));
+    break;
+
+  case 42:  // 5 x neyxyzakq + layer thicks + pinch fractions
+            //
+    PinchFrac = args.at(35);
+    DepthFrac = args.at(36);
+    SediFrac  = args.at(37);
+    MohoFrac  = args.at(38);
+    /* FALL THROUGH  - no break; */
+
+  case 38:  // 5 x neyxyzakq + layer thicknesses
+            //
+    SediThick  = args.at(32);
+    CrustThick = args.at(33);
+    MohoThick  = args.at(34);
+    /* FALL THROUGH  - no break; */
+
+  case 35:  // 5 x neyxyzakq
+            //
+    HSSe = HSnexyzk(args.at(0), args.at(1), args.at(2), args.at(3), args.at(4), args.at(5));
+    QSe  = QmQk(args.at(6));
+    HSCr = HSnexyzk(args.at(7), args.at(8), args.at(9), args.at(10), args.at(11), args.at(12));
+    QCr  = QmQk(args.at(13));
+    HSPi = HSnexyzk(args.at(14), args.at(15), args.at(16), args.at(17), args.at(18), args.at(19));
+    QPi  = QmQk(args.at(20));
+    HSMo = HSnexyzk(args.at(21), args.at(22), args.at(23), args.at(24), args.at(25), args.at(26));
+    QMo  = QmQk(args.at(27));
+    HSMa = HSnexyzk(args.at(28), args.at(29), args.at(30), args.at(31), args.at(32), args.at(33));
+    QMa  = QmQk(args.at(34));
     break;
 
   default:  // Unrecognized pattern of values

@@ -18,6 +18,7 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   using Elastic::QmQk;
   using Elastic::HetSpec;
   using Elastic::HSneak;
+  using Elastic::HSnexyzk;
 
   // Grid Dimension:
 
@@ -54,26 +55,38 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   // Scattering Params, defaults and argument processing:
 
   Real CrustNu  = 0.8;          // Crustal Region Defaults
-  Real CrustEps = 0.05;         // 
-  Real CrustA   = 0.50;         // 
-  Real CrustK   = 0.5;          // 
-  Real CrustQ   = 1.0/0.0;      // 
+  Real CrustEps = 0.05;         //
+  Real CrustA   = 0.50;         //
+  Real CrustAx  = CrustA;       //
+  Real CrustAy  = CrustA;       //
+  Real CrustAz  = CrustA;       //
+  Real CrustK   = 0.5;          //
+  Real CrustQ   = 1.0/0.0;      //
 
   Real SediNu  = CrustNu;       // Sediments layer defaults
   Real SediEps = 0.06;
   Real SediA   = 0.25;
+  Real SediAx  = SediA;         //
+  Real SediAy  = SediA;         //
+  Real SediAz  = SediA;         //
   Real SediK   = CrustK;
   Real SediQ   = CrustQ;
 
   Real MantNu  = CrustNu;       // Mantle region defaults
   Real MantEps = 0.04;
   Real MantA   = 1.0;
+  Real MantAx  = MantA;         //
+  Real MantAy  = MantA;         //
+  Real MantAz  = MantA;         //
   Real MantK   = CrustK;
   Real MantQ   = CrustQ;
 
   Real MohoNu  = CrustNu;       // Moho/transition region defaults
   Real MohoEps = CrustEps;
   Real MohoA   = CrustA;
+  Real MohoAx  = MohoA;         //
+  Real MohoAy  = MohoA;         //
+  Real MohoAz  = MohoA;         //
   Real MohoK   = CrustK;
   Real MohoQ   = CrustQ;
 
@@ -138,23 +151,67 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
     SediNu  = args.at(0);
     SediEps = args.at(1);
     SediA   = args.at(2);
+    SediAx  = SediA;
+    SediAy  = SediA;
+    SediAz  = SediA;
     SediK   = args.at(3);
     SediQ   = args.at(4);
     CrustNu  = args.at(5);
     CrustEps = args.at(6);
     CrustA   = args.at(7);
+    CrustAx  = CrustA;
+    CrustAy  = CrustA;
+    CrustAz  = CrustA;
     CrustK   = args.at(8);
     CrustQ   = args.at(9);
     MantNu  = args.at(10);
     MantEps = args.at(11);
     MantA   = args.at(12);
+    MantAx  = MantA;
+    MantAy  = MantA;
+    MantAz  = MantA;
     MantK   = args.at(13);
     MantQ   = args.at(14);
     MohoNu  = args.at(15);
     MohoEps = args.at(16);
     MohoA   = args.at(17);
+    MohoAx  = MohoA;
+    MohoAy  = MohoA;
+    MohoAz  = MohoA;
     MohoK   = args.at(18);
     MohoQ   = args.at(19);
+    break;
+
+  case 28:  // Specified nu,eps,ax,ay,az,k,Q for four regions
+            //
+    SediNu  = args.at(0);
+    SediEps = args.at(1);
+    SediAx  = args.at(2);
+    SediAy  = args.at(3);
+    SediAz  = args.at(4);
+    SediK   = args.at(5);
+    SediQ   = args.at(6);
+    CrustNu  = args.at(7);
+    CrustEps = args.at(8);
+    CrustAx  = args.at(9);
+    CrustAy  = args.at(10);
+    CrustAz  = args.at(11);
+    CrustK   = args.at(12);
+    CrustQ   = args.at(13);
+    MantNu  = args.at(14);
+    MantEps = args.at(15);
+    MantAx  = args.at(16);
+    MantAy  = args.at(17);
+    MantAz  = args.at(18);
+    MantK   = args.at(19);
+    MantQ   = args.at(20);
+    MohoNu  = args.at(21);
+    MohoEps = args.at(22);
+    MohoAx  = args.at(23);
+    MohoAy  = args.at(24);
+    MohoAz  = args.at(25);
+    MohoK   = args.at(26);
+    MohoQ   = args.at(27);
     break;
 
   default:  // Unrecognized pattern of values
@@ -189,7 +246,7 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   // Sheet 0: between: Surface/Air       <-- Name of "layer" above
   //              and: Soft-Sediments    <-- Name of "layer" below
 
-  HS = HSneak(SediNu,SediEps,SediA,SediK);
+  HS = HSnexyzk(SediNu,SediEps,SediAx,SediAy,SediAz,SediK);
   Q  = QmQk(SediQ);     // Parameter values in the "sediments" layer
 
   gr.WNode(0,0,0).SetLocation(LopX,LopY,LopZ[0]);
@@ -209,7 +266,7 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   //                                        
 
   HS_abv = HS; Q_abv = Q;
-  HS = HSneak(CrustNu, CrustEps, CrustA, CrustK);
+  HS = HSnexyzk(CrustNu,CrustEps,CrustAx,CrustAy,CrustAz,CrustK);
   Q  = QmQk(CrustQ);    // Parameter values in the "crust" layers
 
   gr.WNode(0,0,1).SetLocation(LopX,LopY,LopZ[1]);
@@ -239,7 +296,7 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   //                  Moho-complexity 1       (Double-valued for R/T)
 
   HS_abv = HS; Q_abv = Q; // (Remembered for region-above attributes)
-  HS = HSneak(MohoNu, MohoEps, MohoA, MohoK); // Properties apply to
+  HS = HSnexyzk(MohoNu,MohoEps,MohoAx,MohoAy,MohoAz,MohoK); // Properties apply to
   Q  = QmQk(MohoQ);                           // Moho-complexity region
 
   gr.WNode(0,0,3).SetLocation(LopX,LopY,LopZ[3]);
@@ -288,7 +345,7 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   //                  Mantle Ramp 1            (Double Valued for R/T)
 
   HS_abv = HS; Q_abv = Q; // (Remembered for region-above attributes)
-  HS = HSneak(MohoNu, MohoEps, MohoA, MohoK); // Properties apply to
+  HS = HSnexyzk(MohoNu,MohoEps,MohoAx,MohoAy,MohoAz,MohoK); // Properties apply to
   Q  = QmQk(MohoQ);                           // Mantle-ramp region
 
   gr.WNode(0,0,7).SetLocation(LopX,LopY,LopZ[7]);
@@ -337,7 +394,7 @@ void LopNorCylinderMoho(Grid & gr, const std::vector<Real> & args) {
   //                   Mantle Proper           (Double Valued for R/T)
 
   HS_abv = HS; Q_abv = Q; // (Remembered for region-above attributes)
-  HS = HSneak(MantNu, MantEps, MantA, MantK); // Properties apply to
+  HS = HSnexyzk(MantNu,MantEps,MantAx,MantAy,MantAz,MantK); // Properties apply to
   Q  = QmQk(MantQ);                           // Mantle region
 
   gr.WNode(0,0,11).SetLocation(LopX,LopY,LopZ[11]);

@@ -207,7 +207,7 @@ public:
   // ::: Data-Dump Methods  (GridNode Class) :::
   // :::::::::::::::::::::::::::::::::::::::::::
 
-  void OutputAsAscii(std::ostream & out, const std::string & prefix) const;
+  void OutputAsAscii(std::ostream & out, const std::string & prefix, bool aniso_columns = false) const;
 
 
 };//
