@@ -296,7 +296,8 @@ void Scatterer::ComputeMFPs() {
   //   that each ToA represents an equal area), thus instead of
   //   dividing by 4Pi to get the surface average, we actually need to
   //   divide by nTOA.)  //TODO: TesselSphere needs to code area
-  //   elements.
+  //   elements. See docs/toa-quadrature-bias.md for the bias this
+  //   introduces and a future-fix plan.
   //
   imfp_p /= nTOA;  // TODO: This will change when above TODO fixed
   imfp_s /= nTOA;

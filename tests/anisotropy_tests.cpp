@@ -856,7 +856,9 @@ TEST(report_directional_mfps) {
   // (confirmed at degree 7 and 8: ~397.8 at all three). Per design
   // ruling R9, the reference below (398) is this implementation's own
   // converged value, not the exact integral, so the report states the
-  // rate the simulation actually realizes under its own quadrature.
+  // rate the simulation actually realizes under its own quadrature. See
+  // docs/toa-quadrature-bias.md for the bias mechanism and a future-fix
+  // plan.
   const Real expected[8] = {1603, 0, 1203, 755, 0, 0, 443, 398};
   const int checkIdx[]   = {0, 2, 3, 6, 7};  // P0, P90, S0, S90SV, S90SH
                                              // -- the reference values
