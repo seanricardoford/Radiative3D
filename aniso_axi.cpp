@@ -39,12 +39,13 @@ namespace {
   //
   //   The cell/block/representative sizing arithmetic that used to live
   //   directly in AxiProposal's constructor: a pure function of the
-  //   take-off-angle count alone. Factored out so the constructor
-  //   (which needs numCells/cellBlock up front, to run the non-
-  //   icosahedral guard *before* touching the geometry cache below) and
-  //   GetOrBuildAxiGeometry() (which needs the rest) can't drift apart
-  //   by accident. Every formula here is unchanged from the pre-Task-2
-  //   constructor.
+  //   take-off-angle count alone. Factored out into the single place
+  //   both the constructor (which needs numCells/cellBlock up front, to
+  //   run the non-icosahedral guard *before* touching the geometry
+  //   cache below) and GetOrBuildAxiGeometry() (which needs the rest)
+  //   call -- neither keeps its own copy of the formula, so the two
+  //   genuinely cannot drift apart (not merely "shouldn't"). Every
+  //   formula here is unchanged from the pre-Task-2 constructor.
   //
   void ComputeAxiShape(Index toaSize,
                        Index & numCells, Index & cellBlock,
@@ -73,15 +74,23 @@ namespace {
 
   // ::: FingerprintOf(toa) :::
   //
-  //   A cheap scalar fingerprint of a take-off-angle set: the sum, in
-  //   index order, of every direction's x+y+z components. This is only
-  //   a sanity check guarding the geometry cache below against reuse
-  //   across two distinct take-off-angle sets that happen to share a
-  //   size (not a security hash) -- production builds a single
-  //   TesselSphere per run and reuses it for every Scatterer (see
-  //   PhononSource::Set_TOA_Array()), so a collision can't arise there;
-  //   unit tests that build multiple distinct sets at the same size are
-  //   expected to differ in this sum.
+  //   A cheap scalar fingerprint of a take-off-angle set: every
+  //   direction's x+y+z components, summed. (The sum is taken in index
+  //   order below, but addition is commutative -- order doesn't affect
+  //   which *value* this converges to, only the floating-point rounding
+  //   along the way.) This is only a sanity check guarding the geometry
+  //   cache below against reuse across two distinct take-off-angle sets
+  //   that happen to share a size (not a security hash) -- production
+  //   builds a single TesselSphere per run and reuses it for every
+  //   Scatterer (see PhononSource::Set_TOA_Array()), so a collision
+  //   can't arise there; unit tests that build multiple distinct sets at
+  //   the same size are expected to differ in this sum (see
+  //   test_axi_geometry_cache_mismatch, tests/anisotropy_tests.cpp,
+  //   which confirms this empirically: a pure rotation of a TESS_ICO set
+  //   is a bad choice of "distinct set" here, since its vertices sum to
+  //   (numerically) zero by icosahedral symmetry and rotation preserves
+  //   that exactly, so two rotated copies' fingerprints differ only by
+  //   sub-1e-12 rounding noise).
   //
   Real FingerprintOf(const S2::S2Set & toa) {
     Real sum = 0.0;
@@ -92,7 +101,8 @@ namespace {
     return sum;
   }
 
-  // ::: struct CachedAxiGeometry ::: / ::: GetOrBuildAxiGeometry(toa) :::
+  // ::: struct CachedAxiGeometry ::: / ::: BuildAxiGeometry(...) ::: /
+  // ::: GetOrBuildAxiGeometry(toa, scratch) :::
   //
   //   The take-off-angle-set-dependent, ScatterParams-independent part
   //   of AxiProposal's construction: representative centres/radii
@@ -107,8 +117,13 @@ namespace {
   //   (one lock per AxiProposal, not per representative or bin) not to
   //   matter either way. A fingerprint (FingerprintOf()) guards against
   //   serving a cached entry to a different take-off-angle set that
-  //   happens to share a size: on a mismatch, the geometry is rebuilt
-  //   (and the stale entry replaced) rather than reused.
+  //   happens to share a size: per the brief, a mismatch rebuilds the
+  //   geometry for that one construction *without caching it* -- the
+  //   result goes into the caller-owned 'scratch' instead of the map, so
+  //   the entry already cached under that size (which may still be
+  //   exactly right for whatever call eventually does come back with the
+  //   set it was built from) is never evicted or overwritten by a
+  //   same-size-but-different set passing through.
   //
   struct CachedAxiGeometry {
     Real                  Fingerprint;
@@ -119,27 +134,23 @@ namespace {
     std::vector<Index>    MyPerm;
   };
 
-  const CachedAxiGeometry & GetOrBuildAxiGeometry(const S2::S2Set & toa) {
-
-    static std::mutex mtx;
-    static std::map<Index, CachedAxiGeometry> cache;
-
-    const Index toaSize = (Index) toa.size();
-    const Real  fp       = FingerprintOf(toa);
-
-    std::lock_guard<std::mutex> lock(mtx);
-
-    std::map<Index, CachedAxiGeometry>::const_iterator it = cache.find(toaSize);
-    if (it != cache.end() && it->second.Fingerprint == fp) {
-      return it->second;
-    }
+  // ::: BuildAxiGeometry(toa, toaSize, fp, geom) :::
+  //
+  //   Does the actual (expensive) geometry construction, writing into
+  //   'geom' (which the caller owns -- either a fresh map slot on a true
+  //   cache miss, or a construction-local scratch object on a
+  //   fingerprint mismatch; see GetOrBuildAxiGeometry() below). Split
+  //   out from GetOrBuildAxiGeometry() so both call sites share one
+  //   body instead of risking two copies drifting apart.
+  //
+  void BuildAxiGeometry(const S2::S2Set & toa, Index toaSize, Real fp,
+                        CachedAxiGeometry & geom) {
 
     Index numCells, cellBlock, numReps, repBlock, repsPerCell;
     int coarseDeg, repDeg; bool repEqualsToa;
     ComputeAxiShape(toaSize, numCells, cellBlock, coarseDeg, repDeg,
                    numReps, repBlock, repsPerCell, repEqualsToa);
 
-    CachedAxiGeometry geom;
     geom.Fingerprint = fp;
     geom.RepsPerCell = repsPerCell;
 
@@ -178,7 +189,10 @@ namespace {
     // icosahedral tessellation used throughout this class is, by
     // construction, symmetric under negating x or y alone -- see
     // geom_s2.cpp's init_icosahedron() -- so a missing match signals a
-    // real inconsistency, not just tessellation noise).
+    // real inconsistency, not just tessellation noise). Built from a
+    // fresh canonical TesselSphere, not from 'toa' itself, so this part
+    // never depends on 'toa's actual directions (only indirectly, via
+    // 'coarseDeg', on its size).
     //
     // NOTE: building a fresh degree-coarseDeg TesselSphere always gives
     // exactly the same direction set as grouping 'toa' into numCells
@@ -225,7 +239,42 @@ namespace {
       geom.MyPerm[j] = bestMy;
     }
 
-    return (cache[toaSize] = geom);
+  }//
+
+  // ::: GetOrBuildAxiGeometry(toa, scratch) :::
+  //
+  //   Returns the geometry for 'toa': a cache hit returns a reference
+  //   into the cache; a true miss (no entry yet for this size) builds
+  //   directly into a fresh cache slot and returns a reference to it; a
+  //   fingerprint mismatch (an entry exists for this size, but isn't
+  //   'toa') builds into the caller-owned 'scratch' instead and returns
+  //   a reference to *that*, leaving the cache untouched. 'scratch' must
+  //   outlive the returned reference in every case -- the constructor
+  //   keeps it as a local for exactly as long as it uses the result.
+  //
+  const CachedAxiGeometry & GetOrBuildAxiGeometry(const S2::S2Set & toa,
+                                                  CachedAxiGeometry & scratch) {
+
+    static std::mutex mtx;
+    static std::map<Index, CachedAxiGeometry> cache;
+
+    const Index toaSize = (Index) toa.size();
+    const Real  fp       = FingerprintOf(toa);
+
+    std::lock_guard<std::mutex> lock(mtx);
+
+    std::map<Index, CachedAxiGeometry>::iterator it = cache.find(toaSize);
+    if (it != cache.end()) {
+      if (it->second.Fingerprint == fp) {
+        return it->second;
+      }
+      BuildAxiGeometry(toa, toaSize, fp, scratch);
+      return scratch;
+    }
+
+    CachedAxiGeometry & slot = cache[toaSize];
+    BuildAxiGeometry(toa, toaSize, fp, slot);
+    return slot;
   }
 
 }//end anonymous namespace
@@ -255,12 +304,18 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
 
   mToaSize = (Index) toa.size();
 
-  // D = log4(toa.size()/20):
-  const int D = (int) ( log( (double) mToaSize / 20.0 ) / log(4.0) + 0.5 );
+  // Shape (cell/block/representative counts): obtained from
+  // ComputeAxiShape() -- the one place this arithmetic lives -- rather
+  // than re-derived here, so this and GetOrBuildAxiGeometry()'s own call
+  // to the same function can never compute a different mNumCells/
+  // mCellBlock for the same take-off-angle count.
+  Index numCells, cellBlock, shapeNumReps, shapeRepBlock, shapeRepsPerCell;
+  int coarseDeg, repDeg; bool repEqualsToa;
+  ComputeAxiShape(mToaSize, numCells, cellBlock, coarseDeg, repDeg,
+                 shapeNumReps, shapeRepBlock, shapeRepsPerCell, repEqualsToa);
 
-  const int coarseDeg = std::min(D, kCoarseDegree);
-  mNumCells  = 20 * Pow4(coarseDeg);
-  mCellBlock = mToaSize / mNumCells;
+  mNumCells  = numCells;
+  mCellBlock = cellBlock;
 
   if (mToaSize != mNumCells * mCellBlock) {
     // The cell/block arithmetic throughout this class (hierarchical
@@ -281,8 +336,13 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // Geometry (representative centres/radii, mirror permutations):
   // identical for every Scatterer at this take-off-angle count, so
   // fetched from (and, on first use, built into) a process-wide cache.
-  // See GetOrBuildAxiGeometry() above.
-  const CachedAxiGeometry & geom = GetOrBuildAxiGeometry(toa);
+  // 'scratch' backs the returned reference only on a fingerprint
+  // mismatch (a different, same-size take-off-angle set already
+  // occupies this size's cache slot); it must stay alive for as long as
+  // 'geom' is used below, which it does as a constructor-local. See
+  // GetOrBuildAxiGeometry() above.
+  CachedAxiGeometry scratch;
+  const CachedAxiGeometry & geom = GetOrBuildAxiGeometry(toa, scratch);
   mMxPerm = geom.MxPerm;
   mMyPerm = geom.MyPerm;
 

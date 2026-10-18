@@ -1910,6 +1910,87 @@ TEST(axi_geometry_cache_degrees) {
 }
 
 
+TEST(axi_geometry_cache_mismatch) {
+
+  // Exercises the fingerprint-MISMATCH branch of GetOrBuildAxiGeometry()
+  // (aniso_axi.cpp): a take-off-angle set that shares degree 5's cache
+  // key (toa.size()) with the standard set, but isn't it. Per the brief
+  // ("On a mismatch the geometry is rebuilt without caching"), this must
+  // rebuild geometry for that one construction *without* disturbing the
+  // entry already cached under that size -- checked here by sandwiching
+  // the mismatched build between two standard-set builds and requiring
+  // the first and third to agree exactly (if the mismatch path instead
+  // overwrote the cached entry, or read/wrote it concurrently with a
+  // corrupted size, the third build could come back wrong) -- and by
+  // requiring the mismatched build itself not to throw.
+  //
+  // Perturbation choice: each direction's phi is shifted by
+  // (index mod 7)*1e-4 radians. A rigid rotation about z (this review's
+  // first suggestion) was tried and rejected: a standalone check showed
+  // TESS_ICO's vertex directions sum to (numerically) zero by
+  // icosahedral symmetry, and rotation is linear, so a rotated copy's
+  // component sum is *also* (numerically) zero -- a 0.01 rad z-rotation
+  // of this exact degree-5 set changed FingerprintOf()'s sum by only
+  // ~5e-13, which is sub-floating-point-noise, not a dependable
+  // mismatch. Rotation does *not* break mirror matching, for what it's
+  // worth: GetOrBuildAxiGeometry() builds the mirror-cell permutations
+  // from a fresh canonical TesselSphere, never from 'toa' itself. The
+  // index-dependent phi shift used here is not a rigid rotation, so it
+  // doesn't inherit that zero-sum cancellation; a standalone check
+  // confirmed it changes the fingerprint by about 2e-3, many orders of
+  // magnitude above floating-point noise.
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+
+  const S2::TesselSphere & toas5 = UseTOADegree(5);
+  std::vector<ProbDist> pdists5a;
+  BuildIsoPDists(sp, toas5, pdists5a);
+  AxiProposal axi5a(sp, toas5, pdists5a);
+
+  S2::S2Set perturbed;
+  for (Index i = 0; i < (Index) toas5.size(); ++i) {
+    const Real shift = 1.0e-4 * (Real) (i % 7);
+    perturbed.push_back(S2::ThetaPhi(toas5[i].Theta(), toas5[i].Phi() + shift));
+  }
+  CHECK(perturbed.size() == toas5.size());
+
+  std::vector<ProbDist> pdistsPerturbed;
+  BuildIsoPDists(sp, perturbed, pdistsPerturbed);
+  bool threwOnPerturbed = false;
+  try {
+    AxiProposal axiPerturbed(sp, perturbed, pdistsPerturbed);
+    (void) axiPerturbed;
+  } catch (...) {
+    threwOnPerturbed = true;
+  }
+  CHECK_MSG(!threwOnPerturbed,
+           "AxiProposal on a same-size, perturbed take-off-angle set "
+           "should not throw");
+
+  std::vector<ProbDist> pdists5b;
+  BuildIsoPDists(sp, toas5, pdists5b);
+  AxiProposal axi5b(sp, toas5, pdists5b);
+
+  CHECK(axi5a.MajorantRate(RAY_P) == axi5b.MajorantRate(RAY_P));
+  CHECK(axi5a.MajorantRate(RAY_S) == axi5b.MajorantRate(RAY_S));
+  CHECK(axi5a.NumCells() == axi5b.NumCells());
+
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta = (2.0*b + 1.0) * Geometry::DtoR;  // bin centre
+    const R3::XYZ u_c(-sin(theta), 0.0, cos(theta));
+    for (int conv = 0; conv < 2; ++conv) {  // GPP, GPS
+      for (Index cell = 0; cell < axi5a.NumCells(); ++cell) {
+        const Real va = axi5a.AcceptanceBound(RAY_P, u_c, conv, cell);
+        const Real vb = axi5b.AcceptanceBound(RAY_P, u_c, conv, cell);
+        CHECK_MSG(va == vb,
+                 "bin=" << b << " conv=" << conv << " cell=" << cell
+                 << ": first-build=" << va << " second-build=" << vb);
+      }
+    }
+  }
+
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
