@@ -153,6 +153,68 @@ public:
                       // kCoarseDegree; the run's own take-off-angle
                       // count below it).
 
+  // ::::::::::::::::::::::::::::::::::::::::::::::::
+  // ::: Bound-Kernel Types/Methods  (AxiProposal Class) :::
+  // ::::::::::::::::::::::::::::::::::::::::::::::::
+  //
+  //   The per-(representative, k_in, k_out) and per-(incidence bin)
+  //   halves of the old ComputeBound()'s rigorous AnisoRatio(m) bound
+  //   (see docs/superpowers/specs/2026-10-16-anisotropic-scale-lengths-
+  //   design.md and docs/superpowers/specs/2026-10-17-axisymmetric-
+  //   sampler-performance-design.md, decision 1), split apart so the
+  //   (representative, k_in, k_out) part -- everything except one acos
+  //   and two cos calls -- is computed once instead of once per
+  //   (representative, bin). A cell's bound is
+  //   'min(M, M*pow(maxRatio, kappa+1.5))', where maxRatio is the
+  //   largest BoundRatio() over the cell's representatives; see
+  //   BuildBinTable() in aniso_axi.cpp. Exposed publicly (and as static
+  //   methods, since neither depends on instance state) so tests can
+  //   exercise the kernel directly against a frozen reference
+  //   (tests/anisotropy_tests.cpp's ReferenceBound3db253a, ruling R-P1).
+
+  struct BoundRep {
+    R3::XYZ MHat;  // m_rep.Unit(), where m_rep = k_out*t - k_in*zhat;
+                   // the zero vector if Mr == 0 (m_rep.Unit() is never
+                   // evaluated in that case -- see PrepareBoundRep()).
+    Real Mr;       // |m_rep|
+    Real Rho;      // k_out * 2*sin(r_i/2): converts representative
+                   // 't's angular radius r_i into a bound on how far
+                   // any fine direction's exchange wavevector can land
+                   // from m_rep.
+    Real M2Lo;     // max(Mr-Rho,0)^2 : lower bound on the represented
+                   // directions' |m|^2.
+    Real M2Hi;     // (Mr+Rho)^2      : upper bound on same.
+    Real Numer;    // 1 + aMin^2*M2Hi : the bin-independent numerator of
+                   // the AnisoRatio bound.
+  };
+
+  struct BinCap {
+    R3::XYZ Uc;       // Incidence-bin centre direction.
+    Real    Delta;    // Incidence-bin angular half-width (plus the
+                      // chi-width contribution, for S bins).
+    Real    CosDelta; // cos(Delta); unused until the trig-free cap
+                      // kernel (design decision 3) -- computed here so
+                      // that later task's BoundRatio() doesn't need a
+                      // new MakeBinCap() call at every call site.
+    Real    SinDelta; // sin(Delta); ditto.
+  };
+
+  static BoundRep PrepareBoundRep(const R3::XYZ & t, Real r_i,
+                                  Real k_in, Real k_out, Real aMin);
+                      // The (representative, k_in, k_out)-only part of
+                      // the old ComputeBound(): m_rep, Mr, Rho, M2Lo,
+                      // M2Hi, and the numerator Numer.
+
+  static BinCap MakeBinCap(const R3::XYZ & u_c, Real delta);
+
+  static Real BoundRatio(const BoundRep & rep, const BinCap & cap,
+                         Real ah, Real az);
+                      // (1 + aMin^2*m2_hi) / (1 + Q_lo): the quantity
+                      // raised to (kappa+1.5) in the cell-bound formula
+                      // above. Evaluates alpha_c with acos and the cap
+                      // edges with cos, using exactly the expressions
+                      // of the ComputeBound() this replaces.
+
 private:
 
   // ::::::::::::::::::::::::::::::::::::::::::::::::
@@ -175,17 +237,22 @@ private:
   // ::: Private Methods  (AxiProposal Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::::::::
 
-  void BuildMirrorPerms(int coarseDeg);
-
-  void BuildBinTable(raytype intype, const R3::XYZ & u_c, Real delta,
-                     const std::vector<R3::XYZ> & repCenters,
-                     const std::vector<Real> & repRadius,
+  void BuildBinTable(const R3::XYZ & u_c, Real delta,
+                     const std::vector<BoundRep> & reps0,
+                     const std::vector<BoundRep> & reps1,
                      Index repsPerCell,
+                     const std::vector<Real> & S0,
+                     const std::vector<Real> & S1,
                      BinTable & table, Real & rate) const;
-
-  Real ComputeBound(const R3::XYZ & t, Real r_i,
-                    Real k_in, Real k_out,
-                    const R3::XYZ & u_c, Real delta) const;
+                      // Builds one incidence bin's cumulative proposal-
+                      // weight table (and its majorant rate) for the
+                      // two conversions sharing this bin's u_c/delta:
+                      // 'reps0'/'reps1' are BoundRep arrays (one entry
+                      // per representative, already keyed to the right
+                      // k_in/k_out for this bin type -- see the
+                      // constructor), and 'S0'/'S1' are the matching
+                      // conversions' per-cell isotropic sums (bin-
+                      // independent, hoisted out by the constructor).
 
   FoldResult Fold(raytype intype, R3::XYZ u) const;
 

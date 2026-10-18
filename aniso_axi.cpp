@@ -2,6 +2,8 @@
 //
 #include <algorithm>    /* std::min, std::max */
 #include <cmath>        /* sin, cos, acos, atan2, sqrt, pow, floor, log */
+#include <map>          /* std::map: geometry cache, keyed by TOA count */
+#include <mutex>        /* std::mutex, std::lock_guard: geometry cache */
 #include <stdexcept>    /* std::logic_error */
 #include "aniso_axi.hpp"
 #include "random.hpp"
@@ -31,6 +33,199 @@ namespace {
     Index p = 1;
     for (int i = 0; i < n; i++) {p *= 4;}
     return p;
+  }
+
+  // ::: ComputeAxiShape(...) :::
+  //
+  //   The cell/block/representative sizing arithmetic that used to live
+  //   directly in AxiProposal's constructor: a pure function of the
+  //   take-off-angle count alone. Factored out so the constructor
+  //   (which needs numCells/cellBlock up front, to run the non-
+  //   icosahedral guard *before* touching the geometry cache below) and
+  //   GetOrBuildAxiGeometry() (which needs the rest) can't drift apart
+  //   by accident. Every formula here is unchanged from the pre-Task-2
+  //   constructor.
+  //
+  void ComputeAxiShape(Index toaSize,
+                       Index & numCells, Index & cellBlock,
+                       int & coarseDeg, int & repDeg,
+                       Index & numReps, Index & repBlock,
+                       Index & repsPerCell, bool & repEqualsToa) {
+
+    // D = log4(toa.size()/20):
+    const int D = (int) ( log( (double) toaSize / 20.0 ) / log(4.0) + 0.5 );
+
+    coarseDeg = std::min(D, (int) AxiProposal::kCoarseDegree);
+    numCells  = 20 * Pow4(coarseDeg);
+    cellBlock = toaSize / numCells;
+
+    repDeg = std::min(D, (int) AxiProposal::kRepDegree);
+    repEqualsToa = (repDeg == D);
+    if (repEqualsToa) {
+      numReps  = toaSize;
+      repBlock = 1;
+    } else {
+      numReps  = 20 * Pow4(repDeg);
+      repBlock = toaSize / numReps;
+    }
+    repsPerCell = numReps / numCells;
+  }
+
+  // ::: FingerprintOf(toa) :::
+  //
+  //   A cheap scalar fingerprint of a take-off-angle set: the sum, in
+  //   index order, of every direction's x+y+z components. This is only
+  //   a sanity check guarding the geometry cache below against reuse
+  //   across two distinct take-off-angle sets that happen to share a
+  //   size (not a security hash) -- production builds a single
+  //   TesselSphere per run and reuses it for every Scatterer (see
+  //   PhononSource::Set_TOA_Array()), so a collision can't arise there;
+  //   unit tests that build multiple distinct sets at the same size are
+  //   expected to differ in this sum.
+  //
+  Real FingerprintOf(const S2::S2Set & toa) {
+    Real sum = 0.0;
+    for (Index k = 0; k < (Index) toa.size(); k++) {
+      const R3::XYZ p = toa[k].XYZ();
+      sum += p.x() + p.y() + p.z();
+    }
+    return sum;
+  }
+
+  // ::: struct CachedAxiGeometry ::: / ::: GetOrBuildAxiGeometry(toa) :::
+  //
+  //   The take-off-angle-set-dependent, ScatterParams-independent part
+  //   of AxiProposal's construction: representative centres/radii
+  //   (formerly computed inline in the constructor) and the mirror-cell
+  //   permutations (formerly AxiProposal::BuildMirrorPerms()). This is
+  //   identical for every Scatterer built at a given take-off-angle
+  //   degree -- see docs/superpowers/specs/2026-10-17-axisymmetric-
+  //   sampler-performance-design.md, decision 1 -- so it is cached in a
+  //   function-local static map keyed by take-off-angle count, guarded
+  //   by a mutex. Construction of Scatterers (and so of AxiProposal) is
+  //   single-threaded today; the mutex is defensive, and cheap enough
+  //   (one lock per AxiProposal, not per representative or bin) not to
+  //   matter either way. A fingerprint (FingerprintOf()) guards against
+  //   serving a cached entry to a different take-off-angle set that
+  //   happens to share a size: on a mismatch, the geometry is rebuilt
+  //   (and the stale entry replaced) rather than reused.
+  //
+  struct CachedAxiGeometry {
+    Real                  Fingerprint;
+    Index                 RepsPerCell;
+    std::vector<R3::XYZ>  RepCenters;
+    std::vector<Real>     RepRadius;
+    std::vector<Index>    MxPerm;
+    std::vector<Index>    MyPerm;
+  };
+
+  const CachedAxiGeometry & GetOrBuildAxiGeometry(const S2::S2Set & toa) {
+
+    static std::mutex mtx;
+    static std::map<Index, CachedAxiGeometry> cache;
+
+    const Index toaSize = (Index) toa.size();
+    const Real  fp       = FingerprintOf(toa);
+
+    std::lock_guard<std::mutex> lock(mtx);
+
+    std::map<Index, CachedAxiGeometry>::const_iterator it = cache.find(toaSize);
+    if (it != cache.end() && it->second.Fingerprint == fp) {
+      return it->second;
+    }
+
+    Index numCells, cellBlock, numReps, repBlock, repsPerCell;
+    int coarseDeg, repDeg; bool repEqualsToa;
+    ComputeAxiShape(toaSize, numCells, cellBlock, coarseDeg, repDeg,
+                   numReps, repBlock, repsPerCell, repEqualsToa);
+
+    CachedAxiGeometry geom;
+    geom.Fingerprint = fp;
+    geom.RepsPerCell = repsPerCell;
+
+    // Representative directions (for bound construction only):
+    geom.RepCenters.resize(numReps);
+    geom.RepRadius.assign(numReps, 0.0);
+    if (repEqualsToa) {
+      for (Index i = 0; i < numReps; i++) {
+        geom.RepCenters[i] = toa[i].XYZ();
+      }
+      // RepRadius[] stays all-zero: each representative is its own
+      // (and only) fine direction.
+    } else {
+      S2::TesselSphere repTess(S2::TESS_ICO, repDeg);
+      for (Index i = 0; i < numReps; i++) {
+        geom.RepCenters[i] = repTess[i].XYZ();
+      }
+      for (Index i = 0; i < numReps; i++) {
+        Real maxAngle = 0.0;
+        const Index base = i * repBlock;
+        for (Index k = base; k < base + repBlock; k++) {
+          Real c = geom.RepCenters[i].Dot(toa[k].XYZ());
+          if (c > 1.0) c = 1.0;
+          if (c < -1.0) c = -1.0;
+          const Real ang = acos(c);
+          if (ang > maxAngle) {maxAngle = ang;}
+        }
+        geom.RepRadius[i] = maxAngle;
+      }
+    }
+
+    // Mirror-cell permutations (formerly AxiProposal::BuildMirrorPerms()):
+    // for each coarse cell, the index of the cell whose centre is the x-
+    // (resp. y-) mirror image of this cell's centre, matched within
+    // 1e-9. Throws std::logic_error if any cell has no match (the
+    // icosahedral tessellation used throughout this class is, by
+    // construction, symmetric under negating x or y alone -- see
+    // geom_s2.cpp's init_icosahedron() -- so a missing match signals a
+    // real inconsistency, not just tessellation noise).
+    //
+    // NOTE: building a fresh degree-coarseDeg TesselSphere always gives
+    // exactly the same direction set as grouping 'toa' into numCells
+    // cells would (whether coarseDeg==D or coarseDeg<D), because
+    // TesselSphere's recursive quadrisection preserves each cell's
+    // three corner nodes at every finer degree: see geom_s2.cpp's
+    // Triangle::subdivide().
+    std::vector<R3::XYZ> centers(numCells);
+    S2::TesselSphere cellTess(S2::TESS_ICO, coarseDeg);
+    for (Index j = 0; j < numCells; j++) {
+      centers[j] = cellTess[j].XYZ();
+    }
+
+    geom.MxPerm.resize(numCells);
+    geom.MyPerm.resize(numCells);
+
+    const Real tol2 = 1e-9*1e-9;
+
+    for (Index j = 0; j < numCells; j++) {
+
+      const R3::XYZ mx_target(-centers[j].x(), centers[j].y(), centers[j].z());
+      const R3::XYZ my_target( centers[j].x(),-centers[j].y(), centers[j].z());
+
+      Index bestMx = 0, bestMy = 0;
+      Real bestMxD2 = 1.0e300, bestMyD2 = 1.0e300;
+
+      for (Index k = 0; k < numCells; k++) {
+        const Real dMx = centers[k].DistFrom(mx_target);
+        const Real dMy = centers[k].DistFrom(my_target);
+        if (dMx*dMx < bestMxD2) {bestMxD2 = dMx*dMx; bestMx = k;}
+        if (dMy*dMy < bestMyD2) {bestMyD2 = dMy*dMy; bestMy = k;}
+      }
+
+      if (bestMxD2 > tol2) {
+        throw std::logic_error(
+          "AxiProposal::BuildMirrorPerms: no x-mirror match for cell");
+      }
+      if (bestMyD2 > tol2) {
+        throw std::logic_error(
+          "AxiProposal::BuildMirrorPerms: no y-mirror match for cell");
+      }
+
+      geom.MxPerm[j] = bestMx;
+      geom.MyPerm[j] = bestMy;
+    }
+
+    return (cache[toaSize] = geom);
   }
 
 }//end anonymous namespace
@@ -74,53 +269,52 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
     // TESS_ICO always produces. A non-icosahedral take-off-angle set
     // would silently drop the tail directions from every cell's range,
     // which is a silent bias rather than a loud failure. Production
-    // always uses TESS_ICO; this is a belt-and-braces guard.
+    // always uses TESS_ICO; this is a belt-and-braces guard. This check
+    // runs before the geometry cache below is ever touched, so a bad
+    // take-off-angle set always throws fresh -- it is never masked by,
+    // or allowed to poison, a cached entry.
     throw std::logic_error(
       "AxiProposal requires an icosahedral (TESS_ICO) take-off-angle "
       "set: toa.size() is not a multiple of mNumCells");
   }
 
-  BuildMirrorPerms(coarseDeg);
+  // Geometry (representative centres/radii, mirror permutations):
+  // identical for every Scatterer at this take-off-angle count, so
+  // fetched from (and, on first use, built into) a process-wide cache.
+  // See GetOrBuildAxiGeometry() above.
+  const CachedAxiGeometry & geom = GetOrBuildAxiGeometry(toa);
+  mMxPerm = geom.MxPerm;
+  mMyPerm = geom.MyPerm;
 
-  // Representative directions (for bound construction only -- these
-  // don't need to survive past the constructor):
-  const int repDeg = std::min(D, kRepDegree);
-  Index numReps, repBlock;
-  if (repDeg == D) {
-    numReps  = mToaSize;
-    repBlock = 1;
-  } else {
-    numReps  = 20 * Pow4(repDeg);
-    repBlock = mToaSize / numReps;
+  // Per-representative bound-kernel data (BoundRep), precomputed once
+  // for each of the four (k_in,k_out) pairs the P and S bin tables need
+  // -- P bins use (kP,kP) and (kP,kS); S bins use (kS,kP) and (kS,kS) --
+  // instead of once per (representative, bin) as the old ComputeBound()
+  // did. See PrepareBoundRep()/BoundRatio() and BuildBinTable() below.
+  const Index numReps = (Index) geom.RepCenters.size();
+  std::vector<BoundRep> repsPP(numReps), repsPS(numReps),
+                        repsSP(numReps), repsSS(numReps);
+  for (Index i = 0; i < numReps; i++) {
+    const R3::XYZ & t = geom.RepCenters[i];
+    const Real      r = geom.RepRadius[i];
+    repsPP[i] = PrepareBoundRep(t, r, mKP, mKP, mAMin);
+    repsPS[i] = PrepareBoundRep(t, r, mKP, mKS, mAMin);
+    repsSP[i] = PrepareBoundRep(t, r, mKS, mKP, mAMin);
+    repsSS[i] = PrepareBoundRep(t, r, mKS, mKS, mAMin);
   }
-  const Index repsPerCell = numReps / mNumCells;
 
-  std::vector<R3::XYZ> repCenters(numReps);
-  std::vector<Real>    repRadius(numReps, 0.0);
-
-  if (repDeg == D) {
-    for (Index i = 0; i < numReps; i++) {
-      repCenters[i] = toa[i].XYZ();
-    }
-    // repRadius[] stays all-zero: each representative is its own (and
-    // only) fine direction.
-  } else {
-    S2::TesselSphere repTess(S2::TESS_ICO, repDeg);
-    for (Index i = 0; i < numReps; i++) {
-      repCenters[i] = repTess[i].XYZ();
-    }
-    for (Index i = 0; i < numReps; i++) {
-      Real maxAngle = 0.0;
-      const Index base = i * repBlock;
-      for (Index k = base; k < base + repBlock; k++) {
-        Real c = repCenters[i].Dot(toa[k].XYZ());
-        if (c > 1.0) c = 1.0;
-        if (c < -1.0) c = -1.0;
-        const Real ang = acos(c);
-        if (ang > maxAngle) {maxAngle = ang;}
-      }
-      repRadius[i] = maxAngle;
-    }
+  // Per-cell isotropic sums S(conv,cell), hoisted out of the bin loop:
+  // they depend only on conv and cell, never on the incidence bin, so
+  // the old BuildBinTable() recomputed the same mNumCells values on
+  // every one of the 45 P (or 405 S) calls that shared a conv group.
+  std::vector<Real> S0_P(mNumCells), S1_P(mNumCells);
+  std::vector<Real> S0_S(mNumCells), S1_S(mNumCells);
+  for (Index c = 0; c < mNumCells; c++) {
+    const Index lo = c*mCellBlock, hi = lo+mCellBlock;
+    S0_P[c] = mPDists[0].GetRangeMagnitude(lo, hi);  // GPP
+    S1_P[c] = mPDists[1].GetRangeMagnitude(lo, hi);  // GPS
+    S0_S[c] = mPDists[2].GetRangeMagnitude(lo, hi);  // GSP
+    S1_S[c] = mPDists[3].GetRangeMagnitude(lo, hi);  // GSS
   }
 
   // P incidence bins: theta only (canonical frame fixes chi == 0).
@@ -132,8 +326,8 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
     const Real theta_c  = 0.5*(theta_lo+theta_hi);
     const Real delta    = 0.5*(theta_hi-theta_lo);
     const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
-    BuildBinTable(RAY_P, u_c, delta, repCenters, repRadius, repsPerCell,
-                 mPTable[b], mPBinRate[b]);
+    BuildBinTable(u_c, delta, repsPP, repsPS, geom.RepsPerCell,
+                 S0_P, S1_P, mPTable[b], mPBinRate[b]);
   }
   mPMajorant = 0.0;
   for (int b = 0; b < kThetaBins; b++) {
@@ -157,8 +351,8 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
                         sin(theta_c)*sin(chi_c),
                         cos(theta_c));
       const int idx = b*kChiBins + c;
-      BuildBinTable(RAY_S, u_c, delta, repCenters, repRadius, repsPerCell,
-                   mSTable[idx], mSBinRate[idx]);
+      BuildBinTable(u_c, delta, repsSP, repsSS, geom.RepsPerCell,
+                   S0_S, S1_S, mSTable[idx], mSBinRate[idx]);
     }
   }
   mSMajorant = 0.0;
@@ -171,123 +365,104 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
 
 
 //////
-// METHOD:  AxiProposal :: BuildMirrorPerms()         [Helper Function]
+// METHOD:  AxiProposal :: PrepareBoundRep()                   [static]
 //
-//   Populates mMxPerm/mMyPerm: for each cell, the index of the cell
-//   whose center is the x- (resp. y-) mirror image of this cell's
-//   center, matched within 1e-9. Throws std::logic_error if any cell
-//   has no match (the icosahedral tessellation used throughout this
-//   class is, by construction, symmetric under negating x or y alone --
-//   see geom_s2.cpp's init_icosahedron() -- so a missing match signals
-//   a real inconsistency, not just tessellation noise).
+//   The (representative, k_in, k_out)-only part of the bound kernel
+//   that used to be recomputed, per bin, inside ComputeBound(): m_rep's
+//   direction and magnitude, the chord-length radius rho, the |m|^2
+//   bracket (M2Lo, M2Hi), and the bin-independent numerator Numer. See
+//   docs/superpowers/specs/2026-10-16-anisotropic-scale-lengths-
+//   design.md and docs/superpowers/specs/2026-10-17-axisymmetric-
+//   sampler-performance-design.md, decision 1.
 //
-void AxiProposal::BuildMirrorPerms(int coarseDeg) {
+AxiProposal::BoundRep
+AxiProposal::PrepareBoundRep(const R3::XYZ & t, Real r_i,
+                             Real k_in, Real k_out, Real aMin) {
 
-  std::vector<R3::XYZ> centers(mNumCells);
+  const R3::XYZ zhat(0.0, 0.0, 1.0);   // Forward (incoming-ray) direction,
+                                       // in the local ray frame.
+  const R3::XYZ m_rep = t.ScaledBy(k_out) + zhat.ScaledBy(-k_in);
 
-  // NOTE: Building a fresh degree-coarseDeg TesselSphere always gives
-  // exactly the same direction set as grouping 'toa' into mNumCells
-  // cells would (whether coarseDeg==D or coarseDeg<D), because
-  // TesselSphere's recursive quadrisection preserves each cell's three
-  // corner nodes at every finer degree: see geom_s2.cpp's
-  // Triangle::subdivide().
-  S2::TesselSphere cellTess(S2::TESS_ICO, coarseDeg);
-  for (Index j = 0; j < mNumCells; j++) {
-    centers[j] = cellTess[j].XYZ();
-  }
+  BoundRep rep;
+  rep.Mr   = m_rep.Mag();
+  rep.MHat = (rep.Mr > 0.0) ? m_rep.Unit() : R3::XYZ(0.0, 0.0, 0.0);
+  rep.Rho  = k_out * 2.0 * sin(r_i/2.0);
 
-  mMxPerm.resize(mNumCells);
-  mMyPerm.resize(mNumCells);
+  const Real mlo = std::max(rep.Mr-rep.Rho, (Real)0.0);
+  rep.M2Lo = mlo*mlo;
+  const Real mhi = rep.Mr+rep.Rho;
+  rep.M2Hi = mhi*mhi;
 
-  const Real tol2 = 1e-9*1e-9;
+  rep.Numer = 1.0 + aMin*aMin*rep.M2Hi;
 
-  for (Index j = 0; j < mNumCells; j++) {
-
-    const R3::XYZ mx_target(-centers[j].x(), centers[j].y(), centers[j].z());
-    const R3::XYZ my_target( centers[j].x(),-centers[j].y(), centers[j].z());
-
-    Index bestMx = 0, bestMy = 0;
-    Real bestMxD2 = 1.0e300, bestMyD2 = 1.0e300;
-
-    for (Index k = 0; k < mNumCells; k++) {
-      const Real dMx = centers[k].DistFrom(mx_target);
-      const Real dMy = centers[k].DistFrom(my_target);
-      if (dMx*dMx < bestMxD2) {bestMxD2 = dMx*dMx; bestMx = k;}
-      if (dMy*dMy < bestMyD2) {bestMyD2 = dMy*dMy; bestMy = k;}
-    }
-
-    if (bestMxD2 > tol2) {
-      throw std::logic_error(
-        "AxiProposal::BuildMirrorPerms: no x-mirror match for cell");
-    }
-    if (bestMyD2 > tol2) {
-      throw std::logic_error(
-        "AxiProposal::BuildMirrorPerms: no y-mirror match for cell");
-    }
-
-    mMxPerm[j] = bestMx;
-    mMyPerm[j] = bestMy;
-  }
+  return rep;
 
 }//
 //
 
 
 //////
-// METHOD:  AxiProposal :: ComputeBound()                      [const]
+// METHOD:  AxiProposal :: MakeBinCap()                        [static]
+//
+AxiProposal::BinCap AxiProposal::MakeBinCap(const R3::XYZ & u_c, Real delta) {
+
+  BinCap cap;
+  cap.Uc       = u_c;
+  cap.Delta    = delta;
+  cap.CosDelta = cos(delta);
+  cap.SinDelta = sin(delta);
+  return cap;
+
+}//
+//
+
+
+//////
+// METHOD:  AxiProposal :: BoundRatio()                        [static]
 //
 //   Rigorous upper bound on AnisoRatio(m) (see ScatterParams::
-  // AnisoRatio()) over every fine direction within angle 'r_i' of
-//   representative direction 't' (scaled by 'k_out'), and every local-
-//   vertical direction within angle 'delta' of 'u_c', for a conversion
-//   with the given k_in/k_out. See docs/superpowers/specs/
-//   2026-10-16-anisotropic-scale-lengths-design.md and the task-7
-//   brief for the derivation.
+//   AnisoRatio()), divided by M, over every fine direction within angle
+//   'rep's originating r_i of its representative direction, and every
+//   local-vertical direction within angle 'cap.Delta' of 'cap.Uc'. This
+//   is exactly today's ComputeBound() (frozen, for ruling R-P1, as
+//   tests/anisotropy_tests.cpp's ReferenceBound3db253a), split into the
+//   per-representative part (PrepareBoundRep(), above) and this
+//   per-(representative,bin) remainder: one acos and two cos calls, and
+//   the Q_lo algebra. The caller applies 'pow(.,kappa+1.5)' and the
+//   M/min(M,.) wrapper once per cell, on this function's largest return
+//   value over the cell's representatives -- bit-identical to applying
+//   them per-representative-then-maxing, since both pow(.,kappa+1.5)
+//   (kappa+1.5 > 0) and the M-scaled min are monotone nondecreasing.
 //
-Real AxiProposal::ComputeBound(const R3::XYZ & t, Real r_i,
-                               Real k_in, Real k_out,
-                               const R3::XYZ & u_c, Real delta) const {
-
-  const R3::XYZ zhat(0.0, 0.0, 1.0);   // Forward (incoming-ray) direction,
-                                       // in the local ray frame.
-  const R3::XYZ m_rep = t.ScaledBy(k_out) + zhat.ScaledBy(-k_in);
-  const Real mr  = m_rep.Mag();
-  const Real rho = k_out * 2.0 * sin(r_i/2.0);
+Real AxiProposal::BoundRatio(const BoundRep & rep, const BinCap & cap,
+                             Real ah, Real az) {
 
   Real alpha_c = 0.0;
-  if (mr > 0.0) {
-    Real cosang = m_rep.Unit().Dot(u_c);
+  if (rep.Mr > 0.0) {
+    Real cosang = rep.MHat.Dot(cap.Uc);
     if (cosang > 1.0)  cosang = 1.0;
     if (cosang < -1.0) cosang = -1.0;
     alpha_c = acos(cosang);
   }
-  const Real alpha_lo = std::max((Real)0.0, alpha_c - delta);
-  const Real alpha_hi = std::min((Real)Geometry::Pi, alpha_c + delta);
+  const Real alpha_lo = std::max((Real)0.0, alpha_c - cap.Delta);
+  const Real alpha_hi = std::min((Real)Geometry::Pi, alpha_c + cap.Delta);
 
-  const Real s_lo = mr*cos(alpha_hi) - rho;
-  const Real s_hi = mr*cos(alpha_lo) + rho;
+  const Real s_lo = rep.Mr*cos(alpha_hi) - rep.Rho;
+  const Real s_hi = rep.Mr*cos(alpha_lo) + rep.Rho;
 
   const Real s2_hi = std::max(s_lo*s_lo, s_hi*s_hi);
   const Real s2_lo = (s_lo <= 0.0 && 0.0 <= s_hi) ?
                       (Real)0.0 : std::min(s_lo*s_lo, s_hi*s_hi);
 
-  const Real mlo   = std::max(mr-rho, (Real)0.0);
-  const Real m2_lo = mlo*mlo;
-  const Real mhi   = mr+rho;
-  const Real m2_hi = mhi*mhi;
-
   Real Q_lo;
-  if (mAh >= mAz) {
-    Q_lo = std::max(mAh*mAh*m2_lo - (mAh*mAh-mAz*mAz)*std::min(s2_hi,m2_hi),
-                    mAz*mAz*m2_lo);
+  if (ah >= az) {
+    Q_lo = std::max(ah*ah*rep.M2Lo - (ah*ah-az*az)*std::min(s2_hi,rep.M2Hi),
+                    az*az*rep.M2Lo);
   } else {
-    Q_lo = mAh*mAh*m2_lo + (mAz*mAz-mAh*mAh)*s2_lo;
+    Q_lo = ah*ah*rep.M2Lo + (az*az-ah*ah)*s2_lo;
   }
 
-  const Real ratioBase = (1.0 + mAMin*mAMin*m2_hi) / (1.0 + Q_lo);
-  const Real bound = mM * pow(ratioBase, mKappa+1.5);
-
-  return std::min(mM, bound);
+  return rep.Numer / (1.0 + Q_lo);
 
 }//
 //
@@ -297,42 +472,35 @@ Real AxiProposal::ComputeBound(const R3::XYZ & t, Real r_i,
 // METHOD:  AxiProposal :: BuildBinTable()                     [const]
 //
 //   Builds one incidence bin's cumulative proposal-weight table (and
-//   its majorant rate) for the two conversions available to 'intype'.
+//   its majorant rate) for the two conversions sharing this bin's
+//   u_c/delta ('reps0'/'reps1', 'S0'/'S1' -- see aniso_axi.hpp).
 //
-void AxiProposal::BuildBinTable(raytype intype, const R3::XYZ & u_c,
-                                Real delta,
-                                const std::vector<R3::XYZ> & repCenters,
-                                const std::vector<Real> & repRadius,
+void AxiProposal::BuildBinTable(const R3::XYZ & u_c, Real delta,
+                                const std::vector<BoundRep> & reps0,
+                                const std::vector<BoundRep> & reps1,
                                 Index repsPerCell,
+                                const std::vector<Real> & S0,
+                                const std::vector<Real> & S1,
                                 BinTable & table, Real & rate) const {
 
-  const Real k_in = (intype == RAY_P) ? mKP : mKS;
-  // conv0's output is always P (GPP for intype P, GSP for intype S);
-  // conv1's output is always S (GPS or GSS):
-  const Real k_out0 = mKP;
-  const Real k_out1 = mKS;
-  const int g0 = (intype == RAY_P) ? 0 : 2;
-  const int g1 = g0 + 1;
+  const BinCap cap = MakeBinCap(u_c, delta);
 
-  std::vector<Real> bound0(mNumCells, 0.0), bound1(mNumCells, 0.0);
+  std::vector<Real> maxRatio0(mNumCells, 0.0), maxRatio1(mNumCells, 0.0);
 
-  const Index numReps = (Index) repCenters.size();
+  const Index numReps = (Index) reps0.size();
   for (Index i = 0; i < numReps; i++) {
     const Index cell = i / repsPerCell;
-    const Real b0 = ComputeBound(repCenters[i], repRadius[i], k_in, k_out0,
-                                 u_c, delta);
-    if (b0 > bound0[cell]) {bound0[cell] = b0;}
-    const Real b1 = ComputeBound(repCenters[i], repRadius[i], k_in, k_out1,
-                                 u_c, delta);
-    if (b1 > bound1[cell]) {bound1[cell] = b1;}
+    const Real r0 = BoundRatio(reps0[i], cap, mAh, mAz);
+    if (r0 > maxRatio0[cell]) {maxRatio0[cell] = r0;}
+    const Real r1 = BoundRatio(reps1[i], cap, mAh, mAz);
+    if (r1 > maxRatio1[cell]) {maxRatio1[cell] = r1;}
   }
 
-  std::vector<Real> S0(mNumCells), S1(mNumCells);
+  std::vector<Real> bound0(mNumCells), bound1(mNumCells);
   Real sumBinBoundS = 0.0;
   for (Index c = 0; c < mNumCells; c++) {
-    const Index lo = c*mCellBlock, hi = lo+mCellBlock;
-    S0[c] = mPDists[g0].GetRangeMagnitude(lo, hi);
-    S1[c] = mPDists[g1].GetRangeMagnitude(lo, hi);
+    bound0[c] = std::min(mM, mM * pow(maxRatio0[c], mKappa+1.5));
+    bound1[c] = std::min(mM, mM * pow(maxRatio1[c], mKappa+1.5));
     sumBinBoundS += bound0[c]*S0[c] + bound1[c]*S1[c];
   }
 

@@ -1680,6 +1680,238 @@ TEST(isolated_isotropic_overridemfp_eps_zero_unaffected) {
 
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
+// ****  TASK 2 (PERFORMANCE PLAN) TESTS: Bound-kernel restructure   ****
+// ****  and geometry cache                                          ****
+// ****                                                              ****
+//
+// See docs/superpowers/specs/2026-10-17-axisymmetric-sampler-
+// performance-design.md, decision 1, and
+// .superpowers/sdd/2026-10-17-axisymmetric-sampler-performance/
+// task-2-brief.md.
+//
+
+// ::: ReferenceBound3db253a(...) :::
+//
+//   Ruling R-P1's frozen oracle: a free-standing, literal transcription
+//   of AxiProposal::ComputeBound()'s body exactly as it existed at
+//   commit 3db253a (the commit this branch -- and the performance plan
+//   -- starts from). Confirmed identical to aniso_axi.cpp at this
+//   branch's HEAD (a8ee04b) by `git diff 3db253a HEAD -- aniso_axi.cpp`
+//   (empty) before this task began, so freezing "3db253a's ComputeBound"
+//   and "today's ComputeBound" are the same thing as of this writing.
+//   This is the oracle test_axi_kernel_matches_reference checks the
+//   restructured PrepareBoundRep()/BoundRatio() kernel against: every
+//   member-variable read ('this->mAh' etc.) is replaced by a plain
+//   parameter of the same name, nothing else is changed. Do not "fix"
+//   or simplify this function if it starts looking stale -- it must
+//   stay a literal transcription of the frozen commit, bugs and all.
+//
+static Real ReferenceBound3db253a(const R3::XYZ & t, Real r_i,
+                                  Real k_in, Real k_out,
+                                  const R3::XYZ & u_c, Real delta,
+                                  Real ah, Real az, Real aMin,
+                                  Real M, Real kappa) {
+
+  const R3::XYZ zhat(0.0, 0.0, 1.0);
+  const R3::XYZ m_rep = t.ScaledBy(k_out) + zhat.ScaledBy(-k_in);
+  const Real mr  = m_rep.Mag();
+  const Real rho = k_out * 2.0 * sin(r_i/2.0);
+
+  Real alpha_c = 0.0;
+  if (mr > 0.0) {
+    Real cosang = m_rep.Unit().Dot(u_c);
+    if (cosang > 1.0)  cosang = 1.0;
+    if (cosang < -1.0) cosang = -1.0;
+    alpha_c = acos(cosang);
+  }
+  const Real alpha_lo = std::max((Real)0.0, alpha_c - delta);
+  const Real alpha_hi = std::min((Real)Geometry::Pi, alpha_c + delta);
+
+  const Real s_lo = mr*cos(alpha_hi) - rho;
+  const Real s_hi = mr*cos(alpha_lo) + rho;
+
+  const Real s2_hi = std::max(s_lo*s_lo, s_hi*s_hi);
+  const Real s2_lo = (s_lo <= 0.0 && 0.0 <= s_hi) ?
+                      (Real)0.0 : std::min(s_lo*s_lo, s_hi*s_hi);
+
+  const Real mlo   = std::max(mr-rho, (Real)0.0);
+  const Real m2_lo = mlo*mlo;
+  const Real mhi   = mr+rho;
+  const Real m2_hi = mhi*mhi;
+
+  Real Q_lo;
+  if (ah >= az) {
+    Q_lo = std::max(ah*ah*m2_lo - (ah*ah-az*az)*std::min(s2_hi,m2_hi),
+                    az*az*m2_lo);
+  } else {
+    Q_lo = ah*ah*m2_lo + (az*az-ah*ah)*s2_lo;
+  }
+
+  const Real ratioBase = (1.0 + aMin*aMin*m2_hi) / (1.0 + Q_lo);
+  const Real bound = M * pow(ratioBase, kappa+1.5);
+
+  return std::min(M, bound);
+
+}
+
+
+TEST(axi_kernel_matches_reference) {
+
+  // Representative directions: every TESS_ICO degree-3 centre (1,280 of
+  // them), plus zhat on its own -- t==zhat with k_in==k_out makes
+  // m_rep (== k_out*t - k_in*zhat) exactly the zero vector, exercising
+  // PrepareBoundRep()'s "MHat = zero vector if Mr == 0" special case
+  // (today's ComputeBound() never calls Unit() on m_rep in that case
+  // either; see the 'mr > 0.0' guard above).
+  std::vector<R3::XYZ> ts;
+  {
+    S2::TesselSphere tess(S2::TESS_ICO, 3);
+    for (Index i = 0; i < (Index) tess.size(); ++i) {ts.push_back(tess[i].XYZ());}
+  }
+  ts.push_back(R3::XYZ(0.0, 0.0, 1.0));
+
+  const Real r_is[3] = {0.0, 0.003, 0.05};
+
+  struct KPair {Real k_in, k_out;};
+  const KPair kpairs[4] = { {1.0,1.0}, {1.0,1.73}, {1.73,1.0}, {1.73,1.73} };
+
+  // Incidence-bin caps, built with exactly the u_c/delta expressions
+  // the AxiProposal constructor uses for P bins {0,22,44} (bin corners,
+  // mid-range, and the 90-degree edge) and S bins {(0,0),(22,4),(44,8)}
+  // (same theta corners, spread across chi).
+  struct CapCase {R3::XYZ u_c; Real delta;};
+  std::vector<CapCase> caps;
+  const int pBins[3] = {0, 22, 44};
+  for (int i = 0; i < 3; ++i) {
+    const int b = pBins[i];
+    const Real theta_lo = (2.0*b)     * Geometry::DtoR;
+    const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
+    const Real theta_c  = 0.5*(theta_lo+theta_hi);
+    const Real delta    = 0.5*(theta_hi-theta_lo);
+    CapCase cc;
+    cc.u_c = R3::XYZ(-sin(theta_c), 0.0, cos(theta_c));
+    cc.delta = delta;
+    caps.push_back(cc);
+  }
+  const int sBC[3][2] = {{0,0}, {22,4}, {44,8}};
+  for (int i = 0; i < 3; ++i) {
+    const int b = sBC[i][0], c = sBC[i][1];
+    const Real theta_lo = (2.0*b)     * Geometry::DtoR;
+    const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
+    const Real theta_c  = 0.5*(theta_lo+theta_hi);
+    const Real chi_lo = (10.0*c)      * Geometry::DtoR;
+    const Real chi_hi = (10.0*c+10.0) * Geometry::DtoR;
+    const Real chi_c  = 0.5*(chi_lo+chi_hi);
+    const Real delta = 0.5*(theta_hi-theta_lo)
+                      + sin(theta_hi)*0.5*(chi_hi-chi_lo);
+    CapCase cc;
+    cc.u_c = R3::XYZ(-sin(theta_c)*cos(chi_c),
+                     sin(theta_c)*sin(chi_c),
+                     cos(theta_c));
+    cc.delta = delta;
+    caps.push_back(cc);
+  }
+
+  struct Spec {Real ah, az, kappa;};
+  const Spec specs[4] = {
+    {2.0, 0.5, 0.3}, {2.0, 0.5, 0.5}, {0.5, 2.0, 0.5}, {10.0, 0.5, 0.5}
+  };
+
+  long long count = 0;
+  for (std::size_t ti = 0; ti < ts.size(); ++ti) {
+    for (int ri = 0; ri < 3; ++ri) {
+      for (int ki = 0; ki < 4; ++ki) {
+        for (std::size_t ci = 0; ci < caps.size(); ++ci) {
+          for (int si = 0; si < 4; ++si) {
+
+            const Real aMin = std::min(specs[si].ah, specs[si].az);
+            const Real M = specs[si].ah*specs[si].ah*specs[si].az
+                         / (aMin*aMin*aMin);
+
+            const AxiProposal::BoundRep rep =
+              AxiProposal::PrepareBoundRep(ts[ti], r_is[ri],
+                                           kpairs[ki].k_in, kpairs[ki].k_out,
+                                           aMin);
+            const AxiProposal::BinCap cap =
+              AxiProposal::MakeBinCap(caps[ci].u_c, caps[ci].delta);
+            const Real ratio = AxiProposal::BoundRatio(rep, cap,
+                                                        specs[si].ah,
+                                                        specs[si].az);
+            const Real got = std::min(M, M*pow(ratio, specs[si].kappa+1.5));
+
+            const Real want = ReferenceBound3db253a(
+              ts[ti], r_is[ri], kpairs[ki].k_in, kpairs[ki].k_out,
+              caps[ci].u_c, caps[ci].delta,
+              specs[si].ah, specs[si].az, aMin, M, specs[si].kappa);
+
+            CHECK_MSG(got == want,
+                     "mismatch at t#" << ti << " r_i=" << r_is[ri]
+                     << " k_in=" << kpairs[ki].k_in
+                     << " k_out=" << kpairs[ki].k_out
+                     << " cap#" << ci << " spec#" << si
+                     << ": got=" << got << " want=" << want);
+            ++count;
+          }
+        }
+      }
+    }
+  }
+  CHECK(count > 0);
+
+}
+
+
+TEST(axi_geometry_cache_degrees) {
+
+  // Builds AxiProposal at degree 5, then degree 2 (a different cache
+  // key, interleaved to make sure it can't corrupt the degree-5 entry),
+  // then degree 5 again. UseTOADegree() caches one TesselSphere per
+  // degree for the program's life, so the two degree-5 builds below are
+  // handed the exact same take-off-angle set both times -- this exists
+  // to catch a geometry cache that corrupts or wrongly shares state
+  // across degrees, not to prove determinism (a pure, uncached rebuild
+  // would also be bit-identical to itself).
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+
+  const S2::TesselSphere & toas5a = UseTOADegree(5);
+  std::vector<ProbDist> pdists5a;
+  BuildIsoPDists(sp, toas5a, pdists5a);
+  AxiProposal axi5a(sp, toas5a, pdists5a);
+
+  const S2::TesselSphere & toas2 = UseTOADegree(2);
+  std::vector<ProbDist> pdists2;
+  BuildIsoPDists(sp, toas2, pdists2);
+  AxiProposal axi2(sp, toas2, pdists2);
+  (void) axi2;
+
+  const S2::TesselSphere & toas5b = UseTOADegree(5);
+  std::vector<ProbDist> pdists5b;
+  BuildIsoPDists(sp, toas5b, pdists5b);
+  AxiProposal axi5b(sp, toas5b, pdists5b);
+
+  CHECK(axi5a.MajorantRate(RAY_P) == axi5b.MajorantRate(RAY_P));
+  CHECK(axi5a.MajorantRate(RAY_S) == axi5b.MajorantRate(RAY_S));
+  CHECK(axi5a.NumCells() == axi5b.NumCells());
+
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta = (2.0*b + 1.0) * Geometry::DtoR;  // bin centre
+    const R3::XYZ u_c(-sin(theta), 0.0, cos(theta));
+    for (int conv = 0; conv < 2; ++conv) {  // GPP, GPS
+      for (Index cell = 0; cell < axi5a.NumCells(); ++cell) {
+        const Real va = axi5a.AcceptanceBound(RAY_P, u_c, conv, cell);
+        const Real vb = axi5b.AcceptanceBound(RAY_P, u_c, conv, cell);
+        CHECK_MSG(va == vb,
+                 "bin=" << b << " conv=" << conv << " cell=" << cell
+                 << ": first-build=" << va << " second-build=" << vb);
+      }
+    }
+  }
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
 // ****                                                              ****
 //
