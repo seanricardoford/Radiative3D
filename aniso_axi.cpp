@@ -74,29 +74,39 @@ namespace {
 
   // ::: FingerprintOf(toa) :::
   //
-  //   A cheap scalar fingerprint of a take-off-angle set: every
-  //   direction's x+y+z components, summed. (The sum is taken in index
-  //   order below, but addition is commutative -- order doesn't affect
-  //   which *value* this converges to, only the floating-point rounding
-  //   along the way.) This is only a sanity check guarding the geometry
-  //   cache below against reuse across two distinct take-off-angle sets
-  //   that happen to share a size (not a security hash) -- production
-  //   builds a single TesselSphere per run and reuses it for every
-  //   Scatterer (see PhononSource::Set_TOA_Array()), so a collision
-  //   can't arise there; unit tests that build multiple distinct sets at
-  //   the same size are expected to differ in this sum (see
-  //   test_axi_geometry_cache_mismatch, tests/anisotropy_tests.cpp,
-  //   which confirms this empirically: a pure rotation of a TESS_ICO set
-  //   is a bad choice of "distinct set" here, since its vertices sum to
-  //   (numerically) zero by icosahedral symmetry and rotation preserves
-  //   that exactly, so two rotated copies' fingerprints differ only by
-  //   sub-1e-12 rounding noise).
+  //   A cheap scalar fingerprint of a take-off-angle set: controller
+  //   ruling R2's index-weighted sum
+  //   Sum_k (k+1)*(x_k + 2*y_k + 3*z_k), k in index order, 0-based. This
+  //   is only a sanity check guarding the geometry cache below against
+  //   reuse across two distinct take-off-angle sets that happen to share
+  //   a size (not a security hash) -- production builds a single
+  //   TesselSphere per run and reuses it for every Scatterer (see
+  //   PhononSource::Set_TOA_Array()), so a collision can't arise there.
+  //
+  //   An earlier version of this fingerprint was a plain (unweighted,
+  //   equally-coefficiented) component sum, which a standalone check
+  //   showed to be a poor discriminator: TESS_ICO's vertex directions
+  //   sum to (numerically) zero by icosahedral symmetry, and since
+  //   rotation is linear, a rotated copy's sum is *also* (numerically)
+  //   zero -- two such fingerprints could differ by as little as
+  //   ~1e-12 relative, no better than rounding noise. Per-index
+  //   weighting breaks that cancellation (a rotation or reordering
+  //   changes which direction sits at which index, and a different
+  //   index carries a different weight) and the x/2y/3z coefficients
+  //   break the remaining x<->y<->z degeneracy; a standalone check
+  //   confirmed a 0.01 rad rotation about z of the degree-5 TESS_ICO
+  //   set now changes this fingerprint by about 0.7% (relative) --
+  //   orders of magnitude above floating-point noise -- and that
+  //   reversing the set's order changes it by more than 100%. See
+  //   test_axi_geometry_cache_mismatch and
+  //   test_axi_geometry_cache_mismatch_rotation (tests/anisotropy_tests.cpp)
+  //   for both as regression-tested mismatch cases.
   //
   Real FingerprintOf(const S2::S2Set & toa) {
     Real sum = 0.0;
     for (Index k = 0; k < (Index) toa.size(); k++) {
       const R3::XYZ p = toa[k].XYZ();
-      sum += p.x() + p.y() + p.z();
+      sum += (Real) (k+1) * (p.x() + 2.0*p.y() + 3.0*p.z());
     }
     return sum;
   }

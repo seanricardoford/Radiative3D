@@ -1991,6 +1991,100 @@ TEST(axi_geometry_cache_mismatch) {
 }
 
 
+TEST(axi_geometry_cache_mismatch_rotation) {
+
+  // Controller ruling R2: FingerprintOf() (aniso_axi.cpp) now uses an
+  // index-weighted sum specifically so a rotated take-off-angle set is
+  // recognized as different from the un-rotated one -- a plain
+  // (unweighted) component sum could not do this reliably, since
+  // TESS_ICO's vertex directions sum to (numerically) zero by
+  // icosahedral symmetry and rotation preserves that exactly. This test
+  // sandwiches a 0.01 rad-about-z rotation of the standard degree-5 set
+  // between two standard-set builds, as test_axi_geometry_cache_mismatch
+  // does for its own (non-rotation) perturbation, but additionally
+  // confirms the rotated build actually took the mismatch path via an
+  // observable effect: its AcceptanceBound table must differ from the
+  // standard build's *somewhere*, which can only happen if the mismatch
+  // path really rebuilt geometry from the rotated directions rather than
+  // (bug) silently reusing the standard set's cached geometry.
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+
+  const S2::TesselSphere & toas5 = UseTOADegree(5);
+  std::vector<ProbDist> pdists5a;
+  BuildIsoPDists(sp, toas5, pdists5a);
+  AxiProposal axi5a(sp, toas5, pdists5a);
+
+  S2::S2Set rotated;
+  const Real phi0 = 0.01;  // small fixed rotation about z, radians
+  for (Index i = 0; i < (Index) toas5.size(); ++i) {
+    rotated.push_back(S2::ThetaPhi(toas5[i].Theta(), toas5[i].Phi() + phi0));
+  }
+  CHECK(rotated.size() == toas5.size());
+
+  std::vector<ProbDist> pdistsRotated;
+  BuildIsoPDists(sp, rotated, pdistsRotated);
+  bool threwOnRotated = false;
+  AxiProposal * axiRotated = 0;
+  try {
+    axiRotated = new AxiProposal(sp, rotated, pdistsRotated);
+  } catch (...) {
+    threwOnRotated = true;
+  }
+  CHECK_MSG(!threwOnRotated,
+           "AxiProposal on a same-size, rotated take-off-angle set "
+           "should not throw");
+
+  std::vector<ProbDist> pdists5b;
+  BuildIsoPDists(sp, toas5, pdists5b);
+  AxiProposal axi5b(sp, toas5, pdists5b);
+
+  // (1) Observable effect proving the mismatch path really rebuilt
+  // geometry from the rotated set.
+  bool foundDifference = false;
+  Real maxAbsDiff = 0.0;
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta = (2.0*b + 1.0) * Geometry::DtoR;
+    const R3::XYZ u_c(-sin(theta), 0.0, cos(theta));
+    for (int conv = 0; conv < 2; ++conv) {
+      for (Index cell = 0; cell < axi5a.NumCells(); ++cell) {
+        const Real vStd = axi5a.AcceptanceBound(RAY_P, u_c, conv, cell);
+        const Real vRot = axiRotated->AcceptanceBound(RAY_P, u_c, conv, cell);
+        if (vRot != vStd) {foundDifference = true;}
+        maxAbsDiff = std::max(maxAbsDiff, std::fabs(vRot - vStd));
+      }
+    }
+  }
+  CHECK_MSG(foundDifference,
+           "rotated build's AcceptanceBound table is bit-identical to "
+           "the standard build's at every P bin x conv x cell checked -- "
+           "the mismatch path may not be rebuilding geometry from the "
+           "rotated set (max |diff| observed = " << maxAbsDiff << ")");
+  delete axiRotated;
+
+  // (2) The standard set's cache entry survived the rotated build
+  // untouched: a fresh standard-set build still matches the first
+  // exactly.
+  CHECK(axi5a.MajorantRate(RAY_P) == axi5b.MajorantRate(RAY_P));
+  CHECK(axi5a.MajorantRate(RAY_S) == axi5b.MajorantRate(RAY_S));
+  CHECK(axi5a.NumCells() == axi5b.NumCells());
+
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta = (2.0*b + 1.0) * Geometry::DtoR;
+    const R3::XYZ u_c(-sin(theta), 0.0, cos(theta));
+    for (int conv = 0; conv < 2; ++conv) {
+      for (Index cell = 0; cell < axi5a.NumCells(); ++cell) {
+        const Real va = axi5a.AcceptanceBound(RAY_P, u_c, conv, cell);
+        const Real vb = axi5b.AcceptanceBound(RAY_P, u_c, conv, cell);
+        CHECK_MSG(va == vb,
+                 "bin=" << b << " conv=" << conv << " cell=" << cell
+                 << ": first-build=" << va << " second-build=" << vb);
+      }
+    }
+  }
+
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
