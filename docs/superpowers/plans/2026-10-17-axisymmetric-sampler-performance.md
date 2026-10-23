@@ -328,6 +328,53 @@ git commit -m "Parallelize AxiProposal geometry and representative setup"
 
 ---
 
+### Task 4c: Bit-identical parallel isotropic table construction (added 2026-10-23 at the user's request, ruling R5)
+
+Profiling (macOS `sample`, zero-phonon degree-9 Lop Nor, 21 Scatterers) found that `Scatterer::PopulateProbDists` (`scatterers.cpp`, ~lines 222–249) is 89–92% of the ~22 s build in every mode. It is a serial `for (k < nTOA)` loop calling `ScatterParams::GSATO()` on each of 5,242,880 directions per scatterer. Inside it:
+- `ScatterParams::PSATO()` (`scatparams.cpp:188–198`) recomputes `numer = (8.*pi32*eps*eps*a*a*a) * tgamma(kappa+1.5) / tgamma(kappa)`, with `pi32 = pow(Pi,1.5)`, on every call, although it is constant per `ScatterParams`;
+- `gps` and `gsp` (`scatparams.cpp:106–111`) call `PSATO(arg)` with the same `arg`;
+- `XSATO`'s complex-exponential path is also hot.
+
+**Files:**
+- Modify: `scatparams.hpp`, `scatparams.cpp`, `scatterers.cpp`
+- Test: `tests/anisotropy_tests.cpp`
+
+**Interfaces:**
+- Consumes: `ParallelFor` and `Scatterer::GetBuildThreads()` (Task 3).
+- Produces: no public API change. `ScatterParams` caches its constant `PSATO` numerator (and the matching `PSATO_Aniso` numerator) as a private member. That member is computed in every constructor and every setter that changes eps, a, ax/ay/az or kappa, using today's exact expression.
+
+- [ ] **Step 1: Write the failing test.**
+
+```cpp
+test_iso_tables_thread_invariant: Scatterer::SetBuildThreads(1), build Scatterer(LopNorCrust(.5,.5,.5)) and
+    Scatterer(LopNorCrust(2,2,0.5)); SetBuildThreads(7), build both again: GetMajorantMeanFreePath(P,S),
+    GetReportMFPs (anisotropic one), and the first 2000 results of a fixed-seed sequence of
+    GetRandomScatteredRelativePhonon(RAY_P) / (RAY_S) on the isotropic pair (same RandomContext seed for both builds)
+    are exactly equal; restore SetBuildThreads(1)
+```
+
+  The test fails before the change only if construction already varies with thread count, so it passes RED-free. That is acceptable: it is a guard. Record it as such.
+- [ ] **Step 2: Hoist the constants.**
+  - Cache `numer` exactly as `PSATO` evaluates it, `(8.*pi32*eps*eps*a*a*a) * tgamma(kappa+1.5) / tgamma(kappa)`, and the `PSATO_Aniso` numerator likewise. Never re-associate.
+  - In `GSATO`, compute `PSATO(arg)` once where gps and gsp share `arg`.
+  - Check every `ScatterParams` constructor and mutator so the cache can never go stale. `ScatterParams` stays copyable.
+- [ ] **Step 3: Parallelize `PopulateProbDists`.** Compute `GSATO` for each direction with `ParallelFor` over direction chunks.
+  - Write only disjoint elements, either into the `ProbDist` entries directly if `SetRelativeProb(k, ·)` touches only element k (verify in `probability.cpp`), or into temporary arrays assigned serially afterwards.
+  - Keep `PopulateWholeProbs`, `ComputeMFPs` and `ComputeDipoles` and their summation orders unchanged. Parallelize `ComputeDipoles`' per-direction terms only if a profile shows it matters and the sums keep today's order.
+- [ ] **Step 4: Run the tests.**
+  - `tests/test_anisotropy_unit.sh` passes;
+  - `BASELINE_EXE=/tmp/r3d-baseline/main tests/test_aniso_isotropic_regression.sh` passes (isotropic outputs byte-identical to `aaec540`);
+  - `REF_EXE=/tmp/r3d-aniso-ref/main tests/compare_aniso_reference.sh` passes 8/8 (anisotropic outputs unchanged).
+- [ ] **Step 5: Measure.** Time zero-phonon degree-9 Lop Nor builds for iso, tri and axi, with default threads and with `--threads=1`, as in Task 4b Step 5. Record all six.
+- [ ] **Step 6: Run the full check, then commit.**
+
+```bash
+git add scatparams.hpp scatparams.cpp scatterers.cpp tests/anisotropy_tests.cpp
+git commit -m "Build isotropic scattering tables in parallel with cached PSATO constants"
+```
+
+---
+
 ### Task 5: Faster axisymmetric sampling path
 
 **Files:**

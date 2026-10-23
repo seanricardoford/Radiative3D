@@ -140,11 +140,26 @@ one, and the axisymmetric medium has 1.3–1.4× more real events.
 ## Non-goals
 
 - Area-weighted quadrature (documented only).
-- Faster isotropic construction, e.g. caching `GSATO`'s `tgamma`
-  prefactor. Noted as a separate follow-up.
 - A command-line sampler override.
 - Changing resolution (cells, bins, representatives).
 - Lazy bin construction.
+
+## Added on 2026-10-23, at the user's request
+
+8. **Bit-identical isotropic table construction speedup.**
+   - Profiling showed that `Scatterer::PopulateProbDists`, a serial
+     `GSATO` loop over every take-off-angle direction, is about 90% of
+     every degree-9 build, isotropic included. That is about 20 of 22 s
+     for Lop Nor.
+   - `PSATO` recomputes `tgamma`, `tgamma` and `pow` constants on every
+     call, and the gps/gsp terms call `PSATO` twice with the same
+     argument.
+   - Cache exactly the sub-expression values today's code computes, never
+     re-associated, and fill the per-direction values with `ParallelFor`.
+     Every order-dependent step (ProbDist integration, whole-probability
+     tables, dipole sums) stays serial and in today's order.
+   - Isotropic outputs stay byte-identical to `aaec540`, and all outputs
+     stay identical for any thread count.
 
 ## Design calls
 
