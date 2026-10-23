@@ -280,6 +280,54 @@ git commit -m "Evaluate the AxiProposal cap bound without trigonometric calls"
 
 ---
 
+### Task 4b: Parallelize the remaining serial AxiProposal setup (added 2026-10-23, ruling R3)
+
+Profiling at `961ca45` put the degree-9 Lop Nor zero-phonon build at axi 25.8 s against tri 22.2 s. The 3.6 s gap breaks down as:
+- ~2.2 s: the one-time geometry build (`BuildAxiGeometry`) runs serially. It computes 81,920 × 64 representative angles with `acos` and does a brute-force 1280² mirror match.
+- ~0.4 s: the `PrepareBoundRep` arrays are built serially, per scatterer.
+- ~0.7 s: the residual of the parallel bin build. The P table's 45 tasks and the 8- and 9-state report calls cannot fill 16 threads.
+- ~0.3 s: thread spawn and join. That is four `ParallelFor` calls per scatterer, about 1,100 short-lived threads per run.
+
+**Files:**
+- Modify: `aniso_axi.hpp`, `aniso_axi.cpp`, `scatterers.cpp`
+- Test: `tests/anisotropy_tests.cpp`
+
+**Interfaces:**
+- Consumes: `ParallelFor`, `Scatterer::GetBuildThreads()` (Task 3), and the geometry cache and `BoundRep` arrays (Task 2).
+- Produces:
+  - `BuildAxiGeometry(toa, threads)`, which takes the build thread count. The cached geometry is identical for any thread count.
+  - One `ParallelFor` over all 450 bins (P bins first, then S, in today's index order) instead of two calls.
+  - One `ParallelFor` over all report states (9 axis states, plus 8 angle states for axisymmetric specs) instead of two.
+
+- [ ] **Step 1: Write the failing test.**
+
+```cpp
+test_axi_geometry_thread_invariant: for degrees 5 and 7, build the AxiProposal geometry with threads 1 and 7
+    (via the public AxiProposal constructor on fresh, distinct take-off-angle sets so each build misses the
+    cache — e.g. the rotated set from test_axi_geometry_cache_mismatch_rotation plus the standard set, in an
+    order that guarantees a miss — or via a test hook that bypasses the cache): MajorantRate and every
+    AcceptanceBound for P bins x conv x cell are exact == between the two thread counts
+```
+
+  If no cache-bypass is possible without a hook, add a narrowly named test-only free function in `aniso_axi.cpp`'s public header section, `AxiGeometryChecksum(const S2::S2Set &, unsigned threads)`. It returns a checksum over every representative radius and mirror-permutation entry, and the test compares checksums across thread counts.
+
+- [ ] **Step 2: Run `tests/test_anisotropy_unit.sh`.** Expect a compile failure (new signature or hook).
+- [ ] **Step 3: Implement.**
+  - **Geometry.** Parallelize the representative-radius loop and the mirror-match loop with `ParallelFor`. Each index writes only its own element. Keep the "no match" throws, which `ParallelFor` rethrows from the lowest index.
+  - Parallelize the `PrepareBoundRep` precompute loops.
+  - Merge the P and S bin builds into one `ParallelFor` and the report states into one `ParallelFor`. Keep the serial majorant reduction and every per-state summation order.
+  - Fix the stale `BoundRatio` doc comments in `aniso_axi.hpp` (~lines 175 and 224–226), which still mention `acos` and `cos` (deferred minor from Task 4).
+- [ ] **Step 4: Run the tests.** `tests/test_anisotropy_unit.sh` passes, and `REF_EXE=/tmp/r3d-aniso-ref/main tests/compare_aniso_reference.sh` passes 8/8.
+- [ ] **Step 5: Measure.** Time zero-phonon degree-9 Lop Nor builds, axi and tri, as in Task 3 Step 5, plus the same pair with `--threads=1`. Record all four.
+- [ ] **Step 6: Run the full check, then commit.**
+
+```bash
+git add aniso_axi.hpp aniso_axi.cpp scatterers.cpp tests/anisotropy_tests.cpp
+git commit -m "Parallelize AxiProposal geometry and representative setup"
+```
+
+---
+
 ### Task 5: Faster axisymmetric sampling path
 
 **Files:**
