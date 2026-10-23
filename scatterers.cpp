@@ -998,17 +998,19 @@ const S2::TesselSphere & Scatterer::ReportDirs() {
 //          GSATO() is evaluated once per ReportDirs() direction
 //          (BuildReportRows(), GetBuildThreads() workers), not once per
 //          state as before; the 9 axis states (and, for an axisymmetric
-//          spec, the 8 angle states) are then each integrated by
-//          IntegrateRows() over that shared row table, in parallel
-//          across states -- every state writes only its own rate[i]/
-//          dip[i] slot, so there is no data race. Each state's own
-//          summation stays serial and in today's order, and the
-//          combination below runs only after every ParallelFor() has
-//          joined, serially, in the same fixed index order as before:
-//          the results are bit-identical to the fully-serial
-//          computation, for any thread count (see docs/superpowers/
-//          specs/2026-10-17-axisymmetric-sampler-performance-design.md,
-//          decision 2).
+//          spec, the 8 angle states) are then integrated by
+//          IntegrateRows() over that shared row table via a single
+//          ParallelFor spanning every state (axis states first, then
+//          angle states -- Task 4b merged what were two separate
+//          ParallelFor calls into one) -- every state writes only its
+//          own rate[i]/dip[i] (or r8[j]/d8[j]) slot, so there is no data
+//          race. Each state's own summation stays serial and in today's
+//          order, and the combination below runs only after the
+//          ParallelFor has joined, serially, in the same fixed index
+//          order as before: the results are bit-identical to the
+//          fully-serial computation, for any thread count (see docs/
+//          superpowers/specs/2026-10-17-axisymmetric-sampler-
+//          performance-design.md, decision 2).
 //
 void Scatterer::ComputeReportStats() {
 
@@ -1028,10 +1030,53 @@ void Scatterer::ComputeReportStats() {
     {RAY_S, U, E}, {RAY_S, U, N},
   };
 
+  const bool isAxi = mParams.IsAxisymmetric();
+
+  // Angle states (axisymmetric specs only): declared/filled here, ahead
+  // of the single ParallelFor below, so that ParallelFor can cover both
+  // the axis and angle states in one call. Left zero-initialized (never
+  // read) when !isAxi, since 'numStates' then keeps the ParallelFor from
+  // ever reaching an angle-state index.
+  struct AngleState {raytype in; R3::XYZ dir; R3::XYZ pol;};
+  AngleState angle[8] = {};
+
+  if (isAxi) {
+
+    const S2::ThetaPhi tp0 (0.0,                  0.0);
+    const S2::ThetaPhi tp45(45.0*Geometry::DtoR,  0.0);
+    const S2::ThetaPhi tp90(90.0*Geometry::DtoR,  0.0);
+
+    const R3::XYZ d0  = tp0.XYZ();
+    const R3::XYZ d45 = tp45.XYZ();
+    const R3::XYZ d90 = tp90.XYZ();
+
+    const AngleState init[8] = {
+      {RAY_P, d0,  d0},
+      {RAY_P, d45, d45},
+      {RAY_P, d90, d90},
+      {RAY_S, d0,  tp0.ThetaHat().XYZ()},
+      {RAY_S, d45, tp45.ThetaHat().XYZ()},
+      {RAY_S, d45, tp45.PhiHat().XYZ()},
+      {RAY_S, d90, tp90.ThetaHat().XYZ()},
+      {RAY_S, d90, tp90.PhiHat().XYZ()},
+    };
+    for (int i = 0; i < 8; i++) {angle[i] = init[i];}
+
+  }
+
   Real rate[9], dip[9];
-  ParallelFor(0, (Index) 9, threads, [&](Index i) {
-    IntegrateRows(axis[i].in, axis[i].dir, axis[i].pol, dirs, rows,
-                 rate[i], dip[i]);
+  Real r8[8] = {}, d8[8] = {};
+
+  const Index numStates = isAxi ? (Index) 17 : (Index) 9;
+  ParallelFor(0, numStates, threads, [&](Index i) {
+    if (i < 9) {
+      IntegrateRows(axis[i].in, axis[i].dir, axis[i].pol, dirs, rows,
+                   rate[i], dip[i]);
+    } else {
+      const Index j = i - 9;
+      IntegrateRows(angle[j].in, angle[j].dir, angle[j].pol, dirs, rows,
+                   r8[j], d8[j]);
+    }
   });
 
   const Real sumRateP = rate[0] + rate[1] + rate[2];
@@ -1045,33 +1090,7 @@ void Scatterer::ComputeReportStats() {
 
   mReportMFPs.clear();
 
-  if (mParams.IsAxisymmetric()) {
-
-    const S2::ThetaPhi tp0 (0.0,                  0.0);
-    const S2::ThetaPhi tp45(45.0*Geometry::DtoR,  0.0);
-    const S2::ThetaPhi tp90(90.0*Geometry::DtoR,  0.0);
-
-    const R3::XYZ d0  = tp0.XYZ();
-    const R3::XYZ d45 = tp45.XYZ();
-    const R3::XYZ d90 = tp90.XYZ();
-
-    struct AngleState {raytype in; R3::XYZ dir; R3::XYZ pol;};
-    const AngleState angle[8] = {
-      {RAY_P, d0,  d0},
-      {RAY_P, d45, d45},
-      {RAY_P, d90, d90},
-      {RAY_S, d0,  tp0.ThetaHat().XYZ()},
-      {RAY_S, d45, tp45.ThetaHat().XYZ()},
-      {RAY_S, d45, tp45.PhiHat().XYZ()},
-      {RAY_S, d90, tp90.ThetaHat().XYZ()},
-      {RAY_S, d90, tp90.PhiHat().XYZ()},
-    };
-
-    Real r8[8], d8[8];
-    ParallelFor(0, (Index) 8, threads, [&](Index i) {
-      IntegrateRows(angle[i].in, angle[i].dir, angle[i].pol, dirs, rows,
-                   r8[i], d8[i]);
-    });
+  if (isAxi) {
 
     mReportMFPs.push_back(1.0/r8[0]);                         // P0
     mReportMFPs.push_back(1.0/r8[1]);                         // P45

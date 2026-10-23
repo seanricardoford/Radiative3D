@@ -145,7 +145,7 @@ namespace {
     std::vector<Index>    MyPerm;
   };
 
-  // ::: BuildAxiGeometry(toa, toaSize, fp, geom) :::
+  // ::: BuildAxiGeometry(toa, toaSize, fp, threads, geom) :::
   //
   //   Does the actual (expensive) geometry construction, writing into
   //   'geom' (which the caller owns -- either a fresh map slot on a true
@@ -154,8 +154,17 @@ namespace {
   //   out from GetOrBuildAxiGeometry() so both call sites share one
   //   body instead of risking two copies drifting apart.
   //
+  //   'threads': the number of std::thread workers (ParallelFor(),
+  //   parallel.hpp) used to build the representative-radius array and
+  //   the mirror-cell permutations below (Task 4b). 'geom' comes out
+  //   bit-identical regardless of 'threads': each representative or
+  //   cell is computed by exactly one task, writing only its own
+  //   RepRadius[i]/MxPerm[j]/MyPerm[j] entry, with no cross-task
+  //   reduction (see docs/superpowers/specs/2026-10-17-axisymmetric-
+  //   sampler-performance-design.md, decision 2).
+  //
   void BuildAxiGeometry(const S2::S2Set & toa, Index toaSize, Real fp,
-                        CachedAxiGeometry & geom) {
+                        unsigned threads, CachedAxiGeometry & geom) {
 
     Index numCells, cellBlock, numReps, repBlock, repsPerCell;
     int coarseDeg, repDeg; bool repEqualsToa;
@@ -179,7 +188,12 @@ namespace {
       for (Index i = 0; i < numReps; i++) {
         geom.RepCenters[i] = repTess[i].XYZ();
       }
-      for (Index i = 0; i < numReps; i++) {
+      // Each representative's angular radius -- the largest angle from
+      // its centre to any of its 'repBlock' fine take-off-angle
+      // directions (one acos per (representative, fine-direction) pair)
+      // -- is independent across representatives: each task below
+      // writes only its own geom.RepRadius[i].
+      ParallelFor(0, numReps, threads, [&](Index i) {
         Real maxAngle = 0.0;
         const Index base = i * repBlock;
         for (Index k = base; k < base + repBlock; k++) {
@@ -190,7 +204,7 @@ namespace {
           if (ang > maxAngle) {maxAngle = ang;}
         }
         geom.RepRadius[i] = maxAngle;
-      }
+      });
     }
 
     // Mirror-cell permutations (formerly AxiProposal::BuildMirrorPerms()):
@@ -222,7 +236,12 @@ namespace {
 
     const Real tol2 = 1e-9*1e-9;
 
-    for (Index j = 0; j < numCells; j++) {
+    // Brute-force nearest-centre match for each cell's x- and y-mirror
+    // image, independent across cells: each task below writes only its
+    // own geom.MxPerm[j]/MyPerm[j], with no cross-task reduction. A "no
+    // match" throw is preserved -- ParallelFor rethrows the exception
+    // from the numerically lowest-indexed failing task (parallel.hpp).
+    ParallelFor(0, numCells, threads, [&](Index j) {
 
       const R3::XYZ mx_target(-centers[j].x(), centers[j].y(), centers[j].z());
       const R3::XYZ my_target( centers[j].x(),-centers[j].y(), centers[j].z());
@@ -248,22 +267,27 @@ namespace {
 
       geom.MxPerm[j] = bestMx;
       geom.MyPerm[j] = bestMy;
-    }
+    });
 
   }//
 
-  // ::: GetOrBuildAxiGeometry(toa, scratch) :::
+  // ::: GetOrBuildAxiGeometry(toa, threads, scratch) :::
   //
   //   Returns the geometry for 'toa': a cache hit returns a reference
-  //   into the cache; a true miss (no entry yet for this size) builds
-  //   directly into a fresh cache slot and returns a reference to it; a
+  //   into the cache (built, possibly long ago, under whatever thread
+  //   count that first construction used -- see the AxiProposal
+  //   constructor's own doc comment on why that's fine); a true miss (no
+  //   entry yet for this size) builds directly into a fresh cache slot,
+  //   using 'threads' workers, and returns a reference to it; a
   //   fingerprint mismatch (an entry exists for this size, but isn't
-  //   'toa') builds into the caller-owned 'scratch' instead and returns
-  //   a reference to *that*, leaving the cache untouched. 'scratch' must
-  //   outlive the returned reference in every case -- the constructor
-  //   keeps it as a local for exactly as long as it uses the result.
+  //   'toa') builds into the caller-owned 'scratch' instead, also using
+  //   'threads' workers, and returns a reference to *that*, leaving the
+  //   cache untouched. 'scratch' must outlive the returned reference in
+  //   every case -- the constructor keeps it as a local for exactly as
+  //   long as it uses the result.
   //
   const CachedAxiGeometry & GetOrBuildAxiGeometry(const S2::S2Set & toa,
+                                                  unsigned threads,
                                                   CachedAxiGeometry & scratch) {
 
     static std::mutex mtx;
@@ -279,12 +303,12 @@ namespace {
       if (it->second.Fingerprint == fp) {
         return it->second;
       }
-      BuildAxiGeometry(toa, toaSize, fp, scratch);
+      BuildAxiGeometry(toa, toaSize, fp, threads, scratch);
       return scratch;
     }
 
     CachedAxiGeometry & slot = cache[toaSize];
-    BuildAxiGeometry(toa, toaSize, fp, slot);
+    BuildAxiGeometry(toa, toaSize, fp, threads, slot);
     return slot;
   }
 
@@ -354,7 +378,7 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // 'geom' is used below, which it does as a constructor-local. See
   // GetOrBuildAxiGeometry() above.
   CachedAxiGeometry scratch;
-  const CachedAxiGeometry & geom = GetOrBuildAxiGeometry(toa, scratch);
+  const CachedAxiGeometry & geom = GetOrBuildAxiGeometry(toa, threads, scratch);
   mMxPerm = geom.MxPerm;
   mMyPerm = geom.MyPerm;
 
@@ -362,18 +386,21 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // for each of the four (k_in,k_out) pairs the P and S bin tables need
   // -- P bins use (kP,kP) and (kP,kS); S bins use (kS,kP) and (kS,kS) --
   // instead of once per (representative, bin) as the old ComputeBound()
-  // did. See PrepareBoundRep()/BoundRatio() and BuildBinTable() below.
+  // did. Independent across representatives (each task writes only its
+  // own repsPP[i]/repsPS[i]/repsSP[i]/repsSS[i]), so this runs via
+  // ParallelFor on up to 'threads' workers (Task 4b). See
+  // PrepareBoundRep()/BoundRatio() and BuildBinTable() below.
   const Index numReps = (Index) geom.RepCenters.size();
   std::vector<BoundRep> repsPP(numReps), repsPS(numReps),
                         repsSP(numReps), repsSS(numReps);
-  for (Index i = 0; i < numReps; i++) {
+  ParallelFor(0, numReps, threads, [&](Index i) {
     const R3::XYZ & t = geom.RepCenters[i];
     const Real      r = geom.RepRadius[i];
     repsPP[i] = PrepareBoundRep(t, r, mKP, mKP, mAMin);
     repsPS[i] = PrepareBoundRep(t, r, mKP, mKS, mAMin);
     repsSP[i] = PrepareBoundRep(t, r, mKS, mKP, mAMin);
     repsSS[i] = PrepareBoundRep(t, r, mKS, mKS, mAMin);
-  }
+  });
 
   // Per-cell isotropic sums S(conv,cell), hoisted out of the bin loop:
   // they depend only on conv and cell, never on the incidence bin, so
@@ -389,53 +416,62 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
     S1_S[c] = mPDists[3].GetRangeMagnitude(lo, hi);  // GSS
   }
 
-  // P incidence bins: theta only (canonical frame fixes chi == 0). Each
-  // bin's table/rate (mPTable[b]/mPBinRate[b]) is written by exactly one
-  // task and depends only on 'b' and the read-only data prepared above,
-  // so the kThetaBins calls run via ParallelFor on up to 'threads'
-  // workers; mPMajorant is then reduced serially, in ascending
-  // bin-index order, so the result is bit-identical for any 'threads'
-  // (docs/superpowers/specs/2026-10-17-axisymmetric-sampler-performance-
-  // design.md, decision 2).
+  // Incidence bins: P (theta only; canonical frame fixes chi == 0), then
+  // S (theta and chi, flattened to a single index), over one combined
+  // index space of kThetaBins + kThetaBins*kChiBins = 450 bins, P first
+  // then S in today's per-table index order (Task 4b: previously two
+  // separate ParallelFor calls). Each bin's table/rate (mPTable[b]/
+  // mPBinRate[b], or the mSTable/mSBinRate equivalent) is written by
+  // exactly one task and depends only on its own bin index and the
+  // read-only data prepared above, so every bin runs via a single
+  // ParallelFor on up to 'threads' workers -- halving the per-
+  // AxiProposal thread spawn/join overhead from two calls to one (docs/
+  // superpowers/specs/2026-10-17-axisymmetric-sampler-performance-
+  // design.md, decision 2). mPMajorant/mSMajorant are then each reduced
+  // serially, in ascending bin-index order, exactly as before, so both
+  // tables are bit-identical for any 'threads'.
   mPTable.resize(kThetaBins);
   mPBinRate.resize(kThetaBins);
-  ParallelFor(0, (Index) kThetaBins, threads, [&](Index bi) {
-    const int b = (int) bi;
-    const Real theta_lo = (2.0*b)     * Geometry::DtoR;
-    const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
-    const Real theta_c  = 0.5*(theta_lo+theta_hi);
-    const Real delta    = 0.5*(theta_hi-theta_lo);
-    const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
-    BuildBinTable(u_c, delta, repsPP, repsPS, geom.RepsPerCell,
-                 S0_P, S1_P, mPTable[b], mPBinRate[b]);
+  mSTable.resize(kThetaBins*kChiBins);
+  mSBinRate.resize(kThetaBins*kChiBins);
+
+  const Index numPBins = (Index) kThetaBins;
+  const Index numBins  = numPBins + (Index) (kThetaBins*kChiBins);
+
+  ParallelFor(0, numBins, threads, [&](Index idx) {
+    if (idx < numPBins) {
+      const int b = (int) idx;
+      const Real theta_lo = (2.0*b)     * Geometry::DtoR;
+      const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
+      const Real theta_c  = 0.5*(theta_lo+theta_hi);
+      const Real delta    = 0.5*(theta_hi-theta_lo);
+      const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
+      BuildBinTable(u_c, delta, repsPP, repsPS, geom.RepsPerCell,
+                   S0_P, S1_P, mPTable[b], mPBinRate[b]);
+    } else {
+      const Index sidx = idx - numPBins;
+      const int b = (int) (sidx / kChiBins);
+      const int c = (int) (sidx % kChiBins);
+      const Real theta_lo = (2.0*b)     * Geometry::DtoR;
+      const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
+      const Real theta_c  = 0.5*(theta_lo+theta_hi);
+      const Real chi_lo = (10.0*c)      * Geometry::DtoR;
+      const Real chi_hi = (10.0*c+10.0) * Geometry::DtoR;
+      const Real chi_c  = 0.5*(chi_lo+chi_hi);
+      const Real delta = 0.5*(theta_hi-theta_lo)
+                        + sin(theta_hi)*0.5*(chi_hi-chi_lo);
+      const R3::XYZ u_c(-sin(theta_c)*cos(chi_c),
+                        sin(theta_c)*sin(chi_c),
+                        cos(theta_c));
+      BuildBinTable(u_c, delta, repsSP, repsSS, geom.RepsPerCell,
+                   S0_S, S1_S, mSTable[sidx], mSBinRate[sidx]);
+    }
   });
+
   mPMajorant = 0.0;
   for (int b = 0; b < kThetaBins; b++) {
     mPMajorant = std::max(mPMajorant, mPBinRate[b]);
   }
-
-  // S incidence bins: theta and chi. Flattened to a single index so one
-  // ParallelFor covers all kThetaBins*kChiBins bins; same per-task
-  // independence and serial-reduction argument as the P bins above.
-  mSTable.resize(kThetaBins*kChiBins);
-  mSBinRate.resize(kThetaBins*kChiBins);
-  ParallelFor(0, (Index) (kThetaBins*kChiBins), threads, [&](Index idx) {
-    const int b = (int) (idx / kChiBins);
-    const int c = (int) (idx % kChiBins);
-    const Real theta_lo = (2.0*b)     * Geometry::DtoR;
-    const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
-    const Real theta_c  = 0.5*(theta_lo+theta_hi);
-    const Real chi_lo = (10.0*c)      * Geometry::DtoR;
-    const Real chi_hi = (10.0*c+10.0) * Geometry::DtoR;
-    const Real chi_c  = 0.5*(chi_lo+chi_hi);
-    const Real delta = 0.5*(theta_hi-theta_lo)
-                      + sin(theta_hi)*0.5*(chi_hi-chi_lo);
-    const R3::XYZ u_c(-sin(theta_c)*cos(chi_c),
-                      sin(theta_c)*sin(chi_c),
-                      cos(theta_c));
-    BuildBinTable(u_c, delta, repsSP, repsSS, geom.RepsPerCell,
-                 S0_S, S1_S, mSTable[idx], mSBinRate[idx]);
-  });
   mSMajorant = 0.0;
   for (std::size_t i = 0; i < mSBinRate.size(); i++) {
     mSMajorant = std::max(mSMajorant, mSBinRate[i]);

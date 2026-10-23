@@ -2375,6 +2375,138 @@ TEST(report_stats_thread_invariant) {
 
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
+// ****  TASK 4b TESTS: Parallel geometry, bit-identical            ****
+// ****                                                              ****
+//
+
+// ::: CheckAxiGeometryThreadInvariant(degree) :::
+//
+//   Proves BuildAxiGeometry() (aniso_axi.cpp) -- specifically Task 4b's
+//   two newly-parallelized loops, the representative-radius loop and
+//   the mirror-cell match -- is bit-identical for threads=1 vs.
+//   threads=7, by forcing two independent, *uncached* builds of the
+//   same take-off-angle content.
+//
+//   Why "uncached" matters: GetOrBuildAxiGeometry()'s cache is keyed
+//   only by toa.size(), so simply building twice with the *same*
+//   S2::S2Set (as CheckAxiTablesThreadInvariant, above, does) would, on
+//   the second call, just hand back the geometry already cached from
+//   the first -- whatever thread count that first call happened to use
+//   -- regardless of the 'threads' argument the second call passes. That
+//   proves the (already-parallel, Task 3) bin tables are thread-
+//   invariant, but says nothing about BuildAxiGeometry() itself, which
+//   never even reruns on a cache hit.
+//
+//   The fix (brief Step 1): build once with the *standard* degree-D
+//   take-off-angle set, fixing (or merely confirming, if some earlier
+//   test already did) that size's cache entry to the standard
+//   fingerprint; then build twice more with a same-size but
+//   differently-fingerprinted set -- the 0.01 rad-about-z rotation from
+//   test_axi_geometry_cache_mismatch_rotation, confirmed there to take
+//   the fingerprint-mismatch path observably -- once per thread count.
+//   GetOrBuildAxiGeometry()'s mismatch path *always* builds fresh into a
+//   scratch object and never writes the cache (by design, so a
+//   same-size-but-different set can never evict or overwrite the real
+//   entry), so every call with the rotated set is an independent,
+//   from-scratch BuildAxiGeometry() call no matter how many times it's
+//   been called before -- the threads=1 and threads=7 rotated builds
+//   below are two genuinely separate computations of the same geometry,
+//   not one computation compared against itself.
+//
+//   Checks (brief Step 1) MajorantRate(P/S) and AcceptanceBound() at
+//   every P bin x conv x cell, both at the P-bin-centre directions
+//   themselves (x<=0, so Fold()'s Mx is always false -- this exercises
+//   PrepareBoundRep()'s per-representative data, including the
+//   representative-radius loop's output, since every cell's bound
+//   depends on it) and, additionally, at their x-mirrored counterparts
+//   (x>=0, Mx always true for these bin centres), which route every
+//   AcceptanceBound() call through MapCell() and so exercise the
+//   mirror-match loop's MxPerm output too -- the brief's P-bin-centre
+//   check alone cannot do this, since Fold() never sets Mx for a
+//   direction already at x<=0.
+//
+static void CheckAxiGeometryThreadInvariant(int degree) {
+
+  const S2::TesselSphere & toas = UseTOADegree(degree);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+
+  // Fixes (or confirms) this take-off-angle size's cache entry to the
+  // standard fingerprint, so every build below with the rotated set is
+  // guaranteed to take the mismatch (uncached, from-scratch) path.
+  std::vector<ProbDist> pdistsStd;
+  BuildIsoPDists(sp, toas, pdistsStd);
+  AxiProposal axiWarm(sp, toas, pdistsStd, 1);
+  (void) axiWarm;
+
+  S2::S2Set rotated;
+  const Real phi0 = 0.01;  // Same rotation as
+                          // test_axi_geometry_cache_mismatch_rotation;
+                          // confirmed there to change the fingerprint
+                          // (observable AcceptanceBound difference from
+                          // the standard set).
+  for (Index i = 0; i < (Index) toas.size(); ++i) {
+    rotated.push_back(S2::ThetaPhi(toas[i].Theta(), toas[i].Phi() + phi0));
+  }
+  CHECK(rotated.size() == toas.size());
+
+  std::vector<ProbDist> pdistsRot1;
+  BuildIsoPDists(sp, rotated, pdistsRot1);
+  AxiProposal axi1(sp, rotated, pdistsRot1, 1);
+
+  std::vector<ProbDist> pdistsRot7;
+  BuildIsoPDists(sp, rotated, pdistsRot7);
+  AxiProposal axi7(sp, rotated, pdistsRot7, 7);
+
+  CHECK_MSG(axi1.MajorantRate(RAY_P) == axi7.MajorantRate(RAY_P),
+           "degree=" << degree << " MajorantRate(P): threads=1 "
+           << axi1.MajorantRate(RAY_P) << " threads=7 "
+           << axi7.MajorantRate(RAY_P));
+  CHECK_MSG(axi1.MajorantRate(RAY_S) == axi7.MajorantRate(RAY_S),
+           "degree=" << degree << " MajorantRate(S): threads=1 "
+           << axi1.MajorantRate(RAY_S) << " threads=7 "
+           << axi7.MajorantRate(RAY_S));
+  CHECK(axi1.NumCells() == axi7.NumCells());
+
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta = (2.0*b + 1.0) * Geometry::DtoR;  // bin centre
+    const R3::XYZ u_c      (-sin(theta), 0.0, cos(theta));  // Mx=false
+    const R3::XYZ u_cMirror( sin(theta), 0.0, cos(theta));  // Mx=true
+
+    for (int conv = 0; conv < 2; ++conv) {  // GPP, GPS
+      for (Index cell = 0; cell < axi1.NumCells(); ++cell) {
+
+        const Real va = axi1.AcceptanceBound(RAY_P, u_c, conv, cell);
+        const Real vb = axi7.AcceptanceBound(RAY_P, u_c, conv, cell);
+        CHECK_MSG(va == vb,
+                 "degree=" << degree << " bin=" << b << " conv=" << conv
+                 << " cell=" << cell << ": threads=1 " << va
+                 << " threads=7 " << vb);
+
+        const Real vam = axi1.AcceptanceBound(RAY_P, u_cMirror, conv, cell);
+        const Real vbm = axi7.AcceptanceBound(RAY_P, u_cMirror, conv, cell);
+        CHECK_MSG(vam == vbm,
+                 "degree=" << degree << " bin=" << b << " conv=" << conv
+                 << " cell=" << cell << " (x-mirrored): threads=1 " << vam
+                 << " threads=7 " << vbm);
+      }
+    }
+  }
+
+}
+
+TEST(axi_geometry_thread_invariant) {
+  CheckAxiGeometryThreadInvariant(5);  // repEqualsToa: exercises the
+                                       // mirror match only (brief Step 1).
+  CheckAxiGeometryThreadInvariant(7);  // exercises the representative-
+                                       // radius acos loop too (nonzero
+                                       // repBlock, same as
+                                       // compare_aniso_reference.sh's
+                                       // choice of degree 7).
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
 // ****                                                              ****
 //
