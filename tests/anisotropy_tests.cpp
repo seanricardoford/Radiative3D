@@ -1846,7 +1846,7 @@ TEST(axi_kernel_matches_reference) {
               caps[ci].u_c, caps[ci].delta,
               specs[si].ah, specs[si].az, aMin, M, specs[si].kappa);
 
-            CHECK_MSG(got == want,
+            CHECK_MSG(std::fabs(got-want) <= 1e-12*std::fabs(want),
                      "mismatch at t#" << ti << " r_i=" << r_is[ri]
                      << " k_in=" << kpairs[ki].k_in
                      << " k_out=" << kpairs[ki].k_out
@@ -1858,6 +1858,103 @@ TEST(axi_kernel_matches_reference) {
       }
     }
   }
+
+  // Edge cases for the trig-free rewrite (design decision 3): caps at
+  // and across the c=+1/c=-1 boundaries, where the closed-form cos(alpha
+  // -+ delta) identities replace acos/cos and a catastrophic-cancellation
+  // regression (near c = +-1) would first show up. Checked against the
+  // same acos/cos oracle above, which is untouched by the rewrite.
+  //
+  //   - u_c == +MHat (c=+1 exactly) and u_c == -MHat (c=-1 exactly);
+  //   - u_c rotated 0.5*delta off +MHat (alpha_c == 0.5*delta, just
+  //     inside the "within delta of 0" branch) and off -MHat (alpha_c ==
+  //     pi-0.5*delta, just inside "within delta of pi");
+  //   - the same four cap directions again, against the Mr==0
+  //     representative (t=zhat, k_in=k_out=1.73), which must return the
+  //     same value for every one of them (PrepareBoundRep()/BoundRatio()
+  //     force c=1 whenever Mr==0, regardless of u_c).
+  //
+  // t=(0.6,0,0.8) (unit), k_in=1, k_out=1.73 gives a representative
+  // M-vector that is neither zero nor aligned with any axis, so +-MHat
+  // and the rotated directions below are non-trivial unit vectors.
+  {
+    const R3::XYZ t_edge(0.6, 0.0, 0.8);
+    const Real k_in_edge = 1.0, k_out_edge = 1.73;
+    const R3::XYZ zhat_edge(0.0, 0.0, 1.0);
+    const R3::XYZ mhat_edge =
+      AxiProposal::PrepareBoundRep(t_edge, 0.0, k_in_edge, k_out_edge, 1.0).MHat;
+    const R3::XYZ perp_edge = mhat_edge.GetInPlaneUnitPerpendicular(zhat_edge);
+
+    std::vector<CapCase> edgeCaps;
+    for (std::size_t ci = 0; ci < caps.size(); ++ci) {
+      const Real delta = caps[ci].delta;
+      const Real half  = 0.5*delta;
+      CapCase cc;
+
+      cc.u_c = mhat_edge;                       // c == +1
+      cc.delta = delta;
+      edgeCaps.push_back(cc);
+
+      cc.u_c = mhat_edge.ScaledBy(-1.0);        // c == -1
+      cc.delta = delta;
+      edgeCaps.push_back(cc);
+
+      cc.u_c = mhat_edge.ScaledBy(cos(half))
+             + perp_edge.ScaledBy(sin(half));   // alpha_c == 0.5*delta
+      cc.delta = delta;
+      edgeCaps.push_back(cc);
+
+      cc.u_c = mhat_edge.ScaledBy(-cos(half))
+             + perp_edge.ScaledBy(sin(half));   // alpha_c == pi-0.5*delta
+      cc.delta = delta;
+      edgeCaps.push_back(cc);
+    }
+
+    for (std::size_t ei = 0; ei < edgeCaps.size(); ++ei) {
+      const AxiProposal::BinCap cap =
+        AxiProposal::MakeBinCap(edgeCaps[ei].u_c, edgeCaps[ei].delta);
+      for (int ri = 0; ri < 3; ++ri) {
+        for (int si = 0; si < 4; ++si) {
+
+          const Real aMin = std::min(specs[si].ah, specs[si].az);
+          const Real M = specs[si].ah*specs[si].ah*specs[si].az
+                       / (aMin*aMin*aMin);
+
+          // Mr > 0 (the t_edge/k_in_edge/k_out_edge representative):
+          const AxiProposal::BoundRep rep =
+            AxiProposal::PrepareBoundRep(t_edge, r_is[ri],
+                                         k_in_edge, k_out_edge, aMin);
+          const Real ratio =
+            AxiProposal::BoundRatio(rep, cap, specs[si].ah, specs[si].az);
+          const Real got = std::min(M, M*pow(ratio, specs[si].kappa+1.5));
+          const Real want = ReferenceBound3db253a(
+            t_edge, r_is[ri], k_in_edge, k_out_edge,
+            edgeCaps[ei].u_c, edgeCaps[ei].delta,
+            specs[si].ah, specs[si].az, aMin, M, specs[si].kappa);
+          CHECK_MSG(std::fabs(got-want) <= 1e-12*std::fabs(want),
+                   "edge(Mr>0) mismatch at edge#" << ei << " r_i=" << r_is[ri]
+                   << " spec#" << si << ": got=" << got << " want=" << want);
+          ++count;
+
+          // Mr == 0 (t=zhat, k_in=k_out=1.73), same cap:
+          const AxiProposal::BoundRep rep0 =
+            AxiProposal::PrepareBoundRep(zhat_edge, r_is[ri], 1.73, 1.73, aMin);
+          const Real ratio0 =
+            AxiProposal::BoundRatio(rep0, cap, specs[si].ah, specs[si].az);
+          const Real got0 = std::min(M, M*pow(ratio0, specs[si].kappa+1.5));
+          const Real want0 = ReferenceBound3db253a(
+            zhat_edge, r_is[ri], 1.73, 1.73,
+            edgeCaps[ei].u_c, edgeCaps[ei].delta,
+            specs[si].ah, specs[si].az, aMin, M, specs[si].kappa);
+          CHECK_MSG(std::fabs(got0-want0) <= 1e-12*std::fabs(want0),
+                   "edge(Mr==0) mismatch at edge#" << ei << " r_i=" << r_is[ri]
+                   << " spec#" << si << ": got=" << got0 << " want=" << want0);
+          ++count;
+        }
+      }
+    }
+  }
+
   CHECK(count > 0);
 
 }

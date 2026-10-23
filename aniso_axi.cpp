@@ -508,28 +508,48 @@ AxiProposal::BinCap AxiProposal::MakeBinCap(const R3::XYZ & u_c, Real delta) {
 //   is exactly today's ComputeBound() (frozen, for ruling R-P1, as
 //   tests/anisotropy_tests.cpp's ReferenceBound3db253a), split into the
 //   per-representative part (PrepareBoundRep(), above) and this
-//   per-(representative,bin) remainder: one acos and two cos calls, and
-//   the Q_lo algebra. The caller applies 'pow(.,kappa+1.5)' and the
-//   M/min(M,.) wrapper once per cell, on this function's largest return
-//   value over the cell's representatives -- bit-identical to applying
-//   them per-representative-then-maxing, since both pow(.,kappa+1.5)
-//   (kappa+1.5 > 0) and the M-scaled min are monotone nondecreasing.
+//   per-(representative,bin) remainder: the Q_lo algebra, now fed by a
+//   trig-free evaluation of cos(alpha_lo)/cos(alpha_hi) (design decision
+//   3) instead of one acos and two cos calls. The caller applies
+//   'pow(.,kappa+1.5)' and the M/min(M,.) wrapper once per cell, on this
+//   function's largest return value over the cell's representatives --
+//   bit-identical to applying them per-representative-then-maxing, since
+//   both pow(.,kappa+1.5) (kappa+1.5 > 0) and the M-scaled min are
+//   monotone nondecreasing.
+//
+//   With alpha_c = angle(MHat,Uc) (0 when Mr==0, matching the acos
+//   kernel's 'alpha_c=0.0' default -- m_rep.Unit() is never evaluated in
+//   that case), alpha_lo = max(0,alpha_c-Delta), alpha_hi =
+//   min(pi,alpha_c+Delta):
+//     cos(alpha_lo) == 1          whenever alpha_c <= Delta,
+//                                 i.e. c=cos(alpha_c) >= cos(Delta);
+//                   == cos(alpha_c-Delta) = c*CosDelta + s*SinDelta
+//                                 otherwise;
+//     cos(alpha_hi) == -1         whenever alpha_c+Delta >= pi,
+//                                 i.e. c <= -cos(Delta);
+//                   == cos(alpha_c+Delta) = c*CosDelta - s*SinDelta
+//                                 otherwise;
+//   using s = sin(alpha_c) = sqrt(1-c^2) >= 0 (alpha_c in [0,pi]). No
+//   acos, cos or sin call remains in this function.
 //
 Real AxiProposal::BoundRatio(const BoundRep & rep, const BinCap & cap,
                              Real ah, Real az) {
 
-  Real alpha_c = 0.0;
+  Real c = 1.0;              // cos(alpha_c); the Mr==0 default (see above).
   if (rep.Mr > 0.0) {
-    Real cosang = rep.MHat.Dot(cap.Uc);
-    if (cosang > 1.0)  cosang = 1.0;
-    if (cosang < -1.0) cosang = -1.0;
-    alpha_c = acos(cosang);
+    c = rep.MHat.Dot(cap.Uc);
+    if (c > 1.0)  c = 1.0;
+    if (c < -1.0) c = -1.0;
   }
-  const Real alpha_lo = std::max((Real)0.0, alpha_c - cap.Delta);
-  const Real alpha_hi = std::min((Real)Geometry::Pi, alpha_c + cap.Delta);
+  const Real s = sqrt(std::max((Real)0.0, 1.0 - c*c));  // sin(alpha_c) >= 0.
 
-  const Real s_lo = rep.Mr*cos(alpha_hi) - rep.Rho;
-  const Real s_hi = rep.Mr*cos(alpha_lo) + rep.Rho;
+  const Real cos_alpha_lo = (c >= cap.CosDelta) ?
+    (Real)1.0 : c*cap.CosDelta + s*cap.SinDelta;
+  const Real cos_alpha_hi = (c <= -cap.CosDelta) ?
+    (Real)-1.0 : c*cap.CosDelta - s*cap.SinDelta;
+
+  const Real s_lo = rep.Mr*cos_alpha_hi - rep.Rho;
+  const Real s_hi = rep.Mr*cos_alpha_lo + rep.Rho;
 
   const Real s2_hi = std::max(s_lo*s_lo, s_hi*s_hi);
   const Real s2_lo = (s_lo <= 0.0 && 0.0 <= s_hi) ?
