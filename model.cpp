@@ -260,6 +260,18 @@ Model::Model(const ModelParams & par) {
   mNumPhonons = par.NumPhonons;
   mNumThreads = par.NumThreads;
 
+  // Construction-time worker count for AxiProposal's bin tables and
+  // ComputeReportStats() (Scatterer::SetBuildThreads(), parallel.hpp):
+  // the run's own --threads count, or the automatic worker limit when
+  // it is 0 (--threads omitted; the CLI rejects an explicit 0). Unlike
+  // RunSimulation()'s own phonon-tracing worker count below (which
+  // reserves a core and caps at the phonon count), construction has
+  // neither concern, so it uses the automatic limit directly. Set here,
+  // before any cell (and so any Scatterer) is built, since
+  // GetScattererMatchingParams() reads Scatterer::GetBuildThreads() at
+  // construction time.
+  Scatterer::SetBuildThreads(mNumThreads ? mNumThreads : GetAutomaticWorkerLimit());
+
 
   // ::::::
   // :: Initialize global standard-lib objects:

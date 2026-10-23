@@ -36,6 +36,7 @@
 // CHECK()/CHECK_MSG() macros below).
 //
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <fstream>
@@ -51,6 +52,7 @@
 #include "elastic.hpp"
 #include "geom.hpp"
 #include "geom_s2.hpp"
+#include "parallel.hpp"
 #include "scatparams.hpp"
 #include "sources.hpp"
 #include "phonons.hpp"
@@ -2080,6 +2082,195 @@ TEST(axi_geometry_cache_mismatch_rotation) {
                  << ": first-build=" << va << " second-build=" << vb);
       }
     }
+  }
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
+// ****  TASK 3 TESTS: Parallel construction, bit-identical tables   ****
+// ****                                                              ****
+//
+
+TEST(parallel_for_covers_and_rethrows) {
+
+  // Non-throwing case: for every thread count, a body that increments a
+  // dedicated atomic counter per index must visit every index in
+  // [0,1000) exactly once -- checked directly (not just inferred from a
+  // total), so a double-dispatch of some index racing with a skipped
+  // other index (which could otherwise cancel out in a simple sum)
+  // can't hide.
+  const unsigned threadCounts[] = {0, 1, 3, 64};
+  for (std::size_t ti = 0; ti < sizeof(threadCounts)/sizeof(threadCounts[0]); ++ti) {
+    const unsigned threads = threadCounts[ti];
+
+    std::vector<std::atomic<int> > hits(1000);
+    for (std::size_t i = 0; i < hits.size(); ++i) {hits[i].store(0);}
+
+    ParallelFor((Index) 0, (Index) 1000, threads, [&](Index i) {
+      hits[i].fetch_add(1);
+    });
+
+    for (Index i = 0; i < 1000; ++i) {
+      CHECK_MSG(hits[i].load() == 1,
+               "threads=" << threads << " index=" << i
+               << " hit-count=" << hits[i].load());
+    }
+  }
+
+  // Throwing case (threads 3 and 64, per the brief): a body that throws
+  // std::logic_error("boom") at i==500 must make ParallelFor rethrow
+  // exactly that exception, and no index outside [0,1000) is ever
+  // visited.
+  const unsigned throwThreadCounts[] = {3, 64};
+  for (std::size_t ti = 0; ti < sizeof(throwThreadCounts)/sizeof(throwThreadCounts[0]); ++ti) {
+    const unsigned threads = throwThreadCounts[ti];
+
+    std::atomic<Index> maxSeen(0);
+    bool threw = false;
+    std::string what;
+    try {
+      ParallelFor((Index) 0, (Index) 1000, threads, [&](Index i) {
+        Index prev = maxSeen.load();
+        while (i > prev && !maxSeen.compare_exchange_weak(prev, i)) {}
+        if (i == 500) {throw std::logic_error("boom");}
+      });
+    } catch (const std::logic_error & e) {
+      threw = true;
+      what = e.what();
+    } catch (...) {
+      threw = true;
+      what = "<unexpected exception type>";
+    }
+
+    CHECK_MSG(threw, "threads=" << threads << ": expected ParallelFor to throw");
+    CHECK_MSG(what == "boom",
+             "threads=" << threads << ": what()=\"" << what << "\"");
+    CHECK_MSG(maxSeen.load() <= 999,
+             "threads=" << threads << ": visited index " << maxSeen.load()
+             << " > 999");
+  }
+
+}
+
+
+// ::: CheckAxiTablesThreadInvariant(sp) :::
+//
+//   Builds AxiProposal at degree 5 twice -- threads=1 and threads=7 --
+//   from the same ScatterParams/take-off-angle set/pdists, and requires
+//   MajorantRate(P/S), BinRate() at every P and S bin centre, and
+//   AcceptanceBound() for every (bin, conv, cell) to match exactly: the
+//   thread count used to build the tables must never change a single
+//   bit of them (brief Step 1).
+//
+static void CheckAxiTablesThreadInvariant(const ScatterParams & sp) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, toas, pdists);
+
+  AxiProposal axi1(sp, toas, pdists, 1);
+  AxiProposal axi7(sp, toas, pdists, 7);
+
+  CHECK(axi1.MajorantRate(RAY_P) == axi7.MajorantRate(RAY_P));
+  CHECK(axi1.MajorantRate(RAY_S) == axi7.MajorantRate(RAY_S));
+  CHECK(axi1.NumCells() == axi7.NumCells());
+
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta = (2.0*b + 1.0) * Geometry::DtoR;  // bin centre
+    const R3::XYZ u_c(-sin(theta), 0.0, cos(theta));
+
+    const Real rate1 = axi1.BinRate(RAY_P, u_c);
+    const Real rate7 = axi7.BinRate(RAY_P, u_c);
+    CHECK_MSG(rate1 == rate7,
+             "P BinRate bin=" << b << ": threads=1 " << rate1
+             << " threads=7 " << rate7);
+
+    for (int conv = 0; conv < 2; ++conv) {  // GPP, GPS
+      for (Index cell = 0; cell < axi1.NumCells(); ++cell) {
+        const Real va = axi1.AcceptanceBound(RAY_P, u_c, conv, cell);
+        const Real vb = axi7.AcceptanceBound(RAY_P, u_c, conv, cell);
+        CHECK_MSG(va == vb,
+                 "P bin=" << b << " conv=" << conv << " cell=" << cell
+                 << ": threads=1 " << va << " threads=7 " << vb);
+      }
+    }
+  }
+
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    for (int c = 0; c < AxiProposal::kChiBins; ++c) {
+      const Real theta = (2.0*b + 1.0)  * Geometry::DtoR;  // bin centre
+      const Real chi   = (10.0*c + 5.0) * Geometry::DtoR;  // bin centre
+      const R3::XYZ u_c(-sin(theta)*cos(chi), sin(theta)*sin(chi), cos(theta));
+
+      const Real rate1 = axi1.BinRate(RAY_S, u_c);
+      const Real rate7 = axi7.BinRate(RAY_S, u_c);
+      CHECK_MSG(rate1 == rate7,
+               "S BinRate bin=" << b << "," << c << ": threads=1 " << rate1
+               << " threads=7 " << rate7);
+
+      for (int conv = 2; conv < 4; ++conv) {  // GSP, GSS
+        for (Index cell = 0; cell < axi1.NumCells(); ++cell) {
+          const Real va = axi1.AcceptanceBound(RAY_S, u_c, conv, cell);
+          const Real vb = axi7.AcceptanceBound(RAY_S, u_c, conv, cell);
+          CHECK_MSG(va == vb,
+                   "S bin=" << b << "," << c << " conv=" << conv
+                   << " cell=" << cell << ": threads=1 " << va
+                   << " threads=7 " << vb);
+        }
+      }
+    }
+  }
+
+}
+
+TEST(axi_tables_thread_invariant) {
+  CheckAxiTablesThreadInvariant(LopNorCrust(2, 2, 0.5));
+  CheckAxiTablesThreadInvariant(LopNorCrust(0.5, 0.5, 2));
+}
+
+
+TEST(report_stats_thread_invariant) {
+
+  UseTOADegree(5);  // Degree for each Scatterer's own (general-sampler
+                    // and/or axisymmetric) probability tables;
+                    // ComputeReportStats() always integrates over the
+                    // fixed degree-6 ReportDirs() regardless.
+
+  ScatterParams spAxi = LopNorCrust(2, 2, 0.5);  // axisymmetric: 8-state
+                                                 // GetReportMFPs() branch
+  ScatterParams spTri = LopNorCrust(2, 1, 0.5);  // triaxial: 9-state
+                                                 // GetReportMFPs() branch
+
+  Scatterer::SetBuildThreads(1);
+  Scatterer axiScat1(spAxi);
+  Scatterer triScat1(spTri);
+  const std::vector<Real> mfpsAxi1 = axiScat1.GetReportMFPs();
+  const std::vector<Real> mfpsTri1 = triScat1.GetReportMFPs();
+
+  Scatterer::SetBuildThreads(7);
+  Scatterer axiScat7(spAxi);
+  Scatterer triScat7(spTri);
+  const std::vector<Real> mfpsAxi7 = axiScat7.GetReportMFPs();
+  const std::vector<Real> mfpsTri7 = triScat7.GetReportMFPs();
+
+  Scatterer::SetBuildThreads(1);  // restore
+
+  CHECK(mfpsAxi1.size() == 8);
+  CHECK(mfpsAxi7.size() == 8);
+  CHECK(mfpsTri1.size() == 9);
+  CHECK(mfpsTri7.size() == 9);
+
+  for (std::size_t i = 0; i < mfpsAxi1.size(); ++i) {
+    CHECK_MSG(mfpsAxi1[i] == mfpsAxi7[i],
+             "axisymmetric GetReportMFPs()[" << i << "]: threads=1 "
+             << mfpsAxi1[i] << " threads=7 " << mfpsAxi7[i]);
+  }
+  for (std::size_t i = 0; i < mfpsTri1.size(); ++i) {
+    CHECK_MSG(mfpsTri1[i] == mfpsTri7[i],
+             "triaxial GetReportMFPs()[" << i << "]: threads=1 "
+             << mfpsTri1[i] << " threads=7 " << mfpsTri7[i]);
   }
 
 }

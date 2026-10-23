@@ -6,6 +6,7 @@
 #include <mutex>        /* std::mutex, std::lock_guard: geometry cache */
 #include <stdexcept>    /* std::logic_error */
 #include "aniso_axi.hpp"
+#include "parallel.hpp"
 #include "random.hpp"
 
 using namespace std;
@@ -300,7 +301,8 @@ namespace {
 // CONSTRUCTOR:  AxiProposal()
 //
 AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
-                         const std::vector<ProbDist> & pdists) :
+                         const std::vector<ProbDist> & pdists,
+                         unsigned threads) :
   mPDists(pdists)
 {
 
@@ -387,10 +389,18 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
     S1_S[c] = mPDists[3].GetRangeMagnitude(lo, hi);  // GSS
   }
 
-  // P incidence bins: theta only (canonical frame fixes chi == 0).
+  // P incidence bins: theta only (canonical frame fixes chi == 0). Each
+  // bin's table/rate (mPTable[b]/mPBinRate[b]) is written by exactly one
+  // task and depends only on 'b' and the read-only data prepared above,
+  // so the kThetaBins calls run via ParallelFor on up to 'threads'
+  // workers; mPMajorant is then reduced serially, in ascending
+  // bin-index order, so the result is bit-identical for any 'threads'
+  // (docs/superpowers/specs/2026-10-17-axisymmetric-sampler-performance-
+  // design.md, decision 2).
   mPTable.resize(kThetaBins);
   mPBinRate.resize(kThetaBins);
-  for (int b = 0; b < kThetaBins; b++) {
+  ParallelFor(0, (Index) kThetaBins, threads, [&](Index bi) {
+    const int b = (int) bi;
     const Real theta_lo = (2.0*b)     * Geometry::DtoR;
     const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
     const Real theta_c  = 0.5*(theta_lo+theta_hi);
@@ -398,33 +408,34 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
     const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
     BuildBinTable(u_c, delta, repsPP, repsPS, geom.RepsPerCell,
                  S0_P, S1_P, mPTable[b], mPBinRate[b]);
-  }
+  });
   mPMajorant = 0.0;
   for (int b = 0; b < kThetaBins; b++) {
     mPMajorant = std::max(mPMajorant, mPBinRate[b]);
   }
 
-  // S incidence bins: theta and chi.
+  // S incidence bins: theta and chi. Flattened to a single index so one
+  // ParallelFor covers all kThetaBins*kChiBins bins; same per-task
+  // independence and serial-reduction argument as the P bins above.
   mSTable.resize(kThetaBins*kChiBins);
   mSBinRate.resize(kThetaBins*kChiBins);
-  for (int b = 0; b < kThetaBins; b++) {
+  ParallelFor(0, (Index) (kThetaBins*kChiBins), threads, [&](Index idx) {
+    const int b = (int) (idx / kChiBins);
+    const int c = (int) (idx % kChiBins);
     const Real theta_lo = (2.0*b)     * Geometry::DtoR;
     const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
     const Real theta_c  = 0.5*(theta_lo+theta_hi);
-    for (int c = 0; c < kChiBins; c++) {
-      const Real chi_lo = (10.0*c)      * Geometry::DtoR;
-      const Real chi_hi = (10.0*c+10.0) * Geometry::DtoR;
-      const Real chi_c  = 0.5*(chi_lo+chi_hi);
-      const Real delta = 0.5*(theta_hi-theta_lo)
-                        + sin(theta_hi)*0.5*(chi_hi-chi_lo);
-      const R3::XYZ u_c(-sin(theta_c)*cos(chi_c),
-                        sin(theta_c)*sin(chi_c),
-                        cos(theta_c));
-      const int idx = b*kChiBins + c;
-      BuildBinTable(u_c, delta, repsSP, repsSS, geom.RepsPerCell,
-                   S0_S, S1_S, mSTable[idx], mSBinRate[idx]);
-    }
-  }
+    const Real chi_lo = (10.0*c)      * Geometry::DtoR;
+    const Real chi_hi = (10.0*c+10.0) * Geometry::DtoR;
+    const Real chi_c  = 0.5*(chi_lo+chi_hi);
+    const Real delta = 0.5*(theta_hi-theta_lo)
+                      + sin(theta_hi)*0.5*(chi_hi-chi_lo);
+    const R3::XYZ u_c(-sin(theta_c)*cos(chi_c),
+                      sin(theta_c)*sin(chi_c),
+                      cos(theta_c));
+    BuildBinTable(u_c, delta, repsSP, repsSS, geom.RepsPerCell,
+                 S0_S, S1_S, mSTable[idx], mSBinRate[idx]);
+  });
   mSMajorant = 0.0;
   for (std::size_t i = 0; i < mSBinRate.size(); i++) {
     mSMajorant = std::max(mSMajorant, mSBinRate[i]);

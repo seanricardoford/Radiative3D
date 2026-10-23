@@ -96,7 +96,17 @@ public:
   // ::::::::::::::::::::::::::::::::::::::::::::::::
 
   AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
-              const std::vector<ProbDist> & pdists);
+              const std::vector<ProbDist> & pdists, unsigned threads = 1);
+                      // 'threads': the number of std::thread workers
+                      // (ParallelFor(), parallel.hpp) used to build the
+                      // P and S bin tables below. The tables -- and so
+                      // every query method of this class -- are
+                      // bit-identical regardless of 'threads': each bin
+                      // is built by exactly one task, writing only its
+                      // own table/rate entry, and mPMajorant/mSMajorant
+                      // are reduced afterward, serially, in ascending
+                      // bin-index order. Default 1 (serial) keeps every
+                      // pre-Task-3 call site unchanged.
 
   // ::::::::::::::::::::::::::::::::::::::::::::::::
   // ::: Query Methods  (AxiProposal Class) :::

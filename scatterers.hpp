@@ -150,6 +150,17 @@ protected:
                                     // will not be changed by scattering
                                     // event). (Applies to all objects.)
 
+  static unsigned cm_BuildThreads;  // Construction-time worker count:
+                                    // how many std::thread workers
+                                    // (ParallelFor(), parallel.hpp) a
+                                    // subsequently-constructed
+                                    // Scatterer's AxiProposal and
+                                    // ComputeReportStats() use to build
+                                    // their tables/rows/states. Affects
+                                    // only how they are built, never
+                                    // what they contain -- see
+                                    // SetBuildThreads().
+
                 // NOTE: if MFP and deflection are BOTH overridden, then
                 // ScatterParams have no remaining effect, and no more than
                 // one object need be created. GetScattererMatchingParams()
@@ -177,6 +188,25 @@ public:
   static void SetNoDeflect() {
     cm_NoDeflect_b = true;
   }
+
+  static void SetBuildThreads(unsigned n) {
+    cm_BuildThreads = (n == 0) ? 1 : n;
+  }
+                      // Construction-time worker count used by every
+                      // Scatterer constructed from this call onward:
+                      // up to 'n' std::thread workers (ParallelFor(),
+                      // parallel.hpp) build its AxiProposal's bin
+                      // tables (if any) and its ComputeReportStats()
+                      // rows/states, with results bit-identical for any
+                      // value -- see the AxiProposal constructor and
+                      // ComputeReportStats(). 0 is treated as 1 (there
+                      // is no "automatic" sentinel at this layer; a
+                      // caller such as Model::Model() resolves
+                      // "automatic" to a concrete worker count before
+                      // calling this).
+
+  static unsigned GetBuildThreads() {return cm_BuildThreads;}
+                      // Default 1 (serial construction).
 
 
 protected:
@@ -300,6 +330,49 @@ protected:
                                // mReportDipoles, and mReportMFPs.
                                // Called by the constructor whenever
                                // IsAnisotropic() is true.
+
+  struct GRow {
+    Real G[NUM_OUTTYPES]; // gpp,gps,gsp,gss (ScatterParams::GSATO()'s
+                          // values at this row's direction).
+    Real CosPsi;          // That direction's z-component: cos(psi), the
+                          // deflection angle in the take-off-angle
+                          // frame (see IntegrateRows()).
+  };                      // One per report direction; see
+                          // BuildReportRows().
+
+  void BuildReportRows(const S2::S2Set & dirs, unsigned threads,
+                       std::vector<GRow> & rows) const;
+                      // Fills 'rows' (resized to dirs.size()) with one
+                      // GRow per direction, via ParallelFor() (parallel.
+                      // hpp) over direction indices on up to 'threads'
+                      // workers. Each row is a pure function of
+                      // dirs[k] and mParams (GSATO() touches no mutable
+                      // state), so 'rows' is bit-identical to a serial
+                      // build regardless of 'threads' -- see docs/
+                      // superpowers/specs/2026-10-17-axisymmetric-
+                      // sampler-performance-design.md, decision 2.
+                      // Shared by ComputeReportStats() (dirs ==
+                      // ReportDirs(), the rows reused across every
+                      // state) and IntegrateRateAndDipole() (its own
+                      // 'dirs'), so GSATO() is never evaluated more
+                      // than once per (Scatterer,direction) pair.
+
+  void IntegrateRows(raytype intype, const R3::XYZ & dir,
+                     const R3::XYZ & pol, const S2::S2Set & dirs,
+                     const std::vector<GRow> & rows,
+                     Real & rate, Real & dipole) const;
+                      // The row-based integrator shared by
+                      // IntegrateRateAndDipole() and
+                      // ComputeReportStats(): the same rate/dipole sum
+                      // IntegrateRateAndDipole()'s header comment
+                      // describes, but reading each direction's GSATO()
+                      // values and cos(psi) from the precomputed 'rows'
+                      // (BuildReportRows()) instead of calling GSATO()
+                      // itself. The summation stays serial, in
+                      // k-ascending order -- identical term-for-term to
+                      // today's single combined loop -- so a call's
+                      // result never depends on how (or on how many
+                      // threads) 'rows' was built.
 
   static const S2::TesselSphere & ReportDirs();
                                // The fixed degree-6 direction set

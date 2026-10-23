@@ -7,6 +7,7 @@
 #include <sstream>      /* std::ostringstream */
 #include <stdexcept>    /* std::logic_error */
 #include "random.hpp"
+#include "parallel.hpp"
 #include "scatterers.hpp"
 #include "phonons.hpp"
 #include "ecs.hpp"      /* Global ECS object: GetEast/GetNorth/GetUp */
@@ -38,6 +39,7 @@ Count Scatterer::cm_ll_count = 0;  // Linked list size
 bool Scatterer::cm_MFPOverride_b = false;
 Real Scatterer::cm_MFPOverrides[] = {0,0};
 bool Scatterer::cm_NoDeflect_b = false;
+unsigned Scatterer::cm_BuildThreads = 1;
 
 const raytype Scatterer::kOutTypes[4] = {RAY_P, RAY_S, RAY_P, RAY_S};
                                 // Maps conversion types (GPP, GPS, GSP,
@@ -159,7 +161,7 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
                                    // Probs()), as AxiProposal's
                                    // GetRangeMagnitude()/GetRandom-
                                    // IndexInRange() calls require.
-    mpAxi.reset(new AxiProposal(par, *pTOA, mPDists));
+    mpAxi.reset(new AxiProposal(par, *pTOA, mPDists, GetBuildThreads()));
   }
 
   if (!cm_MFPOverride_b) {  // Populate Mean Free Path values
@@ -814,33 +816,61 @@ Real Scatterer::IntegratedRate(raytype intype, const R3::XYZ & dir,
 
 
 //////
-// METHOD:  Scatterer :: IntegrateRateAndDipole()              [const]
+// METHOD:  Scatterer :: BuildReportRows()                     [const]
 //
-// PURPOSE: Computes the same exact total scattering rate as
-//          IntegratedRate() (see that method's header comment), and
-//          additionally the dipole moment of the corresponding
-//          integrated scattering pattern:
+// PURPOSE: Fills 'rows' (resized to dirs.size()) with the GSATO()
+//          values and cos(psi) for every direction in 'dirs', via
+//          ParallelFor() (parallel.hpp) over direction indices run on
+//          up to 'threads' workers. Each row is a pure function of
+//          dirs[k] and mParams (ScatterParams::GSATO() touches no
+//          mutable state), so 'rows' comes out bit-identical to a
+//          serial build regardless of 'threads' or how indices are
+//          scheduled across workers -- see docs/superpowers/specs/
+//          2026-10-17-axisymmetric-sampler-performance-design.md,
+//          decision 2.
 //
-//              dipole = Sum( cos(psi) * G ) / Sum( G )
+//          Shared by IntegrateRateAndDipole() (builds rows for its own
+//          'dirs' argument) and ComputeReportStats() (builds rows once
+//          for ReportDirs(), reused by every one of its 9 or 17
+//          states), so GSATO() is never evaluated more than once per
+//          (Scatterer,direction) pair.
 //
-//          where, for each direction dirs[k] and each of the two
-//          conversions available to 'intype', G is the isotropic
-//          (a=a_min) GSATO() value times AnisoRatio() at the
-//          corresponding exchange wavevector (the same weight
-//          IntegratedRate() sums), and psi is the deflection angle
-//          between dirs[k] and the forward (incoming-ray) direction,
-//          i.e. dirs[k].z() in the take-off-angle frame (dirs[] is
-//          conventionally expressed with its own +z as the forward
-//          direction -- the same convention ComputeDipoles() relies on
-//          for the isotropic case).
+void Scatterer::BuildReportRows(const S2::S2Set & dirs, unsigned threads,
+                                std::vector<GRow> & rows) const {
+
+  const Index n = (Index) dirs.size();
+  rows.resize(n);
+
+  ParallelFor(0, n, threads, [&](Index k) {
+    Real gpp, gps, gsp, gss, spol;
+    mParams.GSATO(dirs[k], gpp, gps, gsp, gss, spol);
+    rows[k].G[GPP] = gpp;
+    rows[k].G[GPS] = gps;
+    rows[k].G[GSP] = gsp;
+    rows[k].G[GSS] = gss;
+    rows[k].CosPsi = dirs[k].z();   // (Unit vec, so z is cos(psi).)
+  });
+
+}
+
+
+//////
+// METHOD:  Scatterer :: IntegrateRows()                       [const]
 //
-//          IntegratedRate() is a thin wrapper around this method that
-//          discards 'dipole'.
+// PURPOSE: The row-based integrator shared by IntegrateRateAndDipole()
+//          and ComputeReportStats(): computes the same rate/dipole sum
+//          IntegrateRateAndDipole()'s header comment describes, but
+//          reads each direction's GSATO() values and cos(psi) from the
+//          precomputed 'rows' (BuildReportRows()) instead of calling
+//          GSATO() itself. The summation stays serial, in k-ascending
+//          order -- identical term-for-term to today's single combined
+//          loop -- so a call's result never depends on how (or on how
+//          many threads) 'rows' was built.
 //
-void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
-                                       const R3::XYZ & pol,
-                                       const S2::S2Set & dirs,
-                                       Real & rate, Real & dipole) const {
+void Scatterer::IntegrateRows(raytype intype, const R3::XYZ & dir,
+                              const R3::XYZ & pol, const S2::S2Set & dirs,
+                              const std::vector<GRow> & rows,
+                              Real & rate, Real & dipole) const {
 
   out_types_e c1, c2;
   if (intype == RAY_P) { c1 = GPP; c2 = GPS; }
@@ -859,11 +889,7 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
   const std::size_t n = dirs.size();
   for (std::size_t k = 0; k < n; k++) {
 
-    Real gpp, gps, gsp, gss, spol;
-    mParams.GSATO(dirs[k], gpp, gps, gsp, gss, spol);
-    const Real gvals[NUM_OUTTYPES] = {gpp, gps, gsp, gss};
-    const Real costh = dirs[k].z();   // (Unit vec, so z is cos(psi))
-
+    const Real costh = rows[k].CosPsi;
     const R3::XYZ e_out = AA.Express(dirs[k].XYZ());
 
     for (int ci = 0; ci < 2; ci++) {
@@ -871,7 +897,7 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
       const Real k_out = (kOutTypes[conv] == RAY_P) ?
                           mParams.GetKP() : mParams.GetKS();
       const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
-      const Real w = gvals[conv] * mParams.AnisoRatio(m);
+      const Real w = rows[k].G[conv] * mParams.AnisoRatio(m);
       sumRate += w;
       sumDip  += w * costh;
     }
@@ -880,6 +906,46 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
 
   rate = sumRate / (Real) n;
   dipole = (sumRate > 0) ? (sumDip / sumRate) : 0.0;
+
+}
+
+
+//////
+// METHOD:  Scatterer :: IntegrateRateAndDipole()              [const]
+//
+// PURPOSE: Computes the exact total scattering rate (1/mean-free-path)
+//          for an incoming ray of type 'intype' travelling in direction
+//          'dir' with polarization direction 'pol' (both already
+//          expressed in fabric coordinates), and the dipole moment of
+//          the corresponding integrated scattering pattern:
+//
+//              dipole = Sum( cos(psi) * G ) / Sum( G )
+//
+//          where, for each direction dirs[k] and each of the two
+//          conversions available to 'intype', G is the isotropic
+//          (a=a_min) GSATO() value times AnisoRatio() at the
+//          corresponding exchange wavevector, and psi is the deflection
+//          angle between dirs[k] and the forward (incoming-ray)
+//          direction, i.e. dirs[k].z() in the take-off-angle frame
+//          (dirs[] is conventionally expressed with its own +z as the
+//          forward direction -- the same convention ComputeDipoles()
+//          relies on for the isotropic case).
+//
+//          Builds one GRow per direction of 'dirs' (BuildReportRows(),
+//          using GetBuildThreads() workers) and hands them to the same
+//          IntegrateRows() ComputeReportStats() uses, so the
+//          integration loop itself is never duplicated. Used by tests
+//          with their own 'dirs' sets; IntegratedRate() is a thin
+//          wrapper that discards 'dipole'.
+//
+void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
+                                       const R3::XYZ & pol,
+                                       const S2::S2Set & dirs,
+                                       Real & rate, Real & dipole) const {
+
+  std::vector<GRow> rows;
+  BuildReportRows(dirs, GetBuildThreads(), rows);
+  IntegrateRows(intype, dir, pol, dirs, rows, rate, dipole);
 
 }
 
@@ -929,9 +995,28 @@ const S2::TesselSphere & Scatterer::ReportDirs() {
 //          feed the legacy MFP/DM values above) for an axisymmetric
 //          spec.
 //
+//          GSATO() is evaluated once per ReportDirs() direction
+//          (BuildReportRows(), GetBuildThreads() workers), not once per
+//          state as before; the 9 axis states (and, for an axisymmetric
+//          spec, the 8 angle states) are then each integrated by
+//          IntegrateRows() over that shared row table, in parallel
+//          across states -- every state writes only its own rate[i]/
+//          dip[i] slot, so there is no data race. Each state's own
+//          summation stays serial and in today's order, and the
+//          combination below runs only after every ParallelFor() has
+//          joined, serially, in the same fixed index order as before:
+//          the results are bit-identical to the fully-serial
+//          computation, for any thread count (see docs/superpowers/
+//          specs/2026-10-17-axisymmetric-sampler-performance-design.md,
+//          decision 2).
+//
 void Scatterer::ComputeReportStats() {
 
   const S2::TesselSphere & dirs = ReportDirs();
+  const unsigned threads = GetBuildThreads();
+
+  std::vector<GRow> rows;
+  BuildReportRows(dirs, threads, rows);
 
   const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1);
 
@@ -944,10 +1029,10 @@ void Scatterer::ComputeReportStats() {
   };
 
   Real rate[9], dip[9];
-  for (int i = 0; i < 9; i++) {
-    IntegrateRateAndDipole(axis[i].in, axis[i].dir, axis[i].pol, dirs,
-                           rate[i], dip[i]);
-  }
+  ParallelFor(0, (Index) 9, threads, [&](Index i) {
+    IntegrateRows(axis[i].in, axis[i].dir, axis[i].pol, dirs, rows,
+                 rate[i], dip[i]);
+  });
 
   const Real sumRateP = rate[0] + rate[1] + rate[2];
   const Real sumRateS = rate[3] + rate[4] + rate[5]
@@ -970,27 +1055,32 @@ void Scatterer::ComputeReportStats() {
     const R3::XYZ d45 = tp45.XYZ();
     const R3::XYZ d90 = tp90.XYZ();
 
-    Real r, d;
+    struct AngleState {raytype in; R3::XYZ dir; R3::XYZ pol;};
+    const AngleState angle[8] = {
+      {RAY_P, d0,  d0},
+      {RAY_P, d45, d45},
+      {RAY_P, d90, d90},
+      {RAY_S, d0,  tp0.ThetaHat().XYZ()},
+      {RAY_S, d45, tp45.ThetaHat().XYZ()},
+      {RAY_S, d45, tp45.PhiHat().XYZ()},
+      {RAY_S, d90, tp90.ThetaHat().XYZ()},
+      {RAY_S, d90, tp90.PhiHat().XYZ()},
+    };
 
-    IntegrateRateAndDipole(RAY_P, d0,  d0,  dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // P0
-    IntegrateRateAndDipole(RAY_P, d45, d45, dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // P45
-    IntegrateRateAndDipole(RAY_P, d90, d90, dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // P90
+    Real r8[8], d8[8];
+    ParallelFor(0, (Index) 8, threads, [&](Index i) {
+      IntegrateRows(angle[i].in, angle[i].dir, angle[i].pol, dirs, rows,
+                   r8[i], d8[i]);
+    });
 
-    IntegrateRateAndDipole(RAY_S, d0, tp0.ThetaHat().XYZ(), dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // S0
-
-    IntegrateRateAndDipole(RAY_S, d45, tp45.ThetaHat().XYZ(), dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // S45SV
-    IntegrateRateAndDipole(RAY_S, d45, tp45.PhiHat().XYZ(), dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // S45SH
-
-    IntegrateRateAndDipole(RAY_S, d90, tp90.ThetaHat().XYZ(), dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // S90SV
-    IntegrateRateAndDipole(RAY_S, d90, tp90.PhiHat().XYZ(), dirs, r, d);
-    mReportMFPs.push_back(1.0/r);                             // S90SH
+    mReportMFPs.push_back(1.0/r8[0]);                         // P0
+    mReportMFPs.push_back(1.0/r8[1]);                         // P45
+    mReportMFPs.push_back(1.0/r8[2]);                         // P90
+    mReportMFPs.push_back(1.0/r8[3]);                         // S0
+    mReportMFPs.push_back(1.0/r8[4]);                         // S45SV
+    mReportMFPs.push_back(1.0/r8[5]);                         // S45SH
+    mReportMFPs.push_back(1.0/r8[6]);                         // S90SV
+    mReportMFPs.push_back(1.0/r8[7]);                         // S90SH
 
   } else {
 

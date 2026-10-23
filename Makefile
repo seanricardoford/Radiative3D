@@ -94,6 +94,7 @@ raytype_hpp  = raytype.hpp
 array_hpp    = array.hpp
 complex_hpp  = complex.hpp  $(typedefs_hpp)
 probability_hpp = probability.hpp $(typedefs_hpp)
+parallel_hpp = parallel.hpp $(typedefs_hpp)
 
 #
 #      /* Libraries: */
@@ -150,7 +151,7 @@ anyway : $(objects)
 	$(CPP) $^ -o $(OUT_EXEC) $(FLAGS)
 
 test_objects := $(filter-out $(objdir)/main.o,$(objects))
-$(objdir)/anisotropy_tests : tests/anisotropy_tests.cpp $(test_objects) $(scatterers_hpp) $(ecs_hpp) $(phonons_hpp)
+$(objdir)/anisotropy_tests : tests/anisotropy_tests.cpp $(test_objects) $(scatterers_hpp) $(ecs_hpp) $(phonons_hpp) $(parallel_hpp)
 	$(CPP) tests/anisotropy_tests.cpp $(test_objects) -I. $(FLAGS) -o $@
 .PHONY : anisotropy-tests
 anisotropy-tests : directories $(objdir)/anisotropy_tests
@@ -187,10 +188,10 @@ $(objdir)/events.o : events.cpp $(events_hpp) $(phonons_hpp) $(dataout_hpp) $(co
 $(objdir)/scatparams.o : scatparams.cpp $(scatparams_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@
 
-$(objdir)/aniso_axi.o : aniso_axi.cpp $(aniso_axi_hpp) $(comd)
+$(objdir)/aniso_axi.o : aniso_axi.cpp $(aniso_axi_hpp) $(parallel_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@
 
-$(objdir)/scatterers.o : scatterers.cpp $(scatterers_hpp) $(phonons_hpp) $(comd)
+$(objdir)/scatterers.o : scatterers.cpp $(scatterers_hpp) $(phonons_hpp) $(parallel_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@
 
 $(objdir)/phonons.o : phonons.cpp $(phonons_hpp) $(media_hpp) $(rtcoef_hpp) \
