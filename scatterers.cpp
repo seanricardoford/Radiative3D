@@ -219,6 +219,51 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
 //   might need to be re-computed (e.g. after a cache-miss if the
 //   distribution has been flushed).
 //
+//   GSATO() is evaluated over contiguous direction CHUNKS via
+//   ParallelFor() (parallel.hpp): a small, GetBuildThreads()-sized index
+//   range, one chunk per claim, each processed by an ordinary serial
+//   for-loop over its own [chunkBegin,chunkEnd) range of take-off-angle
+//   indices. This -- not a ParallelFor spanning all nTOA directions
+//   one-at-a-time -- is deliberate, found necessary by profiling this
+//   task's first (per-direction) attempt at degree 9 (5,242,880
+//   directions): claiming one shared atomic<Index> counter 5.2 million
+//   times, split across ~24 threads, spends most of the run's CPU time
+//   (confirmed with `sample`) contending for that one cache line, not
+//   computing GSATO() -- and it barely changed wall-clock time at all
+//   versus threads=1, despite burning roughly 15x the CPU-seconds.
+//   Chunking reduces the claim count to GetBuildThreads(), eliminating
+//   that contention, and (as a side effect) confines false-sharing on
+//   mPDists[*]/m_spol writes to the single element at each chunk
+//   boundary instead of every element.
+//
+//   Each worker writes mPDists[*][k] and m_spol[k] directly for the k's
+//   in its own chunk -- not into a separate temporary array -- because a
+//   per-direction temporary here (4 Reals x nTOA) would itself cost
+//   ~167 MB at degree 9, far past the ~32 MB/scatterer temporary-build-
+//   memory budget (docs/superpowers/specs/2026-10-16-anisotropic-scale-
+//   lengths-design.md). This is safe: probability.hpp's
+//   SetRelativeProb() lazily resizes/allocates its shared mDist vector
+//   (and flips mbAllocated) on a distribution's *first* call, which
+//   would race if that first call came from more than one thread at
+//   once -- so each of the four distributions is allocated by one
+//   dummy, serial SetRelativeProb(0, ...) call below, *before*
+//   ParallelFor spawns any workers (std::thread's constructor
+//   establishes the needed happens-before relationship). From then on,
+//   SetRelativeProb(k, ·) only ever assigns mDist[k] -- a plain,
+//   non-cumulative store to an already-allocated std::vector<Real>,
+//   never touching any other element or shared bookkeeping -- so
+//   concurrent calls from different chunks (which never touch the same
+//   k) are data-race-free. m_spol is likewise already resized (below)
+//   before the parallel section starts.
+//
+//   Because every (distribution, k) pair is written at most once, by
+//   whichever chunk's range contains k, with a value computed by a
+//   single, deterministic, side-effect-free GSATO() call, the final
+//   contents of mPDists[*]/m_spol are bit-identical to a fully serial
+//   build for any thread count or chunking -- see docs/superpowers/
+//   specs/2026-10-17-axisymmetric-sampler-performance-design.md,
+//   decision 8.
+//
 void Scatterer::PopulateProbDists(ScatterParams par) {
 
   S2::S2Set & toa = (*pTOA);    // (Convenience alias)
@@ -233,18 +278,40 @@ void Scatterer::PopulateProbDists(ScatterParams par) {
                         // combination of 0 and 90, (based on the
                         // individual SV/SH probabilities, which are
                         // known to the GSATO function.)
+
+  if (nTOA > 0) {   // Force each distribution's one-time lazy allocation
+                    // now, serially -- see header comment. (Guards the
+                    // degenerate nTOA==0 case, which SetRelativeProb(0,
+                    // ...) itself could not: PopulateWholeProbs()'s
+                    // later GetMagnitude() call already turns that case
+                    // into today's controlled AckSpit() failure, same as
+                    // before this change.)
+    mPDists[GPP].SetRelativeProb(0, 0.0);  // Dummy value: whichever
+    mPDists[GPS].SetRelativeProb(0, 0.0);  // chunk's range covers k==0
+    mPDists[GSP].SetRelativeProb(0, 0.0);  // below overwrites it with
+    mPDists[GSS].SetRelativeProb(0, 0.0);  // the real GSATO() result.
+  }
+
   //
   // RADIATION PATTERNS:
   //   (Populate PF arrays)
-  Real gpp, gps, gsp, gss, spolv;
-  for (int k = 0; k < nTOA; k++) {
-    par.GSATO(toa[k], gpp, gps, gsp, gss, spolv); // Get g-values and
-    mPDists[GPP].SetRelativeProb(k, gpp);         // spol value
-    mPDists[GPS].SetRelativeProb(k, gps);
-    mPDists[GSP].SetRelativeProb(k, gsp);
-    mPDists[GSS].SetRelativeProb(k, gss);
-    m_spol[k]  = spolv;
-  }
+  const Index n = (Index) nTOA;
+  const unsigned threads = GetBuildThreads();
+  const Index nChunks = (threads == 0) ? 1 : (Index) threads;
+
+  ParallelFor(0, nChunks, threads, [&](Index c) {
+    const Index chunkBegin = (Index) (((BigIndex) n * c)       / nChunks);
+    const Index chunkEnd   = (Index) (((BigIndex) n * (c + 1)) / nChunks);
+    for (Index k = chunkBegin; k < chunkEnd; k++) {
+      Real gpp, gps, gsp, gss, spolv;
+      par.GSATO(toa[k], gpp, gps, gsp, gss, spolv); // Get g-values and
+      mPDists[GPP].SetRelativeProb(k, gpp);         // spol value
+      mPDists[GPS].SetRelativeProb(k, gps);
+      mPDists[GSP].SetRelativeProb(k, gsp);
+      mPDists[GSS].SetRelativeProb(k, gss);
+      m_spol[k]  = spolv;
+    }
+  });
 
 }//
 //

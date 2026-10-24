@@ -64,6 +64,20 @@ private:
   Real  el;         // S-wave wavenumber (=om/beta0)
   Real  gam0;       // Pvel/Svel (often assumed = sqrt(3) )
 
+  // PSATO()/PSATO_Aniso()'s constant numerator, cached at construction
+  // time so PopulateProbDists()'s hot per-direction GSATO() loop
+  // (scatterers.cpp) -- up to 5,242,880 calls per Scatterer -- does not
+  // recompute two tgamma() calls and a pow() on every call. Each is
+  // exactly the expression PSATO()/PSATO_Aniso() used to (re)compute
+  // locally on every call, in today's exact operation order; see
+  // RecomputePSatoNumer() and docs/superpowers/specs/2026-10-17-
+  // axisymmetric-sampler-performance-design.md, decision 8. Recomputed
+  // by RecomputePSatoNumer(), called from every constructor -- there is
+  // no public setter for eps, a, ax, ay, az or kappa, so construction is
+  // the only time these can change.
+  Real  mPSatoNumer;       // (8 pi^1.5 eps^2 a^3) Gamma(kappa+1.5) / Gamma(kappa)
+  Real  mPSatoAnisoNumer;  // (8 pi^1.5 eps^2 ax ay az) Gamma(kappa+1.5) / Gamma(kappa)
+
 
 private:
 
@@ -138,6 +152,7 @@ public:
     gam0  ( vpvs.Vp()/vpvs.Vs()) {
     if (!cm_omega_known)
       {AckSpit();}  // Barf if cm_omega not yet set
+    RecomputePSatoNumer();
   }
 
   // This alternate constructor takes the heterogeneity spectrum and
@@ -157,7 +172,7 @@ public:
     kappa ( hs.kappa() ),
     el    ( el   ),
     gam0  ( gam0 )
-  {}
+  {RecomputePSatoNumer();}
 
   // These ones represent special test cases:
 
@@ -165,14 +180,14 @@ public:
     nu(0.8), eps(1.0), a(0.1),        // figure 4.8 in Sato & Fehler.
     ax(0.1), ay(0.1), az(0.1),        // (Isotropic test case.)
     kappa(0.5), el(1.0), gam0(1.7321)
-  {}
+  {RecomputePSatoNumer();}
 
   ScatterParams(SHEARER_TEST_e dummy) : // Params intended to be
     nu(0.8), eps(1.0), a(1.0),          // similar to those used by
     ax(1.0), ay(1.0), az(1.0),          // Shearer and Earle, 2004
     kappa(0.5), el(1.0),                // (TODO: Find out what those
     gam0(1.7321)                        // parameters would be - these
-  {}                                    // are just placeholder
+  {RecomputePSatoNumer();}              // are just placeholder
                                         // numbers.)
 
   ScatterParams(SP_FORWARD_200_e dummy) : // Results in strong
@@ -180,7 +195,7 @@ public:
     ax(4.0), ay(4.0), az(4.0),            // MFP's (P,S) of ~600,
     kappa(0.8), el(2.17411),              // ~200.
     gam0(1.7301)
-  {}
+  {RecomputePSatoNumer();}
 
 
 public:
@@ -278,6 +293,18 @@ public:
 
 
 private:
+
+  // :::::::::::::::::::::::::::::::::::::::::::::::::::::
+  // ::: Private Helper Methods  (ScatterParams Class) :::
+  // :::::::::::::::::::::::::::::::::::::::::::::::::::::
+
+  void RecomputePSatoNumer(); // (Re)computes mPSatoNumer and
+                              // mPSatoAnisoNumer from the current eps, a,
+                              // ax, ay, az and kappa. Called by every
+                              // constructor; must run after those members
+                              // are already set, i.e. from the
+                              // constructor body, not its initializer
+                              // list.
 
   // :::::::::::::::::::::::::::::::::::::::::::::
   // ::: Error Handling  (ScatterParams Class) :::

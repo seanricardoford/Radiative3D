@@ -102,13 +102,21 @@ void ScatterParams::GSATO(S2::S2Point toa,
   if (gpp < 1.e-30) gpp=0.; // PSPhonon sets this lower-limit
                             // value. Not sure why. But I retain
                             // it here.
-  // GPS:
+  // GPS and GSP share the same PSATO() argument (see scatparams.hpp's
+  // GSATO() comment / decision 8 in the design note): computed once here
+  // instead of twice, since the two original calls already had to agree
+  // bit-for-bit (same 'arg', same const method, no mutable state) -- this
+  // just removes the redundant second call, it does not change what
+  // either value is.
   arg = (el/gam0) * sqrt(1. + gam2 - 2.*gam0*cos(psi));
-  gps = (1./gam0) * (el4/pi4) * xps2 * PSATO(arg);
+  const Real psato_gps_gsp = PSATO(arg);
+
+  // GPS:
+  gps = (1./gam0) * (el4/pi4) * xps2 * psato_gps_gsp;
   if (gps < 1.e-30) gps=0.;
 
   // GSP:
-  gsp = gam0 * (el4/pi4) * xsp2 * PSATO(arg);
+  gsp = gam0 * (el4/pi4) * xsp2 * psato_gps_gsp;
   if (gsp < 1.e-30) gsp=0.;
 
   // GSS:
@@ -186,15 +194,45 @@ void ScatterParams::XSATO(S2::S2Point toa,
 //!    Returns: P(m) =  PSDF (Power Spectral Density Function)
 //!
 Real ScatterParams::PSATO(Real m) const {
-  const Real pi32  = pow(Geometry::Pi,1.5); // pi^(3/2)
-
-  const Real numer = (8.*pi32*eps*eps*a*a*a)
-                   * tgamma(kappa+1.5)
-                   / tgamma(kappa);
 
   const Real denom = pow((1.+a*a*m*m),(kappa+1.5));
 
-  return numer/denom;
+  return mPSatoNumer/denom;
+}
+
+
+//////
+// METHOD:  ScatterParams :: RecomputePSatoNumer()
+//
+// PURPOSE: (Re)computes mPSatoNumer and mPSatoAnisoNumer -- PSATO()'s and
+// PSATO_Aniso()'s constant numerators -- from the current eps, a, ax, ay,
+// az and kappa. Called by every constructor (there is no public setter
+// for any of those six members, so construction is the only time this
+// needs to run).
+//
+// Each expression below is written exactly once, here, textually
+// identical to what PSATO()/PSATO_Aniso() used to compute locally on
+// every call, in the same left-to-right operation order (never
+// re-associated: e.g. caching tgamma(kappa+1.5)/tgamma(kappa) as one
+// number first would regroup (A*B)/C into A*(B/C), which can round
+// differently). Writing it once, in one function called from every
+// constructor, rather than copying the expression into each constructor
+// body, also avoids the class of bug documented in parallel.hpp's
+// IMPLEMENTATION NOTE: the same floating-point expression, written at
+// two (or more) source locations, can be compiled to differently-
+// rounded code (an FMA-contraction discrepancy was observed there
+// between two call sites of one lambda).
+//
+void ScatterParams::RecomputePSatoNumer() {
+  const Real pi32  = pow(Geometry::Pi,1.5); // pi^(3/2)
+
+  mPSatoNumer = (8.*pi32*eps*eps*a*a*a)
+              * tgamma(kappa+1.5)
+              / tgamma(kappa);
+
+  mPSatoAnisoNumer = (8.*pi32*eps*eps*ax*ay*az)
+                    * tgamma(kappa+1.5)
+                    / tgamma(kappa);
 }
 
 
@@ -228,19 +266,13 @@ Real ScatterParams::AnisoMajorantFactor() const {
 // When ax==ay==az==a, this reduces exactly to PSATO(m.Mag()).
 //
 Real ScatterParams::PSATO_Aniso(const R3::XYZ & m) const {
-  const Real pi32  = pow(Geometry::Pi,1.5); // pi^(3/2)
-
-  const Real numer = (8.*pi32*eps*eps*ax*ay*az)
-                   * tgamma(kappa+1.5)
-                   / tgamma(kappa);
-
   const Real mx = m.x();
   const Real my = m.y();
   const Real mz = m.z();
   const Real denom = pow((1. + ax*ax*mx*mx + ay*ay*my*my + az*az*mz*mz),
                          (kappa+1.5));
 
-  return numer/denom;
+  return mPSatoAnisoNumer/denom;
 }
 
 
@@ -259,8 +291,8 @@ Real ScatterParams::PSATO_Aniso(const R3::XYZ & m) const {
 // Gamma-function prefactors in PSATO_Aniso and PSATO cancel exactly,
 // leaving the ax*ay*az/a^3 majorant factor times the acceptance-ratio
 // bracket), but this form is well-defined at eps=0 -- PSATO_Aniso/PSATO
-// is 0/0 there -- and it skips the tgamma/pow calls PSATO_Aniso and
-// PSATO otherwise repeat on every call.
+// is 0/0 there -- and it skips the two separate pow() calls (one per
+// denominator) that PSATO_Aniso(m)/PSATO(m.Mag()) would otherwise need.
 //
 Real ScatterParams::AnisoRatio(const R3::XYZ & m) const {
   return AnisoMajorantFactor() * AnisoAcceptance(m);

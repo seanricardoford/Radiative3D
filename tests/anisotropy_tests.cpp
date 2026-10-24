@@ -39,6 +39,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -2502,6 +2503,178 @@ TEST(axi_geometry_thread_invariant) {
                                        // repBlock, same as
                                        // compare_aniso_reference.sh's
                                        // choice of degree 7).
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
+// ****  TASK 4c TESTS: Parallel isotropic table construction,       ****
+// ****                 bit-identical, with cached PSATO constants   ****
+// ****                                                              ****
+//
+
+// ::: PhononObs / DrawPhononSequence(s, intype, seed, count) :::
+//
+//   Draws 'count' Phonons from s.GetRandomScatteredRelativePhonon(intype)
+//   and records each one's (theta, phi, polarization, full raytype) for
+//   later comparison. The draws run under a freshly-seeded RandomContext
+//   (random.hpp), installed and torn down by a small RAII guard, so:
+//     (a) the same 'seed' always reproduces the same draw sequence,
+//         regardless of what randomness (if any) ran before this call --
+//         letting a caller replay an *identical* sequence of
+//         RandomUniform()/RandomInteger() draws against two differently-
+//         built Scatterers and attribute any difference in the results
+//         to the tables, not to the draws; and
+//     (b) the thread_local active-context pointer is always restored to
+//         null before returning -- including if a draw throws -- so a
+//         failure here can't leave a later test running against a
+//         dangling pointer to this function's now-destroyed local
+//         RandomContext.
+//
+struct PhononObs {
+  Real theta, phi, pol;
+  raytype rt;
+};
+
+static std::vector<PhononObs> DrawPhononSequence(Scatterer & s,
+                                                  raytype intype,
+                                                  std::uint64_t seed,
+                                                  int count) {
+  struct ScopedRandomContext {
+    RandomContext ctx;
+    explicit ScopedRandomContext(std::uint64_t sd) : ctx(sd) {
+      SetActiveRandomContext(&ctx);
+    }
+    ~ScopedRandomContext() {SetActiveRandomContext(0);}
+  } guard(seed);
+
+  std::vector<PhononObs> obs;
+  obs.reserve(count);
+  for (int i = 0; i < count; ++i) {
+    const Phonon p = s.GetRandomScatteredRelativePhonon(intype);
+    PhononObs o;
+    o.theta = p.GetDirection().Theta();
+    o.phi   = p.GetDirection().Phi();
+    o.pol   = p.GetPolarization();
+    o.rt    = p.GetFullRaytype();
+    obs.push_back(o);
+  }
+  return obs;
+}
+
+// TEST(iso_tables_thread_invariant):
+//
+//   Guard test (brief Step 1): construction-time parallelism must never
+//   change a table, a report value, or any output of a subsequently-
+//   constructed Scatterer, whatever Scatterer::GetBuildThreads() was set
+//   to during its build. Builds an isotropic and an axisymmetric
+//   Scatterer at threads=1, then again at threads=7, and requires
+//   GetMajorantMeanFreePath(P/S) (both specs), GetReportMFPs() (the
+//   axisymmetric spec only -- empty, and so trivially equal, for an
+//   isotropic one), and the first 2000 results of a fixed-seed
+//   RandomUniform()/RandomInteger() draw sequence through
+//   GetRandomScatteredRelativePhonon(RAY_P) and (RAY_S) on the isotropic
+//   Scatterer (the only sampling path that method supports; see its
+//   guard against anisotropic ScatterParams) to come out exactly equal.
+//
+//   This exercises both halves of Task 4c: a wrong ScatterParams::
+//   PSATO() numerator cache would perturb every GSATO() value feeding
+//   PopulateProbDists() (and, transitively, ComputeReportStats() and the
+//   axisymmetric sampler's AxiProposal, built from the same mPDists); a
+//   data race or ordering bug in PopulateProbDists()'s new ParallelFor
+//   would perturb mPDists/m_spol directly. Either would change which
+//   take-off-angle index, conversion, and/or polarization get drawn.
+//
+//   Like task-4b-report.md's analogous test, this is RED-free: it can
+//   only fail if the new parallel implementation itself has a bug, not
+//   because today's (pre-Task-4c) construction already varied with
+//   thread count -- recorded as such per the brief's own instruction for
+//   this situation.
+//
+TEST(iso_tables_thread_invariant) {
+
+  UseTOADegree(5);
+
+  Scatterer::SetBuildThreads(1);
+  Scatterer isoScat1(LopNorCrust(0.5, 0.5, 0.5));   // isotropic
+  Scatterer axiScat1(LopNorCrust(2,   2,   0.5));   // axisymmetric
+
+  const Real mfpIsoP1 = isoScat1.GetMajorantMeanFreePath(RAY_P);
+  const Real mfpIsoS1 = isoScat1.GetMajorantMeanFreePath(RAY_S);
+  const Real mfpAxiP1 = axiScat1.GetMajorantMeanFreePath(RAY_P);
+  const Real mfpAxiS1 = axiScat1.GetMajorantMeanFreePath(RAY_S);
+  const std::vector<Real> reportMfps1 = axiScat1.GetReportMFPs();
+
+  const std::uint64_t seedP = 1357111317ULL;
+  const std::uint64_t seedS = 2468121416ULL;
+  const int kDraws = 2000;
+
+  const std::vector<PhononObs> drawsP1 =
+    DrawPhononSequence(isoScat1, RAY_P, seedP, kDraws);
+  const std::vector<PhononObs> drawsS1 =
+    DrawPhononSequence(isoScat1, RAY_S, seedS, kDraws);
+
+  Scatterer::SetBuildThreads(7);
+  Scatterer isoScat7(LopNorCrust(0.5, 0.5, 0.5));
+  Scatterer axiScat7(LopNorCrust(2,   2,   0.5));
+
+  const Real mfpIsoP7 = isoScat7.GetMajorantMeanFreePath(RAY_P);
+  const Real mfpIsoS7 = isoScat7.GetMajorantMeanFreePath(RAY_S);
+  const Real mfpAxiP7 = axiScat7.GetMajorantMeanFreePath(RAY_P);
+  const Real mfpAxiS7 = axiScat7.GetMajorantMeanFreePath(RAY_S);
+  const std::vector<Real> reportMfps7 = axiScat7.GetReportMFPs();
+
+  const std::vector<PhononObs> drawsP7 =
+    DrawPhononSequence(isoScat7, RAY_P, seedP, kDraws);
+  const std::vector<PhononObs> drawsS7 =
+    DrawPhononSequence(isoScat7, RAY_S, seedS, kDraws);
+
+  Scatterer::SetBuildThreads(1);  // restore
+
+  CHECK_MSG(mfpIsoP1 == mfpIsoP7, "isotropic MFP(P): threads=1 " << mfpIsoP1
+           << " threads=7 " << mfpIsoP7);
+  CHECK_MSG(mfpIsoS1 == mfpIsoS7, "isotropic MFP(S): threads=1 " << mfpIsoS1
+           << " threads=7 " << mfpIsoS7);
+  CHECK_MSG(mfpAxiP1 == mfpAxiP7, "axisymmetric MFP(P): threads=1 "
+           << mfpAxiP1 << " threads=7 " << mfpAxiP7);
+  CHECK_MSG(mfpAxiS1 == mfpAxiS7, "axisymmetric MFP(S): threads=1 "
+           << mfpAxiS1 << " threads=7 " << mfpAxiS7);
+
+  CHECK(reportMfps1.size() == reportMfps7.size());
+  for (std::size_t i = 0; i < reportMfps1.size(); ++i) {
+    CHECK_MSG(reportMfps1[i] == reportMfps7[i],
+             "GetReportMFPs()[" << i << "]: threads=1 " << reportMfps1[i]
+             << " threads=7 " << reportMfps7[i]);
+  }
+
+  CHECK(drawsP1.size() == drawsP7.size());
+  for (std::size_t i = 0; i < drawsP1.size(); ++i) {
+    CHECK_MSG(drawsP1[i].theta == drawsP7[i].theta &&
+             drawsP1[i].phi   == drawsP7[i].phi   &&
+             drawsP1[i].pol   == drawsP7[i].pol   &&
+             drawsP1[i].rt    == drawsP7[i].rt,
+             "RAY_P draw " << i << " differs: threads=1 (theta="
+             << drawsP1[i].theta << " phi=" << drawsP1[i].phi << " pol="
+             << drawsP1[i].pol << " rt=" << drawsP1[i].rt
+             << ") threads=7 (theta=" << drawsP7[i].theta << " phi="
+             << drawsP7[i].phi << " pol=" << drawsP7[i].pol << " rt="
+             << drawsP7[i].rt << ")");
+  }
+
+  CHECK(drawsS1.size() == drawsS7.size());
+  for (std::size_t i = 0; i < drawsS1.size(); ++i) {
+    CHECK_MSG(drawsS1[i].theta == drawsS7[i].theta &&
+             drawsS1[i].phi   == drawsS7[i].phi   &&
+             drawsS1[i].pol   == drawsS7[i].pol   &&
+             drawsS1[i].rt    == drawsS7[i].rt,
+             "RAY_S draw " << i << " differs: threads=1 (theta="
+             << drawsS1[i].theta << " phi=" << drawsS1[i].phi << " pol="
+             << drawsS1[i].pol << " rt=" << drawsS1[i].rt
+             << ") threads=7 (theta=" << drawsS7[i].theta << " phi="
+             << drawsS7[i].phi << " pol=" << drawsS7[i].pol << " rt="
+             << drawsS7[i].rt << ")");
+  }
+
 }
 
 
