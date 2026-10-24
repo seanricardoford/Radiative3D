@@ -698,6 +698,17 @@ AxiProposal::BinCap AxiProposal::MakeBinCap(const R3::XYZ & u_c, Real delta) {
 //   using s = sin(alpha_c) = sqrt(1-c^2) >= 0 (alpha_c in [0,pi]). No
 //   acos, cos or sin call remains in this function.
 //
+// This is the scalar reference implementation: BuildBinTable() (below)
+// calls only RatioRun(), never this function directly, so BoundRatio()
+// has no production caller any more -- it exists solely as the fixed,
+// unvectorized target tests/anisotropy_tests.cpp's
+// test_axi_ratio_run_matches_scalar and axi_kernel_matches_reference
+// check against. RatioRun() must reproduce this function's result
+// bit-for-bit (not merely within a tolerance) for every representative;
+// the rest of this comment block explains how that's achieved despite
+// vectorization, and the bug (an out-of-line Dot() call compiled under
+// different ambient flags) that first broke it.
+//
 // This function and RatioRun() (below) carry a matching GCC
 // optimize("fp-contract=off") attribute so neither ever contracts a
 // multiply-add into a fused instruction: GCC's default for this file's
@@ -813,7 +824,7 @@ void AxiProposal::RepSoA::Assign(const std::vector<BoundRep> & reps) {
 //////
 // METHOD:  AxiProposal :: RatioRun()                          [static]
 //
-//   BoundRatio(), run over every representative in 'reps' -- same
+//   BoundRatio(), run over representatives [lo,hi) of 'reps' -- same
 //   per-element arithmetic, rewritten so the loop vectorizes:
 //     - 'c' (cos(alpha_c)) is computed unconditionally as the clamped
 //       dot product, then replaced with the Mr==0 default (1.0) by a
@@ -841,8 +852,9 @@ void AxiProposal::RepSoA::Assign(const std::vector<BoundRep> & reps) {
 //
 template <bool AhGeAz>
 R3D_EXACT_FP_ATTR
-void AxiProposal::RatioRun(const RepSoA & reps, const BinCap & cap,
-                           Real ah, Real az, Real * ratio) {
+void AxiProposal::RatioRun(const RepSoA & reps, Index lo, Index hi,
+                           const BinCap & cap, Real ah, Real az,
+                           Real * ratio) {
 
   const Real * const mx    = &reps.Mx[0];
   const Real * const my    = &reps.My[0];
@@ -854,14 +866,13 @@ void AxiProposal::RatioRun(const RepSoA & reps, const BinCap & cap,
   const Real * const numer = &reps.Numer[0];
   Real * const out = ratio;
 
-  const Index n = (Index) reps.Mr.size();
   const Real ux = cap.Uc.x(), uy = cap.Uc.y(), uz = cap.Uc.z();
   const Real cosD = cap.CosDelta, sinD = cap.SinDelta;
   const Real ah2 = ah*ah, az2 = az*az;
   const Real d1 = ah2 - az2;   // AhGeAz==true  branch coefficient.
   const Real d2 = az2 - ah2;   // AhGeAz==false branch coefficient.
 
-  for (Index i = 0; i < n; i++) {
+  for (Index i = lo; i < hi; i++) {
 
     Real d = ux*mx[i] + uy*my[i] + uz*mz[i];
     d = (d > 1.0)  ? (Real) 1.0  : d;
@@ -893,7 +904,7 @@ void AxiProposal::RatioRun(const RepSoA & reps, const BinCap & cap,
       Q_lo = ah2*m2lo[i] + d2*s2_lo;
     }
 
-    out[i] = numer[i] / (1.0 + Q_lo);
+    out[i-lo] = numer[i] / (1.0 + Q_lo);
   }
 
 }//
@@ -911,9 +922,9 @@ void AxiProposal::RatioRun(const RepSoA & reps, const BinCap & cap,
 // same cross-translation-unit-divergence risk parallel.hpp's own
 // IMPLEMENTATION NOTE documents for body(i).
 template void AxiProposal::RatioRun<true>(
-  const RepSoA &, const BinCap &, Real, Real, Real *);
+  const RepSoA &, Index, Index, const BinCap &, Real, Real, Real *);
 template void AxiProposal::RatioRun<false>(
-  const RepSoA &, const BinCap &, Real, Real, Real *);
+  const RepSoA &, Index, Index, const BinCap &, Real, Real, Real *);
 
 
 //////
@@ -933,17 +944,25 @@ void AxiProposal::BuildBinTable(const R3::XYZ & u_c, Real delta,
 
   const BinCap cap = MakeBinCap(u_c, delta);
 
-  // ratio[i] = BoundRatio(rep_i, cap, mAh, mAz) for every representative
-  // in the group, computed by one RatioRun() call (vectorized) instead
-  // of one BoundRatio() call per representative; then each cell's max is
-  // taken over its own contiguous slice, a nested cell-then-
-  // representative loop rather than dividing the running max per
-  // element. Max is exact (never rounds: it always returns one of its
-  // inputs' own bit patterns) and doesn't care about grouping or order,
-  // so this is bit-identical to the old "update both cells' running max
-  // inline, one representative at a time" loop, for both groups.
-  const Index numReps = (Index) reps0.Mr.size();
-  std::vector<Real> ratio(numReps);
+  // ratio[j] = BoundRatio(rep_i, cap, mAh, mAz) for a cell's own
+  // repsPerCell representatives (i = c*repsPerCell+j), computed by one
+  // RatioRun() call (vectorized) over just that cell's contiguous block
+  // -- not the whole group -- so this function's own scratch is
+  // O(repsPerCell) (a few hundred bytes at degree 9's repsPerCell==64),
+  // not O(numReps) (~0.63 MB). This runs from inside a 450-bin
+  // ParallelFor (the constructor, below), so up to 'threads' of these
+  // can be live at once; an O(numReps) buffer (an earlier version of
+  // this function had one) would scale total temporary memory with
+  // thread count and, at this class's own ~32 MB/scatterer construction
+  // budget and the design doc's 24-thread reference configuration,
+  // pushed it over (caught in review, not by any test). Each cell's max
+  // is taken over its own small buffer immediately after that cell's
+  // RatioRun() call. Max is exact (never rounds: it always returns one
+  // of its inputs' own bit patterns) and doesn't care about grouping or
+  // order, so processing one cell at a time like this is bit-identical
+  // to the original "update both cells' running max inline, one
+  // representative at a time" loop, for both groups.
+  std::vector<Real> ratio(repsPerCell);
 
   std::vector<Real> maxRatio0(mNumCells, 0.0), maxRatio1(mNumCells, 0.0);
   const RepSoA      * const groups[2]    = {&reps0, &reps1};
@@ -951,17 +970,17 @@ void AxiProposal::BuildBinTable(const R3::XYZ & u_c, Real delta,
 
   for (int g = 0; g < 2; g++) {
     const RepSoA & reps = *groups[g];
-    if (mAh >= mAz) {
-      RatioRun<true>(reps, cap, mAh, mAz, &ratio[0]);
-    } else {
-      RatioRun<false>(reps, cap, mAh, mAz, &ratio[0]);
-    }
     std::vector<Real> & maxR = *maxRatios[g];
     for (Index c = 0; c < mNumCells; c++) {
-      const Real * r = &ratio[c*repsPerCell];
+      const Index lo = c*repsPerCell, hi = lo+repsPerCell;
+      if (mAh >= mAz) {
+        RatioRun<true>(reps, lo, hi, cap, mAh, mAz, &ratio[0]);
+      } else {
+        RatioRun<false>(reps, lo, hi, cap, mAh, mAz, &ratio[0]);
+      }
       Real m = maxR[c];
       for (Index j = 0; j < repsPerCell; j++) {
-        if (r[j] > m) {m = r[j];}
+        if (ratio[j] > m) {m = ratio[j];}
       }
       maxR[c] = m;
     }

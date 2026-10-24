@@ -3070,6 +3070,14 @@ TEST(axi_p_urel_matches_canonical) {
 //   task's "never accept a mismatch" rule treats as a bug to fix, not a
 //   tolerance to loosen.
 //
+//   Each RatioRun<AhGeAz>() call below covers the full [0,numReps)
+//   range in one call, unlike BuildBinTable()'s own per-cell calls
+//   (aniso_axi.cpp, repsPerCell at a time, to keep its scratch buffer
+//   small) -- equivalent per representative either way, since
+//   RatioRun()'s loop carries no state across iterations (no reduction,
+//   no element depends on any other), so index i's result is the same
+//   whichever [lo,hi) range containing it was passed.
+//
 template <bool AhGeAz>
 static void CheckAxiRatioRunMatchesScalar(const ScatterParams & sp) {
 
@@ -3132,8 +3140,8 @@ static void CheckAxiRatioRunMatchesScalar(const ScatterParams & sp) {
     const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
     const AxiProposal::BinCap cap = AxiProposal::MakeBinCap(u_c, delta);
 
-    AxiProposal::RatioRun<AhGeAz>(soaPP, cap, ah, az, &ratio0[0]);
-    AxiProposal::RatioRun<AhGeAz>(soaPS, cap, ah, az, &ratio1[0]);
+    AxiProposal::RatioRun<AhGeAz>(soaPP, 0, numReps, cap, ah, az, &ratio0[0]);
+    AxiProposal::RatioRun<AhGeAz>(soaPS, 0, numReps, cap, ah, az, &ratio1[0]);
 
     for (Index i = 0; i < numReps; ++i) {
       const Real wantPP = AxiProposal::BoundRatio(repsPP[i], cap, ah, az);
@@ -3165,8 +3173,8 @@ static void CheckAxiRatioRunMatchesScalar(const ScatterParams & sp) {
                         cos(theta_c));
       const AxiProposal::BinCap cap = AxiProposal::MakeBinCap(u_c, delta);
 
-      AxiProposal::RatioRun<AhGeAz>(soaSP, cap, ah, az, &ratio0[0]);
-      AxiProposal::RatioRun<AhGeAz>(soaSS, cap, ah, az, &ratio1[0]);
+      AxiProposal::RatioRun<AhGeAz>(soaSP, 0, numReps, cap, ah, az, &ratio0[0]);
+      AxiProposal::RatioRun<AhGeAz>(soaSS, 0, numReps, cap, ah, az, &ratio1[0]);
 
       for (Index i = 0; i < numReps; ++i) {
         const Real wantSP = AxiProposal::BoundRatio(repsSP[i], cap, ah, az);

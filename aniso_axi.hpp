@@ -267,7 +267,18 @@ public:
                       // above, evaluated with the trig-free cap-edge
                       // identities of design decision 3 (no acos, cos,
                       // or sin call) -- exactly the arithmetic of the
-                      // ComputeBound() this replaces.
+                      // ComputeBound() this replaces. This is the scalar
+                      // reference implementation: no production code
+                      // calls it any more (BuildBinTable() below calls
+                      // only RatioRun()), it exists solely so
+                      // RatioRun() -- and tests/anisotropy_tests.cpp's
+                      // test_axi_ratio_run_matches_scalar and
+                      // axi_kernel_matches_reference -- have a fixed,
+                      // unvectorized target to check against.
+                      // RatioRun() must match this function bit-for-bit
+                      // (not merely within a tolerance): see its own doc
+                      // comment below for why that's achievable despite
+                      // vectorization, and why it originally wasn't.
 
   struct RepSoA {
     std::vector<Real> Mx, My, Mz, Mr, Rho, M2Lo, M2Hi, Numer;
@@ -288,22 +299,36 @@ public:
                       // only production caller.
 
   template <bool AhGeAz>
-  static void RatioRun(const RepSoA & reps, const BinCap & cap,
-                       Real ah, Real az, Real * ratio);
-                      // Fills ratio[i] = BoundRatio(rep_i, cap, ah, az)
-                      // for every representative i in 'reps' (rep_i
-                      // reconstructed from reps' i'th column), using
-                      // exactly BoundRatio()'s per-element arithmetic
-                      // but written so the loop vectorizes: both
-                      // cap-edge values are computed before selecting
-                      // between them, std::max()/std::min() are spelled
-                      // as ternaries, and the s2_lo branch test uses '&'
-                      // rather than '&&' (see aniso_axi.cpp). 'AhGeAz'
-                      // selects BoundRatio()'s ah>=az branch (true) or
-                      // its ah<az branch (false) at compile time --
-                      // valid because the caller already knows which
-                      // holds for every representative in a single
-                      // call (it depends only on 'ah'/'az', not on the
+  static void RatioRun(const RepSoA & reps, Index lo, Index hi,
+                       const BinCap & cap, Real ah, Real az, Real * ratio);
+                      // Fills ratio[i-lo] = BoundRatio(rep_i, cap, ah, az)
+                      // for every representative i in the half-open
+                      // range [lo,hi) of 'reps' (rep_i reconstructed
+                      // from reps' i'th column), using exactly
+                      // BoundRatio()'s per-element arithmetic but
+                      // written so the loop vectorizes: both cap-edge
+                      // values are computed before selecting between
+                      // them, std::max()/std::min() are spelled as
+                      // ternaries, and the s2_lo branch test uses '&'
+                      // rather than '&&' (see aniso_axi.cpp). The
+                      // caller's output buffer need only be sized
+                      // (hi-lo), not reps' full size -- BuildBinTable()
+                      // calls this once per cell, over just that cell's
+                      // contiguous representative block, specifically
+                      // so its own scratch is O(repsPerCell) rather than
+                      // O(numReps): seeing numReps (not a few dozen)
+                      // concurrent calls (one per bin, up to 'threads'
+                      // at a time, see BuildBinTable()'s own caller)
+                      // each want their own buffer, the earlier
+                      // (numReps-per-call) version scaled temporary
+                      // memory with 'threads' and could exceed this
+                      // class's ~32 MB/scatterer construction-memory
+                      // budget at high thread counts. 'AhGeAz' selects
+                      // BoundRatio()'s ah>=az branch (true) or its
+                      // ah<az branch (false) at compile time -- valid
+                      // because the caller already knows which holds
+                      // for every representative in a single call (it
+                      // depends only on 'ah'/'az', not on the
                       // representative), so the branch doesn't need to
                       // be re-tested per element. Defined, and
                       // explicitly instantiated for both 'AhGeAz'
