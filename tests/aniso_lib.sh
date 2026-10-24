@@ -11,6 +11,14 @@
 #   compare_runs DIR_A DIR_B MODE      (MODE is "strict" or "noargs")
 #   trace_has_signal FILE
 #   require_sct_bands SCENARIO REPORT BAND...
+#   mul A B                            (prints A*B, %.9f)
+#   sqrt_of A                          (prints sqrt(A), %.9f)
+#   region5 a eps kappa Q              (five-value "nu,eps,a,kappa,Q" layout)
+#   region7 a eps axmul aymul kappa Q  (seven-value "nu,eps,ax,ay,az,kappa,Q")
+#   mode_mults MODE R                  (MODE is "axi", "tri", or "gen")
+#   lopnor_model EPS MODE [R]          (MODE is "iso", "axi", "tri", or "gen")
+#   crustpinch_model EPS MODE [R]      (MODE is "iso", "axi", "tri", or "gen")
+#   scenario_model SCENARIO EPS MODE [R]
 
 ##
 ## normalize_stdout FILE
@@ -211,4 +219,139 @@ require_sct_bands() {
       return 1
     fi
   done
+}
+
+##
+## mul A B
+##
+##   Prints A*B. %.9f precision -- enough to resolve mode "gen"'s 1e-5
+##   relative ay perturbation (see mode_mults()) distinctly from mode
+##   "axi"'s ay at every (a, r) combination the benchmark and
+##   tests/compare_axi_general.sh use, with headroom to spare.
+##
+mul() { awk "BEGIN{printf \"%.9f\", $1*$2}"; }
+
+##
+## sqrt_of A
+##
+##   Prints sqrt(A), %.9f precision.
+##
+sqrt_of() { awk "BEGIN{printf \"%.9f\", sqrt($1)}"; }
+
+##
+## region5 a eps kappa Q  -> "nu,eps,a,kappa,Q"
+##
+##   A five-value (isotropic) model-args region layout.
+##
+region5() {
+  printf '0.8,%s,%s,%s,%s' "$2" "$1" "$3" "$4"
+}
+
+##
+## region7 a eps axmul aymul kappa Q  -> "nu,eps,ax,ay,az,kappa,Q"
+##
+##   A seven-value (anisotropic) model-args region layout (az == a; ax ==
+##   a*axmul; ay == a*aymul). axmul=aymul=1 gives an isotropic region in
+##   seven-value form -- byte-identical to the five-value form, per
+##   doc/MANUAL.md's "Seven-value (anisotropic) model-args layouts".
+##
+region7() {
+  a=$1; eps=$2; axmul=$3; aymul=$4; kappa=$5; Q=$6
+  ax=$(mul "$a" "$axmul")
+  ay=$(mul "$a" "$aymul")
+  printf '0.8,%s,%s,%s,%s,%s,%s' "$eps" "$ax" "$ay" "$a" "$kappa" "$Q"
+}
+
+##
+## mode_mults MODE R  -> prints "axmul aymul" on stdout
+##
+##   MODE "axi": ax == ay == R*a (axisymmetric: the AUTO sampler picks
+##               the axisymmetric path).
+##   MODE "tri": ax == R*a, ay == sqrt(R)*a (triaxial: ax != ay != az).
+##   MODE "gen": ax == R*a, ay == ax*(1+1e-5) (near-axisymmetric: AUTO
+##               picks the general path, on a medium close enough to
+##               "axi" that tests/compare_axi_general.sh can treat the
+##               two as a same-theory check -- see docs/superpowers/
+##               specs/2026-10-17-axisymmetric-sampler-performance-
+##               design.md, decision 6).
+##
+mode_mults() {
+  mode=$1; r=$2
+  case "$mode" in
+    axi) printf '%s %s' "$r" "$r" ;;
+    tri) printf '%s %s' "$r" "$(sqrt_of "$r")" ;;
+    gen) printf '%s %s' "$r" "$(mul "$r" 1.00001)" ;;
+    *) echo "mode_mults: unknown mode '$mode'" >&2; exit 1 ;;
+  esac
+}
+
+##
+## lopnor_model EPS MODE [R]  -> full --model-args value
+##
+##   MODE: iso | axi | tri | gen. Anisotropic regions: crust, mantle.
+##
+lopnor_model() {
+  eps=$1; mode=$2; r=${3:-1}
+  a_sedi=0.5;   k_sedi=0.2;   q_sedi=50
+  a_crust=0.5;  k_crust=0.3;  q_crust=1000
+  a_mantle=0.7; k_mantle=0.5; q_mantle=300
+
+  if [ "$mode" = "iso" ]; then
+    r1=$(region5 "$a_sedi" "$eps" "$k_sedi" "$q_sedi")
+    r2=$(region5 "$a_crust" "$eps" "$k_crust" "$q_crust")
+    r3=$(region5 "$a_mantle" "$eps" "$k_mantle" "$q_mantle")
+  else
+    set -- $(mode_mults "$mode" "$r"); axmul=$1; aymul=$2
+    r1=$(region7 "$a_sedi" "$eps" 1 1 "$k_sedi" "$q_sedi")
+    r2=$(region7 "$a_crust" "$eps" "$axmul" "$aymul" "$k_crust" "$q_crust")
+    r3=$(region7 "$a_mantle" "$eps" "$axmul" "$aymul" "$k_mantle" "$q_mantle")
+  fi
+  printf '%s,%s,%s' "$r1" "$r2" "$r3"
+}
+
+##
+## crustpinch_model EPS MODE [R]  -> full --model-args value
+##
+##   MODE: iso | axi | tri | gen. Anisotropic regions: crust, pinched
+##   crust, mantle.
+##
+crustpinch_model() {
+  eps=$1; mode=$2; r=${3:-1}
+  a_sedi=0.20;   k_sedi=0.2;   q_sedi=200
+  a_crust=0.20;  k_crust=0.3;  q_crust=1500
+  a_pinch=0.20;  k_pinch=0.3;  q_pinch=1500
+  a_moho=0.20;   k_moho=0.4;   q_moho=1500
+  a_mantle=0.50; k_mantle=0.5; q_mantle=900
+  tail="2.0,30.0,5.0,.3666667,.4736842,1,1"   # SediThick,CrustThick,MohoThick,
+                                               # PinchFrac,DepthFrac,SediFrac,MohoFrac
+
+  if [ "$mode" = "iso" ]; then
+    r1=$(region5 "$a_sedi" "$eps" "$k_sedi" "$q_sedi")
+    r2=$(region5 "$a_crust" "$eps" "$k_crust" "$q_crust")
+    r3=$(region5 "$a_pinch" "$eps" "$k_pinch" "$q_pinch")
+    r4=$(region5 "$a_moho" "$eps" "$k_moho" "$q_moho")
+    r5=$(region5 "$a_mantle" "$eps" "$k_mantle" "$q_mantle")
+  else
+    set -- $(mode_mults "$mode" "$r"); axmul=$1; aymul=$2
+    r1=$(region7 "$a_sedi" "$eps" 1 1 "$k_sedi" "$q_sedi")
+    r2=$(region7 "$a_crust" "$eps" "$axmul" "$aymul" "$k_crust" "$q_crust")
+    r3=$(region7 "$a_pinch" "$eps" "$axmul" "$aymul" "$k_pinch" "$q_pinch")
+    r4=$(region7 "$a_moho" "$eps" 1 1 "$k_moho" "$q_moho")
+    r5=$(region7 "$a_mantle" "$eps" "$axmul" "$aymul" "$k_mantle" "$q_mantle")
+  fi
+  printf '%s,%s,%s,%s,%s,%s' "$r1" "$r2" "$r3" "$r4" "$r5" "$tail"
+}
+
+##
+## scenario_model SCENARIO EPS MODE [R]
+##
+##   Dispatches to lopnor_model or crustpinch_model.
+##
+scenario_model() {
+  scenario=$1; shift
+  case "$scenario" in
+    lopnor) lopnor_model "$@" ;;
+    crustpinch) crustpinch_model "$@" ;;
+    *) echo "scenario_model: unknown scenario '$scenario'" >&2; exit 1 ;;
+  esac
 }

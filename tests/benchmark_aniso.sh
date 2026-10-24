@@ -46,6 +46,11 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
+. "$ROOT/tests/aniso_lib.sh"   # region5, region7, mode_mults,
+                               # lopnor_model, crustpinch_model,
+                               # scenario_model (and their mul/sqrt_of
+                               # helpers) -- shared with
+                               # tests/compare_axi_general.sh.
 
 BENCH_DEGREE=${BENCH_DEGREE:-9}
 BENCH_LOPNOR_PHONONS=${BENCH_LOPNOR_PHONONS:-1000000}
@@ -88,94 +93,11 @@ GATE_FAIL=0
 # ---------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------
-
-mul() { awk "BEGIN{printf \"%.6f\", $1*$2}"; }
-sqrt_of() { awk "BEGIN{printf \"%.6f\", sqrt($1)}"; }
-
-# region5 a eps kappa Q  -> "nu,eps,a,kappa,Q"
-region5() {
-  printf '0.8,%s,%s,%s,%s' "$2" "$1" "$3" "$4"
-}
-
-# region7 a eps axmul aymul kappa Q -> "nu,eps,ax,ay,az,kappa,Q"
-# (az == a; ax == a*axmul; ay == a*aymul. axmul=aymul=1 gives an
-# isotropic region in seven-value form.)
-region7() {
-  a=$1; eps=$2; axmul=$3; aymul=$4; kappa=$5; Q=$6
-  ax=$(mul "$a" "$axmul")
-  ay=$(mul "$a" "$aymul")
-  printf '0.8,%s,%s,%s,%s,%s,%s' "$eps" "$ax" "$ay" "$a" "$kappa" "$Q"
-}
-
-# mode_mults mode r  -> prints "axmul aymul" on stdout
-mode_mults() {
-  mode=$1; r=$2
-  case "$mode" in
-    axi) printf '%s %s' "$r" "$r" ;;
-    tri) printf '%s %s' "$r" "$(sqrt_of "$r")" ;;
-    *) echo "mode_mults: unknown mode '$mode'" >&2; exit 1 ;;
-  esac
-}
-
-# lopnor_model eps mode [r]  -> full --model-args value
-# mode: iso | axi | tri. Anisotropic regions: crust, mantle.
-lopnor_model() {
-  eps=$1; mode=$2; r=${3:-1}
-  a_sedi=0.5;   k_sedi=0.2;   q_sedi=50
-  a_crust=0.5;  k_crust=0.3;  q_crust=1000
-  a_mantle=0.7; k_mantle=0.5; q_mantle=300
-
-  if [ "$mode" = "iso" ]; then
-    r1=$(region5 "$a_sedi" "$eps" "$k_sedi" "$q_sedi")
-    r2=$(region5 "$a_crust" "$eps" "$k_crust" "$q_crust")
-    r3=$(region5 "$a_mantle" "$eps" "$k_mantle" "$q_mantle")
-  else
-    set -- $(mode_mults "$mode" "$r"); axmul=$1; aymul=$2
-    r1=$(region7 "$a_sedi" "$eps" 1 1 "$k_sedi" "$q_sedi")
-    r2=$(region7 "$a_crust" "$eps" "$axmul" "$aymul" "$k_crust" "$q_crust")
-    r3=$(region7 "$a_mantle" "$eps" "$axmul" "$aymul" "$k_mantle" "$q_mantle")
-  fi
-  printf '%s,%s,%s' "$r1" "$r2" "$r3"
-}
-
-# crustpinch_model eps mode [r]  -> full --model-args value
-# mode: iso | axi | tri. Anisotropic regions: crust, pinched crust, mantle.
-crustpinch_model() {
-  eps=$1; mode=$2; r=${3:-1}
-  a_sedi=0.20;   k_sedi=0.2;   q_sedi=200
-  a_crust=0.20;  k_crust=0.3;  q_crust=1500
-  a_pinch=0.20;  k_pinch=0.3;  q_pinch=1500
-  a_moho=0.20;   k_moho=0.4;   q_moho=1500
-  a_mantle=0.50; k_mantle=0.5; q_mantle=900
-  tail="2.0,30.0,5.0,.3666667,.4736842,1,1"   # SediThick,CrustThick,MohoThick,
-                                               # PinchFrac,DepthFrac,SediFrac,MohoFrac
-
-  if [ "$mode" = "iso" ]; then
-    r1=$(region5 "$a_sedi" "$eps" "$k_sedi" "$q_sedi")
-    r2=$(region5 "$a_crust" "$eps" "$k_crust" "$q_crust")
-    r3=$(region5 "$a_pinch" "$eps" "$k_pinch" "$q_pinch")
-    r4=$(region5 "$a_moho" "$eps" "$k_moho" "$q_moho")
-    r5=$(region5 "$a_mantle" "$eps" "$k_mantle" "$q_mantle")
-  else
-    set -- $(mode_mults "$mode" "$r"); axmul=$1; aymul=$2
-    r1=$(region7 "$a_sedi" "$eps" 1 1 "$k_sedi" "$q_sedi")
-    r2=$(region7 "$a_crust" "$eps" "$axmul" "$aymul" "$k_crust" "$q_crust")
-    r3=$(region7 "$a_pinch" "$eps" "$axmul" "$aymul" "$k_pinch" "$q_pinch")
-    r4=$(region7 "$a_moho" "$eps" 1 1 "$k_moho" "$q_moho")
-    r5=$(region7 "$a_mantle" "$eps" "$axmul" "$aymul" "$k_mantle" "$q_mantle")
-  fi
-  printf '%s,%s,%s,%s,%s,%s' "$r1" "$r2" "$r3" "$r4" "$r5" "$tail"
-}
-
-# scenario_model scenario eps mode [r]
-scenario_model() {
-  scenario=$1; shift
-  case "$scenario" in
-    lopnor) lopnor_model "$@" ;;
-    crustpinch) crustpinch_model "$@" ;;
-    *) echo "scenario_model: unknown scenario '$scenario'" >&2; exit 1 ;;
-  esac
-}
+#
+# region5, region7, mode_mults, lopnor_model, crustpinch_model, and
+# scenario_model (the --model-args layout builders) now live in
+# tests/aniso_lib.sh, sourced above -- shared with
+# tests/compare_axi_general.sh, which also needs mode "gen".
 
 # time_run exe scenario phonons model_args  -> seconds (wall clock) on stdout
 # Exits the whole script nonzero if the run fails.

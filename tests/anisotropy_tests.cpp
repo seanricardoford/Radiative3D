@@ -3204,6 +3204,433 @@ TEST(axi_ratio_run_matches_scalar) {
 
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
+// ****  TASK 6 (PERFORMANCE PLAN) TESTS: Near-axisymmetric          ****
+// ****  validation                                                  ****
+// ****                                                              ****
+//
+// Validates the theory behind decisions 4-5 (the faster axisymmetric
+// sampler and its same-medium performance gate) by checking that a
+// *near*-axisymmetric medium (ay = ax*(1+delta), delta small) behaves
+// consistently with the axisymmetric (ay == ax) case: the exact rate
+// varies smoothly (linearly, to leading order) in delta, the
+// axisymmetric and general samplers -- via AUTO, so the routing itself
+// is exercised too -- agree statistically on a medium so close to
+// axisymmetric that they are effectively sampling the same physics, the
+// two GetReportMFPs() branches (AXI's 8 states, ANI's 9) agree on the
+// states that coincide by the axisymmetric spec's symmetry, and the
+// per-real-event cost (tentative collisions and table draws) of both
+// samplers is recorded for a range of incidence states. See
+// docs/superpowers/specs/2026-10-17-axisymmetric-sampler-performance-
+// design.md, decision 6, and .superpowers/sdd/2026-10-17-axisymmetric-
+// sampler-performance/task-6-brief.md.
+//
+
+TEST(near_axi_rate_matches) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+
+  struct SpecCase { Real ax, ay, az; };
+  const SpecCase specs[] = {
+    {2, 2, 0.5}, {5, 5, 0.5}, {0.5, 0.5, 2},
+  };
+  const Real kappas[] = {0.3, 0.5};
+  const Real deltas[] = {1e-6, 1e-4, 1e-2};
+
+  const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1), D(Dir(60,30));
+  struct Case { raytype in; R3::XYZ dir; R3::XYZ pol; };
+  const Case cases[] = {
+    {RAY_P, E, E}, {RAY_P, N, N}, {RAY_P, U, U}, {RAY_P, D, D},
+    {RAY_S, E, N}, {RAY_S, E, U},
+    {RAY_S, N, E}, {RAY_S, N, U},
+    {RAY_S, U, E}, {RAY_S, U, N},
+  };
+  const std::size_t nCases  = sizeof(cases)/sizeof(cases[0]);
+  const std::size_t nDeltas = sizeof(deltas)/sizeof(deltas[0]);
+
+  for (std::size_t si = 0; si < sizeof(specs)/sizeof(specs[0]); ++si) {
+    for (std::size_t ki = 0; ki < sizeof(kappas)/sizeof(kappas[0]); ++ki) {
+
+      ScatterParams spBase = LopNorCrust(specs[si].ax, specs[si].ay,
+                                         specs[si].az, kappas[ki]);
+      Scatterer scatBase(spBase, Scatterer::SAMPLER_GENERAL);
+                            // SAMPLER_GENERAL forced: IntegratedRate()
+                            // is a pure function of mParams and 'toas'
+                            // (IntegrateRateAndDipole() -> GSATO()/
+                            // AnisoRatio()), independent of which
+                            // sampler the Scatterer would use to draw
+                            // events, so forcing GENERAL (rather than
+                            // letting AUTO pick AXISYMMETRIC for these
+                            // ax==ay specs) just avoids paying for an
+                            // unused AxiProposal build.
+
+      std::vector<Real> R0(nCases);
+      for (std::size_t ci = 0; ci < nCases; ++ci) {
+        R0[ci] = scatBase.IntegratedRate(cases[ci].in, cases[ci].dir,
+                                         cases[ci].pol, toas);
+      }
+
+      std::vector<std::vector<Real> > dR(nCases, std::vector<Real>(nDeltas));
+      for (std::size_t di = 0; di < nDeltas; ++di) {
+        ScatterParams spNear = LopNorCrust(specs[si].ax,
+                                           specs[si].ax * (1.0 + deltas[di]),
+                                           specs[si].az, kappas[ki]);
+        Scatterer scatNear(spNear, Scatterer::SAMPLER_GENERAL);
+
+        for (std::size_t ci = 0; ci < nCases; ++ci) {
+          const Real Rn = scatNear.IntegratedRate(cases[ci].in, cases[ci].dir,
+                                                  cases[ci].pol, toas);
+          dR[ci][di] = Rn - R0[ci];
+          const Real bound = 5.0 * deltas[di] * R0[ci];
+          CHECK_MSG(std::fabs(dR[ci][di]) <= bound,
+                   "spec " << si << " kappa " << kappas[ki] << " case " << ci
+                   << " delta " << deltas[di] << ": |dR|="
+                   << std::fabs(dR[ci][di]) << " bound=" << bound);
+        }
+      }
+
+      // Where the smallest-delta signal is resolvable above rounding
+      // noise, confirm it scales close to linearly: a 100x increase in
+      // delta (1e-6 -> 1e-4) should give roughly a 100x increase in
+      // |dR|, loosely bounded to [50,200] per the brief.
+      for (std::size_t ci = 0; ci < nCases; ++ci) {
+        if (std::fabs(dR[ci][0]) > 1e-13 * R0[ci]) {
+          const Real ratio = dR[ci][1] / dR[ci][0];
+          CHECK_MSG(ratio >= 50.0 && ratio <= 200.0,
+                   "spec " << si << " kappa " << kappas[ki] << " case " << ci
+                   << ": dR(1e-4)/dR(1e-6)=" << ratio
+                   << " expected in [50,200]");
+        }
+      }
+
+    }
+  }
+
+}
+
+
+TEST(near_axi_sampler_matches) {
+
+  UseTOADegree(5);
+  const Real delta = 1e-5;
+  ScatterParams spAxi = LopNorCrust(2, 2, 0.5);
+  ScatterParams spGen = LopNorCrust(2, 2.0 * (1.0 + delta), 0.5);
+  Scatterer axiScat(spAxi, Scatterer::SAMPLER_AUTO);
+  Scatterer genScat(spGen, Scatterer::SAMPLER_AUTO);
+
+  CHECK_MSG(axiScat.GetReportMFPs().size() == 8,
+           "AUTO should route ax==ay to the 8-state AXI branch, got "
+           << axiScat.GetReportMFPs().size());
+  CHECK_MSG(genScat.GetReportMFPs().size() == 9,
+           "AUTO should route ax!=ay to the 9-state ANI branch, got "
+           << genScat.GetReportMFPs().size());
+
+  const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1), D(Dir(60,30));
+  struct Case { raytype in; R3::XYZ dir; R3::XYZ pol; };
+  const Case cases[] = {
+    {RAY_P, E, E}, {RAY_P, N, N}, {RAY_P, U, U}, {RAY_P, D, D},
+    {RAY_S, E, N}, {RAY_S, E, U},
+    {RAY_S, N, E}, {RAY_S, N, U},
+    {RAY_S, U, E}, {RAY_S, U, N},
+  };
+  const int n = 20000;
+
+  for (std::size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
+    const S2::ThetaPhi dirTP(cases[i].dir.Theta(), cases[i].dir.Phi());
+    const Real meanA = MeanDistanceToRealEvent(axiScat, cases[i].in, dirTP,
+                                               cases[i].pol, n);
+    const Real meanG = MeanDistanceToRealEvent(genScat, cases[i].in, dirTP,
+                                               cases[i].pol, n);
+    const Real sigA = meanA / std::sqrt((Real) n);
+    const Real sigG = meanG / std::sqrt((Real) n);
+    const Real tol = 4.0 * std::sqrt(sigA*sigA + sigG*sigG);
+    CHECK_MSG(std::fabs(meanA - meanG) < tol,
+             "case " << i << ": meanA=" << meanA << " meanG=" << meanG
+             << " tol=" << tol);
+  }
+
+  // (Conv, degree-2 cell) two-sample chi-square -- the same unequal-N
+  // statistic axi_matches_general() uses above -- for P at Dir(60,30)
+  // and S along E with polarization U:
+  int divisor = 1;
+  for (int i = 0; i < 5-2; ++i) divisor *= 4;  // 4^(5-2)=64
+
+  const S2::ThetaPhi dirP(60.0*Geometry::DtoR, 30.0*Geometry::DtoR);
+  const S2::ThetaPhi dirS(Geometry::Pi90, 0.0);  // E
+  const R3::XYZ polU(0, 0, 1);                   // U
+
+  struct DistCase { raytype in; S2::ThetaPhi dir; R3::XYZ pol; };
+  const DistCase distCases[] = {
+    {RAY_P, dirP, dirP.XYZ()},
+    {RAY_S, dirS, polU},
+  };
+  const int targetReal = 200000;
+
+  std::map<std::pair<int,int>, int> countsA, countsG;
+
+  for (std::size_t i = 0; i < sizeof(distCases)/sizeof(distCases[0]); ++i) {
+    const Real rot = Scatterer::RotationForS1(distCases[i].dir,
+                                              distCases[i].pol);
+    const R3::XYZ origin(0,0,0);
+    int collectedA = 0, collectedG = 0;
+    while (collectedA < targetReal || collectedG < targetReal) {
+      if (collectedA < targetReal) {
+        Scatterer::AnisoAttempt a = axiScat.AttemptAnisotropicScatter(
+          distCases[i].in, origin, distCases[i].dir, rot);
+        if (a.IsReal) {
+          countsA[std::make_pair((int)i*8+a.Conv, (int)(a.Toa/divisor))]++;
+          ++collectedA;
+        }
+      }
+      if (collectedG < targetReal) {
+        Scatterer::AnisoAttempt g = genScat.AttemptAnisotropicScatter(
+          distCases[i].in, origin, distCases[i].dir, rot);
+        if (g.IsReal) {
+          countsG[std::make_pair((int)i*8+g.Conv, (int)(g.Toa/divisor))]++;
+          ++collectedG;
+        }
+      }
+    }
+  }
+
+  Real Na = 0, Ng = 0;
+  for (std::map<std::pair<int,int>,int>::const_iterator it = countsA.begin();
+       it != countsA.end(); ++it) {Na += it->second;}
+  for (std::map<std::pair<int,int>,int>::const_iterator it = countsG.begin();
+       it != countsG.end(); ++it) {Ng += it->second;}
+
+  Real chi2 = 0; int dof = 0;
+  std::map<std::pair<int,int>,int> keys = countsA;
+  for (std::map<std::pair<int,int>,int>::const_iterator it = countsG.begin();
+       it != countsG.end(); ++it) {keys[it->first] = 0;}
+  for (std::map<std::pair<int,int>,int>::const_iterator it = keys.begin();
+       it != keys.end(); ++it) {
+    const Real a = countsA.count(it->first) ? countsA[it->first] : 0;
+    const Real g = countsG.count(it->first) ? countsG[it->first] : 0;
+    if (a+g < 20.0) continue;
+    const Real num = a*Ng - g*Na;
+    chi2 += num*num/(Na*Ng*(a+g));
+    ++dof;
+  }
+  CHECK_MSG(dof > 0, "no bins had combined count >= 20");
+  const Real chi2_per_dof = chi2/dof;
+  CHECK_MSG(chi2_per_dof < 1.5,
+           "chi2/dof too large: " << chi2_per_dof << " (dof=" << dof << ")");
+
+}
+
+
+TEST(near_axi_report_matches) {
+
+  UseTOADegree(5);  // GetReportMFPs() always integrates over its own
+                    // fixed degree-6 ReportDirs() regardless (see
+                    // report_directional_mfps, above).
+  const Real delta = 1e-5;
+  ScatterParams spAxi  = LopNorCrust(2, 2, 0.5);
+  ScatterParams spNear = LopNorCrust(2, 2.0 * (1.0 + delta), 0.5);
+  Scatterer axiScat(spAxi,  Scatterer::SAMPLER_AUTO);
+  Scatterer genScat(spNear, Scatterer::SAMPLER_AUTO);
+
+  const std::vector<Real> & axi = axiScat.GetReportMFPs();
+  const std::vector<Real> & ani = genScat.GetReportMFPs();
+  CHECK_MSG(axi.size() == 8, "expected 8 AXI directional MFPs, got "
+           << axi.size());
+  CHECK_MSG(ani.size() == 9, "expected 9 ANI directional MFPs, got "
+           << ani.size());
+
+  // AXI order: P0 P45 P90 S0 S45SV S45SH S90SV S90SH
+  // ANI order: P_E P_N P_U S_E/N S_E/U S_N/E S_N/U S_U/E S_U/N
+  //
+  // The axisymmetric spec's symmetry axis is z (up), so AXI's
+  // "incidence angle from the axis" states map onto ANI's "incidence
+  // along a named fabric axis" states as follows: propagation along the
+  // axis (AXI theta=0) is ANI's U axis; propagation perpendicular to the
+  // axis (AXI theta=90) is ANI's E and N axes (indistinguishable by
+  // symmetry when ax==ay); and for S90 (propagation perpendicular to the
+  // axis), "SV" (polarization containing the axis) and "SH"
+  // (polarization perpendicular to the axis) map onto whichever of
+  // ANI's two propagation/polarization axis pairs puts the polarization
+  // along/across U respectively.
+  const Real P0    = axi[0], P90   = axi[2], S0 = axi[3],
+             S90SV = axi[6], S90SH = axi[7];
+  const Real P_E   = ani[0], P_N   = ani[1], P_U   = ani[2],
+             S_E_N = ani[3], S_E_U = ani[4], S_N_E = ani[5],
+             S_N_U = ani[6], S_U_E = ani[7], S_U_N = ani[8];
+
+  CHECK_MSG(NearRel(P0, P_U, 1e-4), "P0=" << P0 << " P_U=" << P_U);
+  CHECK_MSG(NearRel(P90, P_E, 1e-4), "P90=" << P90 << " P_E=" << P_E);
+  CHECK_MSG(NearRel(P90, P_N, 1e-4), "P90=" << P90 << " P_N=" << P_N);
+  CHECK_MSG(NearRel(S0, S_U_E, 1e-4), "S0=" << S0 << " S_U_E=" << S_U_E);
+  CHECK_MSG(NearRel(S0, S_U_N, 1e-4), "S0=" << S0 << " S_U_N=" << S_U_N);
+  CHECK_MSG(NearRel(S90SV, S_E_U, 1e-4),
+           "S90SV=" << S90SV << " S_E_U=" << S_E_U);
+  CHECK_MSG(NearRel(S90SV, S_N_U, 1e-4),
+           "S90SV=" << S90SV << " S_N_U=" << S_N_U);
+  CHECK_MSG(NearRel(S90SH, S_E_N, 1e-4),
+           "S90SH=" << S90SH << " S_E_N=" << S_E_N);
+  CHECK_MSG(NearRel(S90SH, S_N_E, 1e-4),
+           "S90SH=" << S90SH << " S_N_E=" << S_N_E);
+
+}
+
+
+// ::: MeasureCollisionCost(s, in, dir, pol, n, variance, meanDraws) :::
+//
+//   Chases n real (accepted) events exactly as MeanDistanceToRealEvent()
+//   does -- one GetRandomPathLength() call per tentative collision,
+//   immediately followed by AttemptAnisotropicScatter() -- but records
+//   the per-event tentative-collision count instead of distance,
+//   returning its mean and, via 'variance', the sample variance needed
+//   to compare two samplers' means against their combined standard
+//   error. 'meanDraws' receives the mean of AnisoAttempt.Draws summed
+//   over the same tentative collisions.
+//
+//   A "tentative collision" is one GetRandomPathLength() draw (one
+//   majorant-distance proposal; see AttemptAnisotropicScatter()'s
+//   header comment -- without --overridemfp, each proposal/accept trial
+//   corresponds to exactly one such draw). A "draw" is
+//   AnisoAttempt.Draws: for the general sampler this is always 1 (every
+//   tentative collision reaches the (conversion, take-off-angle) table
+//   draw), but for the axisymmetric sampler it is 0 on a tentative
+//   collision thinned by the cheap top-level bin-rate test -- see
+//   AttemptAxisymmetricScatter() -- and 1 otherwise. So "draws" can run
+//   well below "tentative collisions" for the axisymmetric sampler: that
+//   gap is the performance effect test_near_axi_cost's cost table
+//   documents, while the two stay equal for the general sampler.
+//
+static Real MeasureCollisionCost(Scatterer & s, raytype in,
+                                 const S2::ThetaPhi & dir,
+                                 const R3::XYZ & pol, int n,
+                                 Real & variance, Real & meanDraws) {
+  const Real rot = Scatterer::RotationForS1(dir, pol);
+  const R3::XYZ origin(0, 0, 0);
+  std::vector<Real> tentative(n);
+  long long totalDraws = 0;
+
+  for (int i = 0; i < n; ++i) {
+    int tcount = 0;
+    Scatterer::AnisoAttempt att;
+    do {
+      s.GetRandomPathLength(in);
+      att = s.AttemptAnisotropicScatter(in, origin, dir, rot);
+      ++tcount;
+      totalDraws += att.Draws;
+    } while (!att.IsReal);
+    tentative[i] = (Real) tcount;
+  }
+
+  Real sum = 0;
+  for (int i = 0; i < n; ++i) sum += tentative[i];
+  const Real mean = sum / n;
+
+  Real sqsum = 0;
+  for (int i = 0; i < n; ++i) {
+    const Real d = tentative[i] - mean;
+    sqsum += d * d;
+  }
+  variance = sqsum / (n - 1);
+  meanDraws = (Real) totalDraws / n;
+  return mean;
+}
+
+
+TEST(near_axi_cost) {
+
+  UseTOADegree(7);
+  Scatterer::SetBuildThreads(8);  // Degree 7 builds several general-
+                                  // sampler Scatterers below; table
+                                  // construction is bit-identical for
+                                  // any thread count (design decision
+                                  // 2), so this only shortens the test.
+
+  const Real delta = 1e-5;
+
+  struct SpecCase { Real ax, ay, az; };
+  const SpecCase specs[] = {
+    {1, 1, 0.5}, {2, 2, 0.5}, {5, 5, 0.5},
+  };
+
+  struct StateCase { raytype in; Real theta; Real chi; };
+  // P at theta 0,30,60,89; S at theta 30,89 with chi 0,45,90 -- the same
+  // incidence grid as test_axi_draws_per_event, above.
+  const StateCase states[] = {
+    {RAY_P, 0, 0}, {RAY_P, 30, 0}, {RAY_P, 60, 0}, {RAY_P, 89, 0},
+    {RAY_S, 30, 0}, {RAY_S, 30, 45}, {RAY_S, 30, 90},
+    {RAY_S, 89, 0}, {RAY_S, 89, 45}, {RAY_S, 89, 90},
+  };
+
+  const int n = 5000;
+
+  std::ofstream out("build/aniso_near_axi_cost.txt");
+  out << "# spec state raytype theta chi sampler mean_tentative mean_draws\n";
+
+  for (std::size_t si = 0; si < sizeof(specs)/sizeof(specs[0]); ++si) {
+
+    ScatterParams spAxi  = LopNorCrust(specs[si].ax, specs[si].ay,
+                                       specs[si].az);
+    ScatterParams spNear = LopNorCrust(specs[si].ax,
+                                       specs[si].ay * (1.0 + delta),
+                                       specs[si].az);
+    Scatterer axiScat(spAxi,  Scatterer::SAMPLER_AXISYMMETRIC);
+    Scatterer genScat(spNear, Scatterer::SAMPLER_GENERAL);
+
+    // Deterministic majorant-MFP check (no RNG involved): the
+    // axisymmetric sampler's bin-tailored majorant must not be looser
+    // (smaller MFP) than the near-axisymmetric general sampler's, to
+    // within the near medium's own 1e-5 asymmetry.
+    const Real axiMfpP = axiScat.GetMajorantMeanFreePath(RAY_P);
+    const Real genMfpP = genScat.GetMajorantMeanFreePath(RAY_P);
+    CHECK_MSG(axiMfpP >= genMfpP * (1.0 - 1e-5),
+             "spec " << si << ": axi P majorant MFP " << axiMfpP
+             << " < near-general " << genMfpP << " * (1-1e-5)");
+    const Real axiMfpS = axiScat.GetMajorantMeanFreePath(RAY_S);
+    const Real genMfpS = genScat.GetMajorantMeanFreePath(RAY_S);
+    CHECK_MSG(axiMfpS >= genMfpS * (1.0 - 1e-5),
+             "spec " << si << ": axi S majorant MFP " << axiMfpS
+             << " < near-general " << genMfpS << " * (1-1e-5)");
+
+    for (std::size_t ti = 0; ti < sizeof(states)/sizeof(states[0]); ++ti) {
+
+      const S2::ThetaPhi dir(states[ti].theta * Geometry::DtoR, 0.0);
+      R3::XYZ pol;
+      if (states[ti].in == RAY_P) {
+        pol = dir.XYZ();
+      } else {
+        const R3::OrthoAxes rotAA(dir.Theta(), dir.Phi(),
+                                  states[ti].chi * Geometry::DtoR);
+        pol = rotAA.S1();
+      }
+
+      Real varA = 0, drawsA = 0, varG = 0, drawsG = 0;
+      const Real meanA = MeasureCollisionCost(axiScat, states[ti].in, dir,
+                                              pol, n, varA, drawsA);
+      const Real meanG = MeasureCollisionCost(genScat, states[ti].in, dir,
+                                              pol, n, varG, drawsG);
+
+      const char * rtName = (states[ti].in == RAY_P) ? "P" : "S";
+      out << "(" << specs[si].ax << "," << specs[si].ay << "," << specs[si].az
+          << ") " << ti << " " << rtName << " " << states[ti].theta << " "
+          << states[ti].chi << " AXI " << meanA << " " << drawsA << "\n";
+      out << "(" << specs[si].ax << "," << specs[si].ay << "," << specs[si].az
+          << ") " << ti << " " << rtName << " " << states[ti].theta << " "
+          << states[ti].chi << " GENERAL " << meanG << " " << drawsG << "\n";
+
+      const Real sigmaDiff = std::sqrt(varA/n + varG/n);
+      CHECK_MSG(meanA <= meanG + 4.0*sigmaDiff,
+               "spec " << si << " state " << ti << " (" << rtName
+               << " theta=" << states[ti].theta << " chi=" << states[ti].chi
+               << "): axi mean tentative " << meanA << " exceeds general "
+               << meanG << " + 4*sigma=" << (4.0*sigmaDiff));
+    }
+  }
+
+  out.close();
+  Scatterer::SetBuildThreads(1);  // restore
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
 // ****                                                              ****
 //
