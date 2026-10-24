@@ -324,6 +324,32 @@ Real ScatterParams::AnisoAcceptance(const R3::XYZ & m) const {
 
 
 //////
+// METHOD:  ScatterParams :: AxiRatio()
+//
+// PURPOSE: AnisoRatio(m), for an axisymmetric spec (ax==ay), computed
+// directly from m2 = |m|^2 and mu2 = (m.Dot(up))^2 -- the local-vertical
+// 'up' component of 'm', squared -- with no fabric-frame transform. Since
+// ax==ay, the denominator's horizontal contribution ax^2*mx^2+ay^2*my^2
+// depends only on the horizontal magnitude mx^2+my^2 = m2-mu2 (clamped at
+// 0 to absorb rounding), whichever way that horizontal part is split
+// between the fabric x and y axes; the vertical contribution is
+// az^2*mu2. This is algebraically identical to AnisoRatio(m) for any
+// fabric-frame 'm' with the same |m| and |m.up|, including one actually
+// expressed via Scatterer::ToFabric(). See docs/superpowers/specs/
+// 2026-10-17-axisymmetric-sampler-performance-design.md, decision 4.
+//
+// Not meaningful when ax!=ay (the horizontal split would then matter).
+//
+Real ScatterParams::AxiRatio(Real m2, Real mu2) const {
+  const Real mh2 = std::max(m2 - mu2, (Real)0.0);
+  const Real numer = 1. + a*a*m2;
+  const Real denom = 1. + ax*ax*mh2 + az*az*mu2;
+
+  return AnisoMajorantFactor() * pow(numer/denom, kappa+1.5);
+}
+
+
+//////
 // METHOD:   ScatterParams :: AckSpit()
 //
 //   Raise a complaint if class used improperly.

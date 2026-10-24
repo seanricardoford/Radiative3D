@@ -291,6 +291,23 @@ public:
                                         // probability for a proposal drawn
                                         // from the isotropic (a=min) tables.
 
+  Real AxiRatio (Real m2, Real mu2) const;
+                                        // AnisoRatio(m), for an axisymmetric
+                                        // spec (ax==ay), from m2 == |m|^2 and
+                                        // mu2 == (m.Dot(up))^2 alone -- no
+                                        // fabric-frame transform needed. 'up'
+                                        // is the local vertical; any
+                                        // horizontal split of m is equivalent
+                                        // here since ax==ay. Equal to
+                                        // AnisoRatio(m) whenever 'm' is
+                                        // expressed in the fabric frame and
+                                        // m2==m.MagSquared(),
+                                        // mu2==sq(m.Dot(up)) -- see
+                                        // docs/superpowers/specs/
+                                        // 2026-10-17-axisymmetric-sampler-
+                                        // performance-design.md, decision 4.
+                                        // Not valid when ax!=ay.
+
 
 private:
 

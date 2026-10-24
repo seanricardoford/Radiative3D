@@ -2680,6 +2680,303 @@ TEST(iso_tables_thread_invariant) {
 
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
+// ****  TASK 5 (PERFORMANCE PLAN) TESTS: Faster axisymmetric        ****
+// ****                 sampling path                                ****
+// ****                                                              ****
+//
+// See docs/superpowers/specs/2026-10-17-axisymmetric-sampler-
+// performance-design.md, decision 4, and .superpowers/sdd/
+// 2026-10-17-axisymmetric-sampler-performance/task-5-brief.md.
+//
+
+// ::: ReferenceLocate3db253a(intype, u) :::
+//
+//   Ruling R-P1's frozen oracle for AxiProposal::Locate(): a free-
+//   standing, literal transcription of AxiProposal::Fold()'s body
+//   exactly as it existed before this task -- confirmed identical to
+//   3db253a's Fold() (the commit this branch, and the performance plan,
+//   starts from) via `git show 3db253a:aniso_axi.cpp` before this task
+//   began, the same freezing rationale as ReferenceBound3db253a above.
+//   Fold() was private and returned (private) FoldResult; this
+//   free-standing copy takes 'intype' and 'u' as plain parameters and
+//   returns the now-public AxiProposal::BinRef instead, so it can be
+//   compared directly against Locate()'s return value -- nothing else
+//   is changed. Do not "fix" or simplify this function if it starts
+//   looking stale -- it must stay a literal transcription of the frozen
+//   commit, bugs and all.
+//
+static AxiProposal::BinRef ReferenceLocate3db253a(raytype intype, R3::XYZ u) {
+
+  if (u.z() < 0.0) {u = u.Negative();}
+
+  const bool mx = (u.x() > 0.0);
+  const Real ux = mx ? -u.x() : u.x();
+
+  bool my = false;
+  Real uy = 0.0;
+  if (intype == RAY_S) {
+    my = (u.y() < 0.0);
+    uy = my ? -u.y() : u.y();
+  }
+
+  Real uz = u.z();
+  if (uz > 1.0)  uz = 1.0;
+  if (uz < -1.0) uz = -1.0;
+  const Real theta = acos(uz);
+  const Real sinTheta = sin(theta);
+
+  Real chi = 0.0;
+  if (intype == RAY_S && sinTheta > 1e-12) {
+    chi = atan2(uy, -ux);
+  }
+
+  int thetaBin = (int) floor(theta*Geometry::RtoD/2.0);
+  if (thetaBin < 0) thetaBin = 0;
+  if (thetaBin > AxiProposal::kThetaBins-1) thetaBin = AxiProposal::kThetaBins-1;
+
+  int chiBin = 0;
+  if (intype == RAY_S) {
+    chiBin = (int) floor(chi*Geometry::RtoD/10.0);
+    if (chiBin < 0) chiBin = 0;
+    if (chiBin > AxiProposal::kChiBins-1) chiBin = AxiProposal::kChiBins-1;
+  }
+
+  AxiProposal::BinRef r;
+  r.ThetaBin = thetaBin;
+  r.ChiBin   = chiBin;
+  r.Mx       = mx;
+  r.My       = my;
+  return r;
+
+}
+
+
+TEST(axi_locate_matches_reference) {
+
+  // A minimal AxiProposal just to call Locate() on -- its geometry and
+  // tables don't affect Locate(), which depends only on kThetaBins/
+  // kChiBins (fixed constants) and 'u_rel'/'intype'.
+  const S2::TesselSphere & toas = UseTOADegree(2);
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, toas, pdists);
+  AxiProposal axi(sp, toas, pdists);
+
+  std::vector<R3::XYZ> dirs;
+
+  // 200,000 Fibonacci-sphere directions.
+  const int N = 200000;
+  const Real goldenAngle = Geometry::Pi * (3.0 - sqrt(5.0));
+  for (int i = 0; i < N; ++i) {
+    const Real zz  = 1.0 - 2.0*((Real) i + 0.5)/(Real) N;
+    const Real rr  = sqrt(std::max((Real)0.0, 1.0 - zz*zz));
+    const Real phi = goldenAngle * (Real) i;
+    dirs.push_back(R3::XYZ(rr*cos(phi), rr*sin(phi), zz));
+  }
+
+  // Every theta edge (2b deg), at chi==45deg, +-1e-9 rad:
+  for (int b = 0; b <= AxiProposal::kThetaBins; ++b) {
+    const Real chi0 = 45.0*Geometry::DtoR;
+    for (int s = -1; s <= 1; s += 2) {
+      const Real theta = 2.0*b*Geometry::DtoR + s*1e-9;
+      dirs.push_back(R3::XYZ(-sin(theta)*cos(chi0),
+                             sin(theta)*sin(chi0),
+                             cos(theta)));
+    }
+  }
+
+  // Every chi edge (10c deg), at theta==45deg, +-1e-9 rad:
+  for (int c = 0; c <= AxiProposal::kChiBins; ++c) {
+    const Real theta0 = 45.0*Geometry::DtoR;
+    for (int s = -1; s <= 1; s += 2) {
+      const Real chi = 10.0*c*Geometry::DtoR + s*1e-9;
+      dirs.push_back(R3::XYZ(-sin(theta0)*cos(chi),
+                             sin(theta0)*sin(chi),
+                             cos(theta0)));
+    }
+  }
+
+  // Axis-aligned directions.
+  dirs.push_back(R3::XYZ(0,0,1));  dirs.push_back(R3::XYZ(0,0,-1));
+  dirs.push_back(R3::XYZ(1,0,0));  dirs.push_back(R3::XYZ(-1,0,0));
+  dirs.push_back(R3::XYZ(0,1,0));  dirs.push_back(R3::XYZ(0,-1,0));
+
+  const raytype intypes[2] = {RAY_P, RAY_S};
+  for (int ii = 0; ii < 2; ++ii) {
+    const raytype intype = intypes[ii];
+    for (std::size_t i = 0; i < dirs.size(); ++i) {
+      const R3::XYZ & u = dirs[i];
+      const AxiProposal::BinRef got  = axi.Locate(intype, u);
+      const AxiProposal::BinRef want = ReferenceLocate3db253a(intype, u);
+
+      CHECK_MSG(got.Mx == want.Mx,
+               "Mx mismatch: intype=" << ii << " i=" << i);
+      CHECK_MSG(got.My == want.My,
+               "My mismatch: intype=" << ii << " i=" << i);
+
+      if (got.ThetaBin != want.ThetaBin) {
+        // Reconstruct theta via acos (fine in a test) to confirm we're
+        // within the 1e-12 rad of a bin edge the brief allows either
+        // neighbor at.
+        R3::XYZ v = u; if (v.z() < 0.0) v = v.Negative();
+        Real vz = v.z(); if (vz > 1.0) vz = 1.0; if (vz < -1.0) vz = -1.0;
+        const Real theta = acos(vz);
+        const Real edgeStep = 2.0*Geometry::DtoR;
+        const Real nearestEdge = edgeStep * floor(theta/edgeStep + 0.5);
+        const int dTheta = got.ThetaBin - want.ThetaBin;
+        CHECK_MSG((dTheta == 1 || dTheta == -1) &&
+                 std::fabs(theta-nearestEdge) <= 1e-12,
+                 "ThetaBin mismatch far from an edge: intype=" << ii
+                 << " i=" << i << " got=" << got.ThetaBin
+                 << " want=" << want.ThetaBin << " theta=" << theta);
+      }
+
+      if (intype == RAY_S && got.ChiBin != want.ChiBin) {
+        R3::XYZ v = u; if (v.z() < 0.0) v = v.Negative();
+        const bool vmx = (v.x() > 0.0);
+        const Real vux = vmx ? -v.x() : v.x();
+        const bool vmy = (v.y() < 0.0);
+        const Real vuy = vmy ? -v.y() : v.y();
+        Real vz = v.z(); if (vz > 1.0) vz = 1.0; if (vz < -1.0) vz = -1.0;
+        const Real theta = acos(vz);
+        const Real sinTheta = sin(theta);
+
+        if (sinTheta <= 1e-12) {
+          // Within about 1.5e-8 rad of a pole, cos(theta) itself rounds
+          // to exactly +-1 in double precision (1-cos(theta) underflows
+          // relative to 1's ULP), so ReferenceLocate3db253a's acos/sin
+          // round-trip always recovers sinTheta==0 and so always
+          // defaults to chi==0 (its own 'sinTheta > 1e-12' guard) --
+          // regardless of the true azimuth. That default is an artifact
+          // of the lossy trig round-trip, not a meaningful fold: this
+          // direction is at/within the chi guard's own degeneracy
+          // radius of a pole either way (both agree ThetaBin==0, above).
+          // Locate() instead reads the azimuth from u.x()/u.y() directly
+          // (no round-trip), so it can resolve a real ChiBin here
+          // without contradicting the reference's own notion of when
+          // chi is undefined. Any got.ChiBin is accepted in this case.
+        } else {
+          const Real chi = atan2(vuy, -vux);
+          const Real edgeStep = 10.0*Geometry::DtoR;
+          const Real nearestEdge = edgeStep * floor(chi/edgeStep + 0.5);
+          const int dChi = got.ChiBin - want.ChiBin;
+          CHECK_MSG((dChi == 1 || dChi == -1) &&
+                   std::fabs(chi-nearestEdge) <= 1e-12,
+                   "ChiBin mismatch far from an edge: intype=" << ii
+                   << " i=" << i << " got=" << got.ChiBin
+                   << " want=" << want.ChiBin << " chi=" << chi);
+        }
+      }
+    }
+  }
+
+}
+
+
+TEST(axi_ratio_matches_fabric) {
+
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);  // axisymmetric
+
+  struct MapCase {bool curved; R3::XYZ loc;};
+  const MapCase cases[2] = {
+    {false, R3::XYZ(0,0,0)},
+    {true,  R3::XYZ(950.0,0.0,0.0)},
+  };
+
+  for (int ci = 0; ci < 2; ++ci) {
+    if (cases[ci].curved) {ECS.SetMapping(EarthCoords::RAE_CURVED);}
+    const R3::XYZ loc = cases[ci].loc;
+    const R3::XYZ up = ECS.GetUp(loc);
+
+    std::mt19937 rng(4040u + (unsigned) ci);
+    std::uniform_real_distribution<Real> uTheta(0.0, Geometry::Pi);
+    std::uniform_real_distribution<Real> uPhi(0.0, 2.0*Geometry::Pi);
+    std::uniform_real_distribution<Real> uPol(0.0, 2.0*Geometry::Pi);
+    std::uniform_int_distribution<int> uConv(0, 3);
+
+    const Real kP = sp.GetKP(), kS = sp.GetKS();
+
+    for (int i = 0; i < 1000; ++i) {
+      const S2::ThetaPhi dir(uTheta(rng), uPhi(rng));
+      const Real pol = uPol(rng);
+      const S2::ThetaPhi t(uTheta(rng), uPhi(rng));
+      const int conv = uConv(rng);
+
+      const Real k_in  = (conv==0||conv==1) ? kP : kS;
+      const Real k_out = (conv==0||conv==2) ? kP : kS;
+
+      const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol);
+      const R3::XYZ m = AA.Express(t.XYZ()).ScaledBy(k_out)
+                      + dir.XYZ().ScaledBy(-k_in);
+
+      const Real mu = m.Dot(up);
+      const Real lhs = sp.AxiRatio(m.MagSquared(), mu*mu);
+      const Real rhs = sp.AnisoRatio(Scatterer::ToFabric(loc, m));
+
+      CHECK_MSG(NearRel(lhs, rhs, 1e-12),
+               "mapping=" << ci << " i=" << i << " conv=" << conv
+               << ": lhs=" << lhs << " rhs=" << rhs);
+    }
+  }
+
+  ECS.SetMapping(EarthCoords::ENU_ORTHO);  // restore for later tests
+
+}
+
+
+TEST(axi_p_urel_matches_canonical) {
+
+  struct MapCase {bool curved; R3::XYZ loc;};
+  const MapCase cases[2] = {
+    {false, R3::XYZ(0,0,0)},
+    {true,  R3::XYZ(950.0,0.0,0.0)},
+  };
+
+  for (int ci = 0; ci < 2; ++ci) {
+    if (cases[ci].curved) {ECS.SetMapping(EarthCoords::RAE_CURVED);}
+    const R3::XYZ loc = cases[ci].loc;
+    const R3::XYZ up = ECS.GetUp(loc);
+
+    std::vector<S2::ThetaPhi> dirs;
+    std::mt19937 rng(5050u + (unsigned) ci);
+    std::uniform_real_distribution<Real> uz(-1.0, 1.0);
+    std::uniform_real_distribution<Real> uphi(0.0, 2.0*Geometry::Pi);
+    for (int i = 0; i < 1000; ++i) {
+      const Real z = uz(rng);
+      dirs.push_back(S2::ThetaPhi(acos(z), uphi(rng)));
+    }
+    dirs.push_back(S2::ThetaPhi(up.Theta(), up.Phi()));           // dir == +up
+    const R3::XYZ negUp = up.ScaledBy(-1.0);
+    dirs.push_back(S2::ThetaPhi(negUp.Theta(), negUp.Phi()));     // dir == -up
+
+    for (std::size_t i = 0; i < dirs.size(); ++i) {
+      const S2::ThetaPhi & dir = dirs[i];
+      Real cz = up.Dot(dir.XYZ());
+      if (cz > 1.0)  cz = 1.0;
+      if (cz < -1.0) cz = -1.0;
+      const R3::XYZ expected(-sqrt(std::max((Real)0.0, 1.0-cz*cz)), 0.0, cz);
+
+      const Real rot = Scatterer::CanonicalPPolarization(dir, up);
+      const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), rot);
+      const R3::XYZ actual(up.Dot(AA.S1()), up.Dot(AA.S2()), up.Dot(AA.S3()));
+
+      CHECK_MSG(std::fabs(actual.x()-expected.x()) < 1e-12 &&
+               std::fabs(actual.y()-expected.y()) < 1e-12 &&
+               std::fabs(actual.z()-expected.z()) < 1e-12,
+               "mapping=" << ci << " i=" << i << ": expected=("
+               << expected.x() << "," << expected.y() << "," << expected.z()
+               << ") actual=(" << actual.x() << "," << actual.y() << ","
+               << actual.z() << ")");
+    }
+  }
+
+  ECS.SetMapping(EarthCoords::ENU_ORTHO);  // restore for later tests
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
 // ****                                                              ****
 //

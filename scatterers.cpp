@@ -1,5 +1,6 @@
 // scatterers.cpp
 //
+#include <algorithm>    /* std::max */
 #include <cmath>        /* log(), sqrt() */
 #include <iomanip>      /* setw() */
 #include <cstdlib>
@@ -748,24 +749,50 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
                                       const S2::ThetaPhi & dir, Real pol) {
 
   const R3::XYZ up = ECS.GetUp(loc);
-  const Real pol_used = (intype == RAY_P) ?
-                        CanonicalPPolarization(dir, up) : pol;
-
-  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol_used);  // Same
-                              // construction as Phonon::Transform().
   const R3::XYZ dirXYZ = dir.XYZ();
-  const R3::XYZ u_rel(up.Dot(AA.S1()), up.Dot(AA.S2()), up.Dot(AA.S3()));
+
+  // u_rel: the local vertical 'up', expressed in the incoming ray's
+  // (S1,S2,S3) frame. For P there is no real polarization to build that
+  // frame from; instead of building it via CanonicalPPolarization()
+  // (which costs an atan2 through RotationForS1()) just to read off
+  // up's components, use the closed form that frame is guaranteed to
+  // produce -- see test_axi_p_urel_matches_canonical and
+  // docs/superpowers/specs/2026-10-17-axisymmetric-sampler-performance-
+  // design.md, decision 4. For S, 'pol' is a real polarization-rotation
+  // angle, so the frame is built exactly as before.
+  R3::XYZ u_rel;
+  if (intype == RAY_P) {
+    Real cz = up.Dot(dirXYZ);
+    if (cz > 1.0)  cz = 1.0;
+    if (cz < -1.0) cz = -1.0;
+    const Real sz = sqrt(std::max((Real)0.0, 1.0 - cz*cz));
+    u_rel = R3::XYZ(-sz, 0.0, cz);
+  } else {
+    const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol);  // Same
+                                // construction as Phonon::Transform().
+    u_rel = R3::XYZ(up.Dot(AA.S1()), up.Dot(AA.S2()), up.Dot(AA.S3()));
+  }
 
   const Real k_in = (intype == RAY_P) ? mParams.GetKP() : mParams.GetKS();
 
   AnisoAttempt result;
-  result.InPol = pol_used;
+  result.InPol = pol;        // Non-real attempts carry the incoming pol
+                              // as-is: Propagate() reads InPol only when
+                              // IsReal (phonons.cpp). The canonical P
+                              // polarization is computed below only for
+                              // an accepted event.
   result.Draws = 0;
+
+  const AxiProposal::BinRef bin = mpAxi->Locate(intype, u_rel);  // Once
+                              // per tentative collision -- trig-free
+                              // (design decision 4), unlike the two
+                              // Fold() calls (one per BinRate()/
+                              // DrawProposal()) this replaces.
 
   if (!cm_MFPOverride_b) {
     // 1. Thinning test, costing no table draw (step 4 of the brief):
     const Real majorant = mpAxi->MajorantRate(intype);
-    const Real binrate  = mpAxi->BinRate(intype, u_rel);
+    const Real binrate  = mpAxi->BinRate(intype, bin);
     if (RandomUniform() * majorant >= binrate) {
       result.IsReal = false;
       return result;             // Null collision: Draws stays 0.
@@ -781,15 +808,23 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
 
     // 2. Draw a (conversion, take-off-angle) proposal from the
     //    incidence-tailored tables:
-    const AxiProposal::Draw d = mpAxi->DrawProposal(intype, u_rel);
+    const AxiProposal::Draw d = mpAxi->DrawProposal(intype, bin);
     conv = (out_types_e) d.Conv;
     toa_index = d.Toa;
 
-    // 3. Compute the exchange wavevector m = k_out*e_out - k_in*dir:
+    // 3. |m|^2 and (m.up)^2, straight in the ray frame -- no AA.Express()
+    //    or ToFabric() transform needed. With t = the take-off direction
+    //    (expressed in the (S1,S2,S3) frame, whose third axis is the
+    //    incoming direction) and e_out = AA.Express(t): e_out.Dot(up) ==
+    //    t.Dot(u_rel) and e_out.Dot(dirXYZ) == t.z() (AA.S3()==dirXYZ),
+    //    since AA is an orthonormal change of basis; |e_out|==|dirXYZ|==1
+    //    gives m2 directly. See docs/superpowers/specs/2026-10-17-
+    //    axisymmetric-sampler-performance-design.md, decision 4.
     const Real k_out = (kOutTypes[conv] == RAY_P) ?
                         mParams.GetKP() : mParams.GetKS();
-    const R3::XYZ e_out = AA.Express((*pTOA)[toa_index].XYZ());
-    const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
+    const R3::XYZ t = (*pTOA)[toa_index].XYZ();
+    const Real mu = k_out*t.Dot(u_rel) - k_in*u_rel.z();
+    const Real m2 = k_out*k_out + k_in*k_in - 2.0*k_out*k_in*t.z();
 
     // 4. Exact accept/reject using the stored proposal weight and a
     //    freshly-computed cell sum (never the stored one -- see
@@ -813,7 +848,7 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
       throw std::logic_error(oss.str());
     }
 
-    const Real ratio = mParams.AnisoRatio(ToFabric(loc, m));
+    const Real ratio = mParams.AxiRatio(m2, mu*mu);
     const Real p = ratio * d.CellSum / d.Weight;
 
     if (p > 1.0 + AxiProposal::kBoundMargin) {
@@ -845,6 +880,8 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
   result.IsReal = accepted;
 
   if (accepted) {
+    result.InPol = (intype == RAY_P) ?
+                   CanonicalPPolarization(dir, up) : pol;
     result.Rel = BuildRelativePhonon(conv, toa_index, intype);
   }
 

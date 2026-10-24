@@ -118,6 +118,33 @@ public:
   // ::: Query Methods  (AxiProposal Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::::::::
 
+  struct BinRef {
+    int  ThetaBin;
+    int  ChiBin;     // Always 0 for intype==RAY_P (canonical frame).
+    bool Mx;
+    bool My;         // Always false for intype==RAY_P.
+  };                  // The incidence bin a local-vertical direction
+                      // folds into, plus the two mirror flags needed to
+                      // map a table cell back to the actual cell.
+                      // Replaces the former private FoldResult: public
+                      // so a caller that needs several queries for the
+                      // same incidence (BinRate() then DrawProposal(),
+                      // e.g. Scatterer::AttemptAxisymmetricScatter())
+                      // can locate it once and reuse it, instead of
+                      // relocating on every call.
+
+  BinRef Locate(raytype intype, const R3::XYZ & u_rel) const;
+                      // Locates 'u_rel' (the local vertical direction,
+                      // expressed in the incoming ray's (S1,S2,S3)
+                      // frame) into its incidence bin: the same fold
+                      // the former private Fold() performed, but via
+                      // binary search over precomputed edge
+                      // cosines/sines instead of acos/atan2/sin -- see
+                      // docs/superpowers/specs/2026-10-17-axisymmetric-
+                      // sampler-performance-design.md, decision 4, and
+                      // tests/anisotropy_tests.cpp's
+                      // ReferenceLocate3db253a (ruling R-P1).
+
   Real MajorantRate(raytype intype) const;
                       // g*_max (1/length): the largest bin majorant
                       // rate for incoming ray type 'intype', over every
@@ -127,7 +154,12 @@ public:
                       // g*_bin (1/length): the majorant rate of the
                       // incidence bin 'u_rel' (the local vertical
                       // direction, expressed in the incoming ray's
-                      // (S1,S2,S3) frame) folds into.
+                      // (S1,S2,S3) frame) folds into. Implemented via
+                      // Locate().
+
+  Real BinRate(raytype intype, const BinRef & bin) const;
+                      // Same as above, for a bin already located by a
+                      // prior Locate() call (avoids relocating).
 
   struct Draw {
     int   Conv;       // out_types_e code (GPP=0,GPS=1,GSP=2,GSS=3) of
@@ -148,7 +180,12 @@ public:
                       // Draws a (conv, cell) pair from u_rel's
                       // incidence bin's coarse cumulative weights, then
                       // a fine take-off-angle index within that cell
-                      // from the shared isotropic table.
+                      // from the shared isotropic table. Implemented
+                      // via Locate().
+
+  Draw DrawProposal(raytype intype, const BinRef & bin) const;
+                      // Same as above, for a bin already located by a
+                      // prior Locate() call (avoids relocating).
 
   Real AcceptanceBound(raytype intype, const R3::XYZ & u_rel,
                        int conv, Index cell) const;
@@ -158,7 +195,7 @@ public:
                       // in 'cell' and every incidence state in the bin.
                       // Used by tests to validate bound coverage
                       // directly (DrawProposal() applies the same ratio
-                      // internally).
+                      // internally). Implemented via Locate().
 
   Index CellOf(Index toa) const;
                       // The cell index owning fine take-off-angle index
@@ -238,13 +275,6 @@ private:
   // ::: Private Types  (AxiProposal Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::::::::
 
-  struct FoldResult {
-    int  ThetaBin;
-    int  ChiBin;     // Always 0 for intype==RAY_P (canonical frame).
-    bool Mx;
-    bool My;         // Always false for intype==RAY_P.
-  };
-
   typedef std::vector<double> BinTable;  // Cumulative proposal weights
                                          // over (conv,cell), concatenated
                                          // as [conv0 cells][conv1 cells];
@@ -270,8 +300,6 @@ private:
                       // constructor), and 'S0'/'S1' are the matching
                       // conversions' per-cell isotropic sums (bin-
                       // independent, hoisted out by the constructor).
-
-  FoldResult Fold(raytype intype, R3::XYZ u) const;
 
   Index MapCell(Index cell, bool mx, bool my) const;
                       // Applies Mx^mx(My^my(cell)); self-inverse (the

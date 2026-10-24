@@ -36,6 +36,59 @@ namespace {
     return p;
   }
 
+  // ::: ThetaEdgeCosines() / ChiEdgeCosines() / ChiEdgeSines() :::
+  //
+  //   Precomputed edge-angle cosines/sines used by AxiProposal::Locate()
+  //   to fold a local-vertical direction into its incidence bin by
+  //   comparison alone -- no acos, atan2, or sin call on the hot path
+  //   (design decision 4). Each is built once (on first use; C++11
+  //   guarantees thread-safe function-local static initialization) and
+  //   reused for the life of the program: these depend only on the fixed
+  //   bin widths (2 degrees for theta, 10 degrees for chi), never on any
+  //   ScatterParams or take-off-angle set.
+  //
+  //   ThetaEdgeCosines()[b] == cos(2*b degrees), b in [0,kThetaBins]
+  //   (46 entries): theta bin b covers the (acos-monotonicity) interval
+  //   cos(2*(b+1) deg) < u_z <= cos(2*b deg).
+  //
+  //   ChiEdgeCosines()[c] == cos(10*c degrees),
+  //   ChiEdgeSines()[c]   == sin(10*c degrees), c in [0,kChiBins-1] (9
+  //   entries each): chi bin c is the largest c with
+  //   v*cos(10*c deg) >= w*sin(10*c deg) (see Locate()).
+  //
+  const std::vector<Real> & ThetaEdgeCosines() {
+    static const std::vector<Real> edges = [] {
+      std::vector<Real> e(AxiProposal::kThetaBins + 1);
+      for (int b = 0; b <= AxiProposal::kThetaBins; ++b) {
+        e[b] = cos(2.0 * (Real) b * Geometry::DtoR);
+      }
+      return e;
+    }();
+    return edges;
+  }
+
+  const std::vector<Real> & ChiEdgeCosines() {
+    static const std::vector<Real> c = [] {
+      std::vector<Real> v(AxiProposal::kChiBins);
+      for (int i = 0; i < AxiProposal::kChiBins; ++i) {
+        v[i] = cos(10.0 * (Real) i * Geometry::DtoR);
+      }
+      return v;
+    }();
+    return c;
+  }
+
+  const std::vector<Real> & ChiEdgeSines() {
+    static const std::vector<Real> s = [] {
+      std::vector<Real> v(AxiProposal::kChiBins);
+      for (int i = 0; i < AxiProposal::kChiBins; ++i) {
+        v[i] = sin(10.0 * (Real) i * Geometry::DtoR);
+      }
+      return v;
+    }();
+    return s;
+  }
+
   // ::: ComputeAxiShape(...) :::
   //
   //   The cell/block/representative sizing arithmetic that used to live
@@ -665,50 +718,78 @@ void AxiProposal::BuildBinTable(const R3::XYZ & u_c, Real delta,
 
 
 //////
-// METHOD:  AxiProposal :: Fold()                              [const]
+// METHOD:  AxiProposal :: Locate()                             [const]
 //
 //   Folds the local-vertical direction 'u' into a canonical incidence
 //   bin (theta, chi for S; theta only for P), and records the mirror
 //   flags (Mx, My) needed to map a table cell back to the actual cell.
+//   Trig-free (design decision 4): no acos, atan2, or sin call. This
+//   folds exactly as the former (now test-only) Fold() did -- compared
+//   directly against a frozen transcription of it,
+//   tests/anisotropy_tests.cpp's ReferenceLocate3db253a, under ruling
+//   R-P1.
 //
-AxiProposal::FoldResult AxiProposal::Fold(raytype intype, R3::XYZ u) const {
+//   Theta: after the z>=0 fold, u.z() is compared directly against the
+//   precomputed edge cosines (ThetaEdgeCosines()) by binary search: bin
+//   b is the one with ThetaEdgeCosines()[b+1] < u.z() <=
+//   ThetaEdgeCosines()[b], the same interval the old acos(u.z())-based
+//   floor(theta_deg/2) assigned (acos is strictly decreasing on
+//   [-1,1]), clamped to [0,kThetaBins-1] for free by the search range
+//   (no out-of-range u.z() clamp needed, unlike the old acos-domain
+//   clamp).
+//
+//   Chi (S only): w = |u.x()|, v = |u.y()| (post z-fold; the mx/my signs
+//   already record which quadrant u.x()/u.y() actually came from). Since
+//   chi = atan2(v,w) in [0,90deg] once folded, and tan is increasing
+//   there, v*cos(10c deg) >= w*sin(10c deg) iff chi >= 10c deg (dividing
+//   both sides by w*cos(10c deg), when positive); chi's bin is the
+//   largest c satisfying it, found by binary search over
+//   ChiEdgeCosines()/ChiEdgeSines(). w^2+v^2 == sin(theta)^2 exactly (u
+//   is a unit vector), so 'w^2+v^2 <= 1e-24' is exactly the old
+//   'sinTheta > 1e-12' guard, without the sqrt: near either pole, chi is
+//   undefined, and the old code's default (chi=0, i.e. chiBin=0) is used
+//   directly.
+//
+AxiProposal::BinRef AxiProposal::Locate(raytype intype,
+                                        const R3::XYZ & u_rel) const {
 
+  R3::XYZ u = u_rel;
   if (u.z() < 0.0) {u = u.Negative();}
 
   const bool mx = (u.x() > 0.0);
-  const Real ux = mx ? -u.x() : u.x();
+  const Real w  = std::fabs(u.x());   // == -(folded u.x()), >= 0.
 
   bool my = false;
-  Real uy = 0.0;
+  Real v = 0.0;
   if (intype == RAY_S) {
     my = (u.y() < 0.0);
-    uy = my ? -u.y() : u.y();
+    v  = std::fabs(u.y());            // == folded u.y(), >= 0.
   }
 
-  Real uz = u.z();
-  if (uz > 1.0)  uz = 1.0;
-  if (uz < -1.0) uz = -1.0;
-  const Real theta = acos(uz);
-  const Real sinTheta = sin(theta);
-
-  Real chi = 0.0;
-  if (intype == RAY_S && sinTheta > 1e-12) {
-    chi = atan2(uy, -ux);
+  const std::vector<Real> & thetaEdges = ThetaEdgeCosines();
+  const Real uz = u.z();
+  int thetaLo = 0, thetaHi = kThetaBins - 1;
+  while (thetaLo < thetaHi) {
+    const int mid = (thetaLo + thetaHi) / 2;
+    if (thetaEdges[mid+1] < uz) {thetaHi = mid;} else {thetaLo = mid+1;}
   }
-
-  int thetaBin = (int) floor(theta*Geometry::RtoD/2.0);
-  if (thetaBin < 0) thetaBin = 0;
-  if (thetaBin > kThetaBins-1) thetaBin = kThetaBins-1;
 
   int chiBin = 0;
-  if (intype == RAY_S) {
-    chiBin = (int) floor(chi*Geometry::RtoD/10.0);
-    if (chiBin < 0) chiBin = 0;
-    if (chiBin > kChiBins-1) chiBin = kChiBins-1;
+  if (intype == RAY_S && (w*w + v*v) > 1e-24) {
+    const std::vector<Real> & chiCos = ChiEdgeCosines();
+    const std::vector<Real> & chiSin = ChiEdgeSines();
+    int chiLo = 0, chiHi = kChiBins - 1;
+    while (chiLo < chiHi) {
+      const int mid = (chiLo + chiHi + 1) / 2;   // round up: searching
+                                                 // for the largest c
+                                                 // satisfying the test.
+      if (v*chiCos[mid] >= w*chiSin[mid]) {chiLo = mid;} else {chiHi = mid-1;}
+    }
+    chiBin = chiLo;
   }
 
-  FoldResult r;
-  r.ThetaBin = thetaBin;
+  BinRef r;
+  r.ThetaBin = thetaLo;
   r.ChiBin   = chiBin;
   r.Mx       = mx;
   r.My       = my;
@@ -755,8 +836,11 @@ Real AxiProposal::MajorantRate(raytype intype) const {
 // METHOD:  AxiProposal :: BinRate()                           [const]
 //
 Real AxiProposal::BinRate(raytype intype, const R3::XYZ & u_rel) const {
-  const FoldResult f = Fold(intype, u_rel);
-  return BinRateFor(intype, f.ThetaBin, f.ChiBin);
+  return BinRate(intype, Locate(intype, u_rel));
+}
+
+Real AxiProposal::BinRate(raytype intype, const BinRef & bin) const {
+  return BinRateFor(intype, bin.ThetaBin, bin.ChiBin);
 }
 
 
@@ -765,9 +849,13 @@ Real AxiProposal::BinRate(raytype intype, const R3::XYZ & u_rel) const {
 //
 AxiProposal::Draw
 AxiProposal::DrawProposal(raytype intype, const R3::XYZ & u_rel) const {
+  return DrawProposal(intype, Locate(intype, u_rel));
+}
 
-  const FoldResult f = Fold(intype, u_rel);
-  const BinTable & table = TableFor(intype, f.ThetaBin, f.ChiBin);
+AxiProposal::Draw
+AxiProposal::DrawProposal(raytype intype, const BinRef & bin) const {
+
+  const BinTable & table = TableFor(intype, bin.ThetaBin, bin.ChiBin);
 
   const Real total = table.back();
   const Real r = RandomUniform() * total;
@@ -785,7 +873,7 @@ AxiProposal::DrawProposal(raytype intype, const R3::XYZ & u_rel) const {
   const int g0 = (intype == RAY_P) ? 0 : 2;
   const int conv = g0 + (int) tableConv;
 
-  const Index actualCell = MapCell(tableCell, f.Mx, f.My);
+  const Index actualCell = MapCell(tableCell, bin.Mx, bin.My);
   const Index lo = actualCell * mCellBlock, hi = lo + mCellBlock;
 
   Draw d;
@@ -805,7 +893,7 @@ AxiProposal::DrawProposal(raytype intype, const R3::XYZ & u_rel) const {
 Real AxiProposal::AcceptanceBound(raytype intype, const R3::XYZ & u_rel,
                                   int conv, Index cell) const {
 
-  const FoldResult f = Fold(intype, u_rel);
+  const BinRef f = Locate(intype, u_rel);
   const BinTable & table = TableFor(intype, f.ThetaBin, f.ChiBin);
 
   const int g0 = (intype == RAY_P) ? 0 : 2;
