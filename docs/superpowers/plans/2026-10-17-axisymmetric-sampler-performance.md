@@ -556,6 +556,55 @@ git commit -m "Validate the axisymmetric sampler against near-axisymmetric gener
 
 ---
 
+### Task 6b: Canonical P frame in the general sampler (added 2026-10-24, ruling R10)
+
+The full replicate comparison flagged Lop Nor ε=0.01 r=10 (p = 0.002). The investigation found that this was a statistical fluke: with fresh seeds p is 0.90 and 0.31, and the pooled 80-vs-40-run p is 0.99. It also found a real unit-level mismatch.
+
+For P incidence, the integrated rate depends on the P frame angle about the ray. That angle has no physical meaning, but the equal-weight take-off-angle grid is not rotation-invariant.
+- Crust at 60°: the MFP spans 1442–1518 km across frame angles.
+- Mantle at 89°: 742–826 km.
+- Both are unchanged at degrees 5, 7 and 8.
+
+The axisymmetric sampler always uses the canonical frame, `CanonicalPPolarization(dir, up)`, which is the highest-rate orientation. The general sampler uses the phonon's carried `pol`. So already-scattered P phonons differ by 2–3.5% in MFP at aspect 10, with direction χ²/dof 1.8–5.6. When the general sampler uses the canonical frame, all 14 P cases agree. `test_axi_matches_general` missed this because its P cases use `pol = dir`, whose rotation is 0, the canonical angle.
+
+**Files:**
+- Modify: `scatterers.cpp` (`AttemptAnisotropicScatter`, general path), `docs/toa-quadrature-bias.md`, `doc/MANUAL.md` (the quadrature paragraph in Validity limits)
+- Test: `tests/anisotropy_tests.cpp`
+
+**Interfaces:**
+- Consumes: `Scatterer::CanonicalPPolarization(dir, up)` and `ECS.GetUp(loc)`.
+- Produces: for `intype == RAY_P`, the general sampler builds `AA` from `pol_used = CanonicalPPolarization(dir, ECS.GetUp(loc))` and returns `InPol = pol_used` on real events, as the axisymmetric sampler does. S incidence is unchanged.
+
+- [ ] **Step 1: Write the failing test.** Use Lop Nor r=10-like scatterers at degree 7 and 2 Hz:
+  - crust: `Vp = 6.40`, `Vs = 3.63`, `ax = ay = 5.0`, `az = 0.5`, `κ = 0.3`, `ε = 0.01`;
+  - mantle: `Vp = 8.07`, `Vs = 4.63`, `ax = ay = 7.0`, `az = 0.7`, `κ = 0.5`.
+
+  Build them through the test helpers (find the existing helper or extend `LopNorCrust` minimally).
+
+```cpp
+test_p_frame_consistency: for each layer, Scatterer(AUTO, ax==ay) [axisymmetric] vs Scatterer(AUTO, ay = ax*(1+1e-5))
+    [general]; P incidence at 30, 60 and 89 deg with a non-canonical carried pol = 0.7 rad: mean distance to a real
+    event (n = 20000 each) within 4*sqrt(sigma_a^2+sigma_g^2); and, over 100000 real events each, the joint
+    distribution of (Conv, absolute outgoing direction cell at degree 2, after applying the attempt's InPol and Rel
+    through Phonon::Transform as Propagate does) has two-sample chi2/dof < 1.5 over bins with expected >= 20
+```
+
+- [ ] **Step 2: Run `tests/test_anisotropy_unit.sh p_frame_consistency`.** Expect it to fail: the investigation measured MFP z down to −7.3 and χ²/dof of 2–5.6. Record the numbers.
+- [ ] **Step 3: Implement the canonical P frame** in the general path of `AttemptAnisotropicScatter`. Change nothing else.
+- [ ] **Step 4: Document the frame-orientation facet** in `docs/toa-quadrature-bias.md` and the manual's quadrature paragraph:
+  - For anisotropic P incidence the equal-weight grid makes the rate depend on the frame orientation about the ray.
+  - Both samplers use the canonical orientation, which is the highest-rate one, so their results agree. Example sizes: the two ranges above, with their provenance.
+  - Area-weighted quadrature would remove the orientation dependence.
+- [ ] **Step 5: Run the tests.** `tests/test_anisotropy_unit.sh` passes, including the new test and every existing general and axisymmetric test, and `tests/test_aniso_scenarios.sh` passes.
+- [ ] **Step 6: Run the full check, then commit.**
+
+```bash
+git add scatterers.cpp tests/anisotropy_tests.cpp docs/toa-quadrature-bias.md doc/MANUAL.md
+git commit -m "Use the canonical P frame in the general anisotropic sampler"
+```
+
+---
+
 ### Task 7: Benchmark extension, measurements, and performance documentation
 
 **Files:**
