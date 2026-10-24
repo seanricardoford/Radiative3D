@@ -91,7 +91,10 @@ set -eu
 # scenarios); EPS and R are passed straight through to
 # tests/aniso_lib.sh's scenario_model(). A single config, e.g.
 #   CMP_CONFIGS="lopnor:0.05:4"
-# is how the smoke test below exercises the script cheaply.
+# is how the smoke test below exercises the script cheaply. A token that
+# isn't exactly three non-empty, colon-separated fields (e.g. a missing
+# "r", or an extra ":") is rejected with an error and a nonzero exit --
+# see cmp_config_fields() below.
 #
 # Output: a Markdown table, one row per config, with columns scenario,
 # eps, r, windows, p(A,G), p(A,A'), median wall-clock seconds for A,
@@ -125,11 +128,7 @@ if [ "$CMP_REPLICATES" -lt 2 ]; then
 fi
 
 if [ "$CMP_THREADS" = "auto" ]; then
-  if [ "$(uname -s)" = "Darwin" ]; then
-    CMP_THREADS=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
-  else
-    CMP_THREADS=$(nproc 2>/dev/null || echo 1)
-  fi
+  CMP_THREADS=$(auto_threads)
 fi
 
 echo "Building current executable..." >&2
@@ -155,6 +154,25 @@ K=$CMP_REPLICATES
 # 64-bit integer (see the header comment's seed rule).
 seed_for() {
   awk -v k="$1" 'BEGIN{printf "%.0f", 596 + k*4294967296}'
+}
+
+# cmp_config_fields TOKEN  -> prints "SCENARIO EPS R" (space-separated) on
+# stdout. Exits the whole script nonzero, with an error to stderr, if
+# TOKEN is not exactly three non-empty, colon-separated fields -- the old
+# "${tok%%:*}"/"${tok#*:}" field-splitting alone would silently turn a
+# malformed token (e.g. "lopnor", missing eps and r) into a scenario of
+# "lopnor" and an eps/r of "lopnor" too, rather than failing loudly.
+cmp_config_fields() {
+  awk -v tok="$1" '
+    BEGIN {
+      n = split(tok, f, ":")
+      if (n != 3 || f[1] == "" || f[2] == "" || f[3] == "") {
+        printf "ERROR: CMP_CONFIGS token \"%s\" is not SCENARIO:EPS:R (three non-empty colon-separated fields)\n", tok > "/dev/stderr"
+        exit 1
+      }
+      print f[1], f[2], f[3]
+    }
+  '
 }
 
 # phonons_for_scenario SCENARIO -> prints the configured phonon count.
@@ -238,8 +256,8 @@ run_group() {
           "$_rg_outdir" "$_rg_phonons" "$_rg_model" \
           >"$_rg_outdir/harness-stdout.txt" 2>"$_rg_outdir/harness-stderr.txt"; then
       echo "ERROR: run failed (scenario=$_rg_scenario mode=$_rg_mode r=$_rg_r" \
-           "eps=$_rg_eps k=$_rg_k seed=$_rg_seed); see" \
-           "$_rg_outdir/stderr.txt and $_rg_outdir/harness-stderr.txt" >&2
+           "eps=$_rg_eps k=$_rg_k seed=$_rg_seed)" >&2
+      dump_failure_logs "$_rg_outdir"
       exit 1
     fi
     _rg_end=$(date +%s.%N)
@@ -378,10 +396,9 @@ echo "| Scenario | eps | r | windows | p(A,G) | p(A,A') | median s (A) | median 
 echo "|---|---|---:|---:|---:|---:|---:|---:|---:|"
 
 for _cag_cfg in $CMP_CONFIGS; do
-  _cag_scenario=${_cag_cfg%%:*}
-  _cag_rest=${_cag_cfg#*:}
-  _cag_eps=${_cag_rest%%:*}
-  _cag_r=${_cag_rest#*:}
+  _cag_fields=$(cmp_config_fields "$_cag_cfg")
+  set -- $_cag_fields
+  _cag_scenario=$1; _cag_eps=$2; _cag_r=$3
 
   echo "Config: scenario=$_cag_scenario eps=$_cag_eps r=$_cag_r (K=$K)" >&2
 

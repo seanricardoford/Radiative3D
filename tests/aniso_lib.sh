@@ -19,6 +19,9 @@
 #   lopnor_model EPS MODE [R]          (MODE is "iso", "axi", "tri", or "gen")
 #   crustpinch_model EPS MODE [R]      (MODE is "iso", "axi", "tri", or "gen")
 #   scenario_model SCENARIO EPS MODE [R]
+#   auto_threads                       (prints the logical CPU count)
+#   dump_failure_logs OUTDIR           (prints a failed run's saved logs
+#                                       to stderr before OUTDIR is lost)
 
 ##
 ## normalize_stdout FILE
@@ -354,4 +357,46 @@ scenario_model() {
     crustpinch) crustpinch_model "$@" ;;
     *) echo "scenario_model: unknown scenario '$scenario'" >&2; exit 1 ;;
   esac
+}
+
+##
+## auto_threads  -> prints the logical CPU count on stdout.
+##
+##   sysctl -n hw.ncpu on macOS, nproc elsewhere, falling back to 1 if
+##   neither succeeds. Shared by tests/benchmark_aniso.sh and
+##   tests/compare_axi_general.sh to resolve their BENCH_THREADS/
+##   CMP_THREADS="auto" default, so the two scripts' notion of "auto"
+##   can't drift apart.
+##
+auto_threads() {
+  if [ "$(uname -s)" = "Darwin" ]; then
+    sysctl -n hw.ncpu 2>/dev/null || echo 1
+  else
+    nproc 2>/dev/null || echo 1
+  fi
+}
+
+##
+## dump_failure_logs OUTDIR
+##
+##   Prints the last 20 lines of each of OUTDIR's harness-stdout.txt,
+##   harness-stderr.txt, stdout.txt, and stderr.txt to stderr, for
+##   whichever of those exist and are non-empty.
+##
+##   tests/benchmark_aniso.sh's time_run() and
+##   tests/compare_axi_general.sh's run_group() each write a failed run's
+##   logs under a "work=$(mktemp -d)" directory that an EXIT trap deletes
+##   once the script exits -- including via the "exit 1" both callers use
+##   right after reporting a failed run. Printing only the *path* to
+##   those log files in the error message, without this, would point at
+##   a directory already gone by the time a human reads it.
+##
+dump_failure_logs() {
+  _dfl_outdir=$1
+  for _dfl_f in harness-stdout.txt harness-stderr.txt stdout.txt stderr.txt; do
+    if [ -s "$_dfl_outdir/$_dfl_f" ]; then
+      echo "----- last 20 lines of $_dfl_f -----" >&2
+      tail -n 20 "$_dfl_outdir/$_dfl_f" >&2
+    fi
+  done
 }
