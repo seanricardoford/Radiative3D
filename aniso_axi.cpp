@@ -2,6 +2,7 @@
 //
 #include <algorithm>    /* std::min, std::max */
 #include <cmath>        /* sin, cos, acos, atan2, sqrt, pow, floor, log */
+#include <cstdint>      /* std::uint64_t: FingerprintOf() chunking */
 #include <map>          /* std::map: geometry cache, keyed by TOA count */
 #include <mutex>        /* std::mutex, std::lock_guard: geometry cache */
 #include <stdexcept>    /* std::logic_error */
@@ -126,42 +127,74 @@ namespace {
     repsPerCell = numReps / numCells;
   }
 
-  // ::: FingerprintOf(toa) :::
+  // ::: FingerprintOf(toa, threads) :::
   //
   //   A cheap scalar fingerprint of a take-off-angle set: controller
-  //   ruling R2's index-weighted sum
-  //   Sum_k (k+1)*(x_k + 2*y_k + 3*z_k), k in index order, 0-based. This
-  //   is only a sanity check guarding the geometry cache below against
-  //   reuse across two distinct take-off-angle sets that happen to share
-  //   a size (not a security hash) -- production builds a single
-  //   TesselSphere per run and reuses it for every Scatterer (see
-  //   PhononSource::Set_TOA_Array()), so a collision can't arise there.
+  //   ruling R6 (amending R2) -- the index-weighted sum
+  //   Sum_k (k+1)*(theta_k + 2*phi_k), k in index order, 0-based, over
+  //   the take-off-angle set's *stored* theta/phi (S2::ThetaPhi::Theta()/
+  //   Phi()), with no trigonometry. This is only a sanity check guarding
+  //   the geometry cache below against reuse across two distinct
+  //   take-off-angle sets that happen to share a size (not a security
+  //   hash) -- production builds a single TesselSphere per run and
+  //   reuses it for every Scatterer (see PhononSource::Set_TOA_Array()),
+  //   so a collision can't arise there.
   //
-  //   An earlier version of this fingerprint was a plain (unweighted,
-  //   equally-coefficiented) component sum, which a standalone check
+  //   R2's version of this fingerprint, Sum_k (k+1)*(x_k+2*y_k+3*z_k)
+  //   over toa[k].XYZ(), replaced an even earlier plain (unweighted,
+  //   equally-coefficiented) component sum that a standalone check
   //   showed to be a poor discriminator: TESS_ICO's vertex directions
   //   sum to (numerically) zero by icosahedral symmetry, and since
   //   rotation is linear, a rotated copy's sum is *also* (numerically)
-  //   zero -- two such fingerprints could differ by as little as
-  //   ~1e-12 relative, no better than rounding noise. Per-index
-  //   weighting breaks that cancellation (a rotation or reordering
-  //   changes which direction sits at which index, and a different
-  //   index carries a different weight) and the x/2y/3z coefficients
-  //   break the remaining x<->y<->z degeneracy; a standalone check
-  //   confirmed a 0.01 rad rotation about z of the degree-5 TESS_ICO
-  //   set now changes this fingerprint by about 0.7% (relative) --
-  //   orders of magnitude above floating-point noise -- and that
-  //   reversing the set's order changes it by more than 100%. See
-  //   test_axi_geometry_cache_mismatch and
-  //   test_axi_geometry_cache_mismatch_rotation (tests/anisotropy_tests.cpp)
-  //   for both as regression-tested mismatch cases.
+  //   zero. Per-index weighting breaks that cancellation (a rotation or
+  //   reordering changes which direction sits at which index, and a
+  //   different index carries a different weight); R2's x/2y/3z
+  //   coefficients additionally broke the remaining x<->y<->z
+  //   degeneracy, which R6's theta/2*phi analogue doesn't need to worry
+  //   about in the first place -- theta and phi aren't interchangeable
+  //   the way x/y/z are, so there's no equivalent degeneracy to break,
+  //   and summing raw polar angles (every theta_k >= 0) carries none of
+  //   x_k/y_k/z_k's own signed-component cancellation either. R6's sole
+  //   purpose (per the controller) is dropping every sin/cos call
+  //   XYZ() made -- profiling (task-5b-brief.md) found this loop, called
+  //   fresh for every one of a run's axisymmetric Scatterers regardless
+  //   of geometry-cache hits (see GetOrBuildAxiGeometry() below), costing
+  //   about 1.7s of wall time alone at a degree-9 take-off-angle count.
+  //   A standalone check confirmed R6 stays just as discriminating as
+  //   R2 for this task's two regression cases: a 0.01 rad rotation about
+  //   z of the degree-5 TESS_ICO set (test_axi_geometry_cache_mismatch_
+  //   rotation) shifts every direction's phi by the same constant, so
+  //   the fingerprint changes by exactly 2*0.01*Sum_k(k+1) -- far above
+  //   floating-point noise, with none of R2's x/y/z-cancellation risk to
+  //   begin with; the per-index phi perturbation used by
+  //   test_axi_geometry_cache_mismatch is similarly non-cancelling.
   //
-  Real FingerprintOf(const S2::S2Set & toa) {
+  //   Computed as 64 fixed-size chunks (chunk c covers
+  //   [toa.size()*c/64, toa.size()*(c+1)/64), the division done in
+  //   64-bit so it can't overflow for any toa.size() that itself fits in
+  //   an Index), each summed by one ParallelFor(0,64,threads,...) task
+  //   into its own part[c], combined by a final serial loop over chunk
+  //   index 0..63 -- so the chunk boundaries (fixed at 64, independent of
+  //   'threads') and the fixed combination order make the result
+  //   independent of 'threads', exactly as every other construction-time
+  //   table in this class is (see the class-level doc comment on
+  //   AxiProposal's constructor).
+  //
+  Real FingerprintOf(const S2::S2Set & toa, unsigned threads) {
+    const Index n = (Index) toa.size();
+    const Index kChunks = 64;
+    std::vector<Real> part(kChunks, 0.0);
+    ParallelFor(0, kChunks, threads, [&](Index c) {
+      const Index lo = (Index) ((std::uint64_t) n * c / kChunks);
+      const Index hi = (Index) ((std::uint64_t) n * (c+1) / kChunks);
+      Real s = 0.0;
+      for (Index k = lo; k < hi; k++) {
+        s += (Real) (k+1) * (toa[k].Theta() + 2.0*toa[k].Phi());
+      }
+      part[c] = s;
+    });
     Real sum = 0.0;
-    for (Index k = 0; k < (Index) toa.size(); k++) {
-      const R3::XYZ p = toa[k].XYZ();
-      sum += (Real) (k+1) * (p.x() + 2.0*p.y() + 3.0*p.z());
-    }
+    for (Index c = 0; c < kChunks; c++) {sum += part[c];}
     return sum;
   }
 
@@ -347,7 +380,7 @@ namespace {
     static std::map<Index, CachedAxiGeometry> cache;
 
     const Index toaSize = (Index) toa.size();
-    const Real  fp       = FingerprintOf(toa);
+    const Real  fp       = FingerprintOf(toa, threads);
 
     std::lock_guard<std::mutex> lock(mtx);
 
@@ -382,6 +415,29 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
                          unsigned threads) :
   mPDists(pdists)
 {
+
+  // Force Locate()'s support tables (ThetaEdgeCosines()/ChiEdgeCosines()/
+  // ChiEdgeSines(), above) to build now, during construction, rather than
+  // lazily on this process's first Locate() call. Locate() isn't called
+  // by anything in this constructor -- only by BinRate()/DrawProposal()/
+  // AcceptanceBound(), all per-scattering-event queries -- so left alone,
+  // the three functions' function-local statics would otherwise first
+  // build during propagation (the first tentative collision any
+  // axisymmetric Scatterer handles), a one-time write to process-wide
+  // shared state that "Scatterers are read-only once constructed.
+  // Propagation writes no shared state." rules out, even though C++11
+  // guarantees the write itself is thread-safe. These three tables
+  // depend only on the fixed bin widths (2 degrees theta, 10 degrees
+  // chi), never on 'par'/'toa'/'pdists', so touching them here changes
+  // neither their contents nor which call ends up building them the
+  // *first* time overall (still whichever AxiProposal, of however many a
+  // run constructs, happens to run first) -- it only guarantees that
+  // first time is during some Scatterer's construction, never during
+  // propagation. After the first call, each is just a guard-variable
+  // check -- negligible cost on every later AxiProposal built.
+  (void) ThetaEdgeCosines();
+  (void) ChiEdgeCosines();
+  (void) ChiEdgeSines();
 
   mM     = par.AnisoMajorantFactor();
   mAh    = par.GetAx();   // == par.GetAy(), by axisymmetric assumption
@@ -444,16 +500,37 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // ParallelFor on up to 'threads' workers (Task 4b). See
   // PrepareBoundRep()/BoundRatio() and BuildBinTable() below.
   const Index numReps = (Index) geom.RepCenters.size();
-  std::vector<BoundRep> repsPP(numReps), repsPS(numReps),
-                        repsSP(numReps), repsSS(numReps);
-  ParallelFor(0, numReps, threads, [&](Index i) {
-    const R3::XYZ & t = geom.RepCenters[i];
-    const Real      r = geom.RepRadius[i];
-    repsPP[i] = PrepareBoundRep(t, r, mKP, mKP, mAMin);
-    repsPS[i] = PrepareBoundRep(t, r, mKP, mKS, mAMin);
-    repsSP[i] = PrepareBoundRep(t, r, mKS, mKP, mAMin);
-    repsSS[i] = PrepareBoundRep(t, r, mKS, mKS, mAMin);
-  });
+  RepSoA soaPP, soaPS, soaSP, soaSS;
+  {
+    // Scoped so the four vector<BoundRep> temporaries below (~5 MB each
+    // at kRepDegree's 81,920 representatives) are freed as soon as their
+    // data is copied into the RepSoA arrays above (also ~5 MB each),
+    // rather than staying alive alongside them for the rest of the
+    // constructor: keeping both sets live through the 450-bin loop
+    // further down would cost ~42 MB of temporaries, over the ~32 MB/
+    // scatterer budget (docs/superpowers/specs/2026-10-17-axisymmetric-
+    // sampler-performance-design.md); freed here, only one ~21 MB set is
+    // ever live at a time.
+    std::vector<BoundRep> repsPP(numReps), repsPS(numReps),
+                          repsSP(numReps), repsSS(numReps);
+    ParallelFor(0, numReps, threads, [&](Index i) {
+      const R3::XYZ & t = geom.RepCenters[i];
+      const Real      r = geom.RepRadius[i];
+      repsPP[i] = PrepareBoundRep(t, r, mKP, mKP, mAMin);
+      repsPS[i] = PrepareBoundRep(t, r, mKP, mKS, mAMin);
+      repsSP[i] = PrepareBoundRep(t, r, mKS, mKP, mAMin);
+      repsSS[i] = PrepareBoundRep(t, r, mKS, mKS, mAMin);
+    });
+
+    // Structure-of-arrays copies of the four BoundRep vectors above, fed
+    // to BuildBinTable()/RatioRun() instead of the vector<BoundRep>
+    // arrays themselves so that function's hot loop reads flat,
+    // contiguous Real arrays and can vectorize (see aniso_axi.hpp's
+    // RepSoA/RatioRun doc comments). Assign() is a plain column-wise
+    // copy, so this adds no arithmetic and so no rounding difference.
+    soaPP.Assign(repsPP); soaPS.Assign(repsPS);
+    soaSP.Assign(repsSP); soaSS.Assign(repsSS);
+  }
 
   // Per-cell isotropic sums S(conv,cell), hoisted out of the bin loop:
   // they depend only on conv and cell, never on the incidence bin, so
@@ -499,7 +576,7 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
       const Real theta_c  = 0.5*(theta_lo+theta_hi);
       const Real delta    = 0.5*(theta_hi-theta_lo);
       const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
-      BuildBinTable(u_c, delta, repsPP, repsPS, geom.RepsPerCell,
+      BuildBinTable(u_c, delta, soaPP, soaPS, geom.RepsPerCell,
                    S0_P, S1_P, mPTable[b], mPBinRate[b]);
     } else {
       const Index sidx = idx - numPBins;
@@ -516,7 +593,7 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
       const R3::XYZ u_c(-sin(theta_c)*cos(chi_c),
                         sin(theta_c)*sin(chi_c),
                         cos(theta_c));
-      BuildBinTable(u_c, delta, repsSP, repsSS, geom.RepsPerCell,
+      BuildBinTable(u_c, delta, soaSP, soaSS, geom.RepsPerCell,
                    S0_S, S1_S, mSTable[sidx], mSBinRate[sidx]);
     }
   });
@@ -621,12 +698,52 @@ AxiProposal::BinCap AxiProposal::MakeBinCap(const R3::XYZ & u_c, Real delta) {
 //   using s = sin(alpha_c) = sqrt(1-c^2) >= 0 (alpha_c in [0,pi]). No
 //   acos, cos or sin call remains in this function.
 //
+// This function and RatioRun() (below) carry a matching GCC
+// optimize("fp-contract=off") attribute so neither ever contracts a
+// multiply-add into a fused instruction: GCC's default for this file's
+// build flags is -ffp-contract=fast (confirmed by -Q --help=optimizers),
+// and disassembly showed BOTH this scalar function and RatioRun's
+// vectorized loop already contain real fmadd/fmsub/fnmsub(/NEON
+// fmla/fmls) instructions under that default -- just not, for at least
+// one representative/bin found by test_axi_ratio_run_matches_scalar
+// (tests/anisotropy_tests.cpp), the *same* ones, so the two rounded
+// differently for that input. Forcing both to fully expand every
+// multiply-add (never fusing) removes the ambiguity: per IEEE 754,
+// scalar and SIMD add/sub/mul/div/sqrt are each required to round
+// identically lane-for-lane, so two functions evaluating the same
+// source expressions with no fused contraction anywhere are
+// bit-identical by construction, independent of whether either one
+// vectorizes. See the exactness note on RatioRun() below.
+#if defined(__GNUC__) && !defined(__clang__)
+#define R3D_EXACT_FP_ATTR \
+  __attribute__((optimize("no-math-errno","no-trapping-math","fp-contract=off")))
+#else
+#define R3D_EXACT_FP_ATTR
+#endif
+
+R3D_EXACT_FP_ATTR
 Real AxiProposal::BoundRatio(const BoundRep & rep, const BinCap & cap,
                              Real ah, Real az) {
 
   Real c = 1.0;              // cos(alpha_c); the Mr==0 default (see above).
   if (rep.Mr > 0.0) {
-    c = rep.MHat.Dot(cap.Uc);
+    // Written out component-wise, rather than rep.MHat.Dot(cap.Uc),
+    // because R3::XYZ::Dot() (geom_r3.hpp) is an ordinary inline method
+    // with its own separately-emitted out-of-line copy for call sites
+    // GCC doesn't inline -- compiled under this translation unit's
+    // *default* flags (-ffp-contract=fast; confirmed by disassembly:
+    // that copy contains two fmadd instructions), not under this
+    // function's R3D_EXACT_FP_ATTR. A BoundRatio() call that happened to
+    // reach that copy would therefore round this dot product using
+    // fused multiply-add while RatioRun()'s own (always manually
+    // inlined, always attributed) version of the same sum never does --
+    // precisely the mismatch test_axi_ratio_run_matches_scalar
+    // (tests/anisotropy_tests.cpp) caught. Dot() itself is untouched
+    // (every other call site across the codebase keeps today's
+    // behavior); only this one call is expanded so it's governed by the
+    // same attribute as the rest of this function.
+    c = rep.MHat.x()*cap.Uc.x() + rep.MHat.y()*cap.Uc.y()
+      + rep.MHat.z()*cap.Uc.z();
     if (c > 1.0)  c = 1.0;
     if (c < -1.0) c = -1.0;
   }
@@ -659,6 +776,147 @@ Real AxiProposal::BoundRatio(const BoundRep & rep, const BinCap & cap,
 
 
 //////
+// METHOD:  AxiProposal :: RepSoA :: Assign()
+//
+//   Column-wise copy of 'reps' into the eight parallel arrays: no
+//   arithmetic, so this cannot itself be a source of any rounding
+//   difference between RatioRun() and BoundRatio().
+//
+void AxiProposal::RepSoA::Assign(const std::vector<BoundRep> & reps) {
+  const std::size_t n = reps.size();
+  Mx.resize(n); My.resize(n); Mz.resize(n); Mr.resize(n);
+  Rho.resize(n); M2Lo.resize(n); M2Hi.resize(n); Numer.resize(n);
+  for (std::size_t i = 0; i < n; i++) {
+    Mx[i]    = reps[i].MHat.x();
+    My[i]    = reps[i].MHat.y();
+    Mz[i]    = reps[i].MHat.z();
+    Mr[i]    = reps[i].Mr;
+    Rho[i]   = reps[i].Rho;
+    M2Lo[i]  = reps[i].M2Lo;
+    M2Hi[i]  = reps[i].M2Hi;
+    Numer[i] = reps[i].Numer;
+  }
+}//
+//
+
+
+// GCC's auto-vectorizer needs permission to reorder the libm-adjacent
+// comparisons/selects below without worrying about errno or trapping FP
+// exceptions (neither of which this codebase ever inspects); combined,
+// here, with the same fp-contract=off as BoundRatio() above, for the
+// exactness reasons given there. Granted locally, via a function
+// attribute, rather than globally via a command-line flag, so it
+// affects only these two definitions. Clang (and anything else) gets
+// the unannotated definition: the attribute is a GCC extension, and
+// this loop vectorizes under Clang's defaults anyway.
+//
+//////
+// METHOD:  AxiProposal :: RatioRun()                          [static]
+//
+//   BoundRatio(), run over every representative in 'reps' -- same
+//   per-element arithmetic, rewritten so the loop vectorizes:
+//     - 'c' (cos(alpha_c)) is computed unconditionally as the clamped
+//       dot product, then replaced with the Mr==0 default (1.0) by a
+//       final select, instead of branching around the Dot() call --
+//       correctness-preserving because the discarded dot-product value
+//       is exactly 0 when Mr==0 (MHat is the zero vector then) and is
+//       never used in that case either way.
+//     - Both cap-edge candidate values (what BoundRatio() calls
+//       cos_alpha_lo/cos_alpha_hi's non-clamped branch) are computed
+//       unconditionally, before the clamp select, rather than only in
+//       an 'else' branch.
+//     - std::max()/std::min() are spelled as explicit ternaries (with
+//       the same operand order and tie-break as the std:: versions --
+//       see the exactness note below), and the s2_lo guard uses '&'
+//       (bitwise, both sides always evaluated) rather than '&&'.
+//   None of this changes any individual result: every selection below
+//   is a choice between two already-computed exact values (a
+//   comparison, never an arithmetic operation), so it introduces no
+//   rounding beyond what BoundRatio() itself performs, regardless of
+//   which branch the scalar function would have taken. The ternaries
+//   match std::max(a,b)/std::min(a,b)'s own tie-break (returns 'a' when
+//   a==b) exactly, so the two are interchangeable bit-for-bit -- not
+//   merely mathematically equivalent -- for every input, including
+//   ties.
+//
+template <bool AhGeAz>
+R3D_EXACT_FP_ATTR
+void AxiProposal::RatioRun(const RepSoA & reps, const BinCap & cap,
+                           Real ah, Real az, Real * ratio) {
+
+  const Real * const mx    = &reps.Mx[0];
+  const Real * const my    = &reps.My[0];
+  const Real * const mz    = &reps.Mz[0];
+  const Real * const mr    = &reps.Mr[0];
+  const Real * const rho   = &reps.Rho[0];
+  const Real * const m2lo  = &reps.M2Lo[0];
+  const Real * const m2hi  = &reps.M2Hi[0];
+  const Real * const numer = &reps.Numer[0];
+  Real * const out = ratio;
+
+  const Index n = (Index) reps.Mr.size();
+  const Real ux = cap.Uc.x(), uy = cap.Uc.y(), uz = cap.Uc.z();
+  const Real cosD = cap.CosDelta, sinD = cap.SinDelta;
+  const Real ah2 = ah*ah, az2 = az*az;
+  const Real d1 = ah2 - az2;   // AhGeAz==true  branch coefficient.
+  const Real d2 = az2 - ah2;   // AhGeAz==false branch coefficient.
+
+  for (Index i = 0; i < n; i++) {
+
+    Real d = ux*mx[i] + uy*my[i] + uz*mz[i];
+    d = (d > 1.0)  ? (Real) 1.0  : d;
+    d = (d < -1.0) ? (Real) -1.0 : d;
+    const Real c = (mr[i] > 0.0) ? d : (Real) 1.0;
+
+    const Real omc = 1.0 - c*c;
+    const Real s = sqrt((omc > 0.0) ? omc : (Real) 0.0);
+
+    const Real tlo = c*cosD + s*sinD;
+    const Real thi = c*cosD - s*sinD;
+    const Real cos_alpha_lo = (c >= cosD)  ? (Real) 1.0  : tlo;
+    const Real cos_alpha_hi = (c <= -cosD) ? (Real) -1.0 : thi;
+
+    const Real s_lo = mr[i]*cos_alpha_hi - rho[i];
+    const Real s_hi = mr[i]*cos_alpha_lo + rho[i];
+    const Real slo2 = s_lo*s_lo, shi2 = s_hi*s_hi;
+    const Real s2_hi = (slo2 < shi2) ? shi2 : slo2;
+
+    Real Q_lo;
+    if (AhGeAz) {
+      const Real mn = (m2hi[i] < s2_hi) ? m2hi[i] : s2_hi;
+      const Real qa = ah2*m2lo[i] - d1*mn;
+      const Real qb = az2*m2lo[i];
+      Q_lo = (qa < qb) ? qb : qa;
+    } else {
+      const Real s2_lo = ((s_lo <= 0.0) & (0.0 <= s_hi)) ?
+                         (Real) 0.0 : ((shi2 < slo2) ? shi2 : slo2);
+      Q_lo = ah2*m2lo[i] + d2*s2_lo;
+    }
+
+    out[i] = numer[i] / (1.0 + Q_lo);
+  }
+
+}//
+//
+
+#undef R3D_EXACT_FP_ATTR
+
+// Explicit instantiation: RatioRun<true>/<false>'s only compiled copies
+// live here, in aniso_axi.o -- both 'main' and 'anisotropy_tests' link
+// that one object file (Makefile), never recompiling this template from
+// the header, so the vectorized loop above can't end up compiled
+// differently (e.g. under different ambient flags) between the
+// production call site (BuildBinTable(), below) and
+// tests/anisotropy_tests.cpp's test_axi_ratio_run_matches_scalar -- the
+// same cross-translation-unit-divergence risk parallel.hpp's own
+// IMPLEMENTATION NOTE documents for body(i).
+template void AxiProposal::RatioRun<true>(
+  const RepSoA &, const BinCap &, Real, Real, Real *);
+template void AxiProposal::RatioRun<false>(
+  const RepSoA &, const BinCap &, Real, Real, Real *);
+
+
+//////
 // METHOD:  AxiProposal :: BuildBinTable()                     [const]
 //
 //   Builds one incidence bin's cumulative proposal-weight table (and
@@ -666,8 +924,8 @@ Real AxiProposal::BoundRatio(const BoundRep & rep, const BinCap & cap,
 //   u_c/delta ('reps0'/'reps1', 'S0'/'S1' -- see aniso_axi.hpp).
 //
 void AxiProposal::BuildBinTable(const R3::XYZ & u_c, Real delta,
-                                const std::vector<BoundRep> & reps0,
-                                const std::vector<BoundRep> & reps1,
+                                const RepSoA & reps0,
+                                const RepSoA & reps1,
                                 Index repsPerCell,
                                 const std::vector<Real> & S0,
                                 const std::vector<Real> & S1,
@@ -675,22 +933,51 @@ void AxiProposal::BuildBinTable(const R3::XYZ & u_c, Real delta,
 
   const BinCap cap = MakeBinCap(u_c, delta);
 
-  std::vector<Real> maxRatio0(mNumCells, 0.0), maxRatio1(mNumCells, 0.0);
+  // ratio[i] = BoundRatio(rep_i, cap, mAh, mAz) for every representative
+  // in the group, computed by one RatioRun() call (vectorized) instead
+  // of one BoundRatio() call per representative; then each cell's max is
+  // taken over its own contiguous slice, a nested cell-then-
+  // representative loop rather than dividing the running max per
+  // element. Max is exact (never rounds: it always returns one of its
+  // inputs' own bit patterns) and doesn't care about grouping or order,
+  // so this is bit-identical to the old "update both cells' running max
+  // inline, one representative at a time" loop, for both groups.
+  const Index numReps = (Index) reps0.Mr.size();
+  std::vector<Real> ratio(numReps);
 
-  const Index numReps = (Index) reps0.size();
-  for (Index i = 0; i < numReps; i++) {
-    const Index cell = i / repsPerCell;
-    const Real r0 = BoundRatio(reps0[i], cap, mAh, mAz);
-    if (r0 > maxRatio0[cell]) {maxRatio0[cell] = r0;}
-    const Real r1 = BoundRatio(reps1[i], cap, mAh, mAz);
-    if (r1 > maxRatio1[cell]) {maxRatio1[cell] = r1;}
+  std::vector<Real> maxRatio0(mNumCells, 0.0), maxRatio1(mNumCells, 0.0);
+  const RepSoA      * const groups[2]    = {&reps0, &reps1};
+  std::vector<Real> * const maxRatios[2] = {&maxRatio0, &maxRatio1};
+
+  for (int g = 0; g < 2; g++) {
+    const RepSoA & reps = *groups[g];
+    if (mAh >= mAz) {
+      RatioRun<true>(reps, cap, mAh, mAz, &ratio[0]);
+    } else {
+      RatioRun<false>(reps, cap, mAh, mAz, &ratio[0]);
+    }
+    std::vector<Real> & maxR = *maxRatios[g];
+    for (Index c = 0; c < mNumCells; c++) {
+      const Real * r = &ratio[c*repsPerCell];
+      Real m = maxR[c];
+      for (Index j = 0; j < repsPerCell; j++) {
+        if (r[j] > m) {m = r[j];}
+      }
+      maxR[c] = m;
+    }
   }
 
+  // maxRatio[c] >= 1.0 sets the cell's bound to M outright, skipping
+  // pow(): exact, since pow(x>=1, kappa+1.5>0) >= 1 makes
+  // min(M, M*pow(x,kappa+1.5)) equal M either way -- this just avoids
+  // computing (and rounding) a pow() call whose result is thrown away.
   std::vector<Real> bound0(mNumCells), bound1(mNumCells);
   Real sumBinBoundS = 0.0;
   for (Index c = 0; c < mNumCells; c++) {
-    bound0[c] = std::min(mM, mM * pow(maxRatio0[c], mKappa+1.5));
-    bound1[c] = std::min(mM, mM * pow(maxRatio1[c], mKappa+1.5));
+    bound0[c] = (maxRatio0[c] >= 1.0) ?
+      mM : std::min(mM, mM * pow(maxRatio0[c], mKappa+1.5));
+    bound1[c] = (maxRatio1[c] >= 1.0) ?
+      mM : std::min(mM, mM * pow(maxRatio1[c], mKappa+1.5));
     sumBinBoundS += bound0[c]*S0[c] + bound1[c]*S1[c];
   }
 

@@ -269,6 +269,52 @@ public:
                       // or sin call) -- exactly the arithmetic of the
                       // ComputeBound() this replaces.
 
+  struct RepSoA {
+    std::vector<Real> Mx, My, Mz, Mr, Rho, M2Lo, M2Hi, Numer;
+    void Assign(const std::vector<BoundRep> & reps);
+  };                  // Structure-of-arrays BoundRep: one array set per
+                      // (k_in,k_out) pair, feeding RatioRun() below so
+                      // its loop over representatives reads flat,
+                      // contiguous Real arrays (letting GCC vectorize
+                      // it) instead of an array of BoundRep structs.
+                      // Assign() copies 'reps' column-wise with no
+                      // arithmetic, so it cannot itself introduce any
+                      // rounding difference. Exposed publicly, like
+                      // BoundRep/BinCap above, purely so
+                      // tests/anisotropy_tests.cpp's
+                      // test_axi_ratio_run_matches_scalar can build one
+                      // directly and exercise RatioRun() against
+                      // BoundRatio() -- BuildBinTable() is still the
+                      // only production caller.
+
+  template <bool AhGeAz>
+  static void RatioRun(const RepSoA & reps, const BinCap & cap,
+                       Real ah, Real az, Real * ratio);
+                      // Fills ratio[i] = BoundRatio(rep_i, cap, ah, az)
+                      // for every representative i in 'reps' (rep_i
+                      // reconstructed from reps' i'th column), using
+                      // exactly BoundRatio()'s per-element arithmetic
+                      // but written so the loop vectorizes: both
+                      // cap-edge values are computed before selecting
+                      // between them, std::max()/std::min() are spelled
+                      // as ternaries, and the s2_lo branch test uses '&'
+                      // rather than '&&' (see aniso_axi.cpp). 'AhGeAz'
+                      // selects BoundRatio()'s ah>=az branch (true) or
+                      // its ah<az branch (false) at compile time --
+                      // valid because the caller already knows which
+                      // holds for every representative in a single
+                      // call (it depends only on 'ah'/'az', not on the
+                      // representative), so the branch doesn't need to
+                      // be re-tested per element. Defined, and
+                      // explicitly instantiated for both 'AhGeAz'
+                      // values, only in aniso_axi.cpp -- never in this
+                      // header -- so every caller (BuildBinTable() here
+                      // and tests/anisotropy_tests.cpp's
+                      // test_axi_ratio_run_matches_scalar) links the
+                      // one compiled copy, avoiding the cross-
+                      // translation-unit rounding divergence documented
+                      // in parallel.hpp's own IMPLEMENTATION NOTE.
+
 private:
 
   // ::::::::::::::::::::::::::::::::::::::::::::::::
@@ -285,8 +331,8 @@ private:
   // ::::::::::::::::::::::::::::::::::::::::::::::::
 
   void BuildBinTable(const R3::XYZ & u_c, Real delta,
-                     const std::vector<BoundRep> & reps0,
-                     const std::vector<BoundRep> & reps1,
+                     const RepSoA & reps0,
+                     const RepSoA & reps1,
                      Index repsPerCell,
                      const std::vector<Real> & S0,
                      const std::vector<Real> & S1,
@@ -294,7 +340,7 @@ private:
                       // Builds one incidence bin's cumulative proposal-
                       // weight table (and its majorant rate) for the
                       // two conversions sharing this bin's u_c/delta:
-                      // 'reps0'/'reps1' are BoundRep arrays (one entry
+                      // 'reps0'/'reps1' are RepSoA arrays (one entry
                       // per representative, already keyed to the right
                       // k_in/k_out for this bin type -- see the
                       // constructor), and 'S0'/'S1' are the matching

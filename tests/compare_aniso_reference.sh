@@ -26,7 +26,7 @@ set -eu
 #
 # Builds the current tree's 'main' (into $ROOT/main) and, for every
 # (scenario, THREADS, TOA_DEGREE) combination in
-#   scenario    in {lopnor, crustpinch}
+#   scenario    in {lopnor, lopnor-prolate, crustpinch}
 #   THREADS     in {1, CMP_THREADS}
 #   TOA_DEGREE  in {5, 7}            (7 exercises representatives with
 #                                     nonzero radii -- see aniso_axi.cpp)
@@ -34,7 +34,7 @@ set -eu
 # R3D_EXE=$REF_EXE (both via tests/run_aniso_case.sh, at that script's
 # default phonon counts), then compares the two run directories with
 # compare_runs in "strict" mode. Prints one "PASS" or "DIFF" line per
-# case (all 8 cases always run, so a human gets full visibility) and
+# case (all 12 cases always run, so a human gets full visibility) and
 # exits nonzero if any case differed.
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -66,25 +66,40 @@ trap cleanup EXIT HUP INT TERM
 lopnor_21="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,2.0,2.0,0.5,0.3,1000,0.8,0.01,1.4,0.7,0.35,0.5,300"
 crustpinch_42="0.8,0.01,0.2,0.2,0.2,0.2,200,0.8,0.01,0.8,0.8,0.2,0.3,1500,0.8,0.01,0.8,0.8,0.2,0.3,1500,0.8,0.01,0.6,0.3,0.15,0.4,1500,0.8,0.01,0.2,0.2,0.2,0.5,900,2.0,30.0,5.0,.3666667,.4736842,1,1"
 
+# Prolate case (task-5b-brief.md, Step 4): lopnor_21's own layout and
+# sediments region, with the crust and mantle regions replaced by the
+# brief's ax==ay < az pair -- exercises BoundRatio()/RatioRun()'s
+# "ah < az" branch (lopnor_21's own crust/mantle regions are both
+# "ah >= az", crust trivially so since there ax==ay==az).
+lopnor_prolate_21="0.8,0.01,0.5,0.5,0.5,0.2,50,0.8,0.01,0.5,0.5,1.0,0.3,1000,0.8,0.01,0.7,0.7,1.4,0.5,300"
+
 any_diff=0
 
 ##
-## run_case SCENARIO ANISO_ARGS THREADS DEGREE
+## run_case LABEL SCENARIO ANISO_ARGS THREADS DEGREE
 ##
-## Runs SCENARIO once against the current build and once against
-## REF_EXE (same THREADS/DEGREE/args/seed/phonon-count for both), then
-## compares the two run directories strictly. Prints PASS/DIFF (with
-## the case's parameters) and records any DIFF in 'any_diff'.
+## Runs SCENARIO (the run_aniso_case.sh scenario name: "lopnor" or
+## "crustpinch", used to pick the right source/receiver/grid command
+## line) once against the current build and once against REF_EXE, both
+## with ANISO_ARGS as --model-args and the same THREADS/DEGREE/seed/
+## phonon-count, then compares the two run directories strictly. LABEL
+## names the case in PASS/DIFF output and the two runs' work directories
+## -- distinct from SCENARIO so two cases sharing a SCENARIO (e.g.
+## "lopnor" and the prolate variant, both still the "lopnor"
+## run_aniso_case.sh scenario) get distinguishable output and don't
+## overwrite each other's work directory. Records any DIFF in
+## 'any_diff'.
 ##
 run_case() {
-  _rc_scenario=$1
-  _rc_args=$2
-  _rc_threads=$3
-  _rc_degree=$4
-  _rc_label="$_rc_scenario threads=$_rc_threads degree=$_rc_degree"
+  _rc_label_name=$1
+  _rc_scenario=$2
+  _rc_args=$3
+  _rc_threads=$4
+  _rc_degree=$5
+  _rc_label="$_rc_label_name threads=$_rc_threads degree=$_rc_degree"
 
-  _rc_cur="$work/$_rc_scenario-t$_rc_threads-d$_rc_degree-cur"
-  _rc_ref="$work/$_rc_scenario-t$_rc_threads-d$_rc_degree-ref"
+  _rc_cur="$work/$_rc_label_name-t$_rc_threads-d$_rc_degree-cur"
+  _rc_ref="$work/$_rc_label_name-t$_rc_threads-d$_rc_degree-ref"
 
   R3D_EXE="$ROOT/main" TOA_DEGREE="$_rc_degree" \
     "$ROOT/tests/run_aniso_case.sh" "$_rc_scenario" "$_rc_threads" "$_rc_cur" "" "$_rc_args"
@@ -101,8 +116,9 @@ run_case() {
 
 for _degree in 5 7; do
   for _threads in 1 "$CMP_THREADS"; do
-    run_case lopnor "$lopnor_21" "$_threads" "$_degree"
-    run_case crustpinch "$crustpinch_42" "$_threads" "$_degree"
+    run_case lopnor          lopnor     "$lopnor_21"         "$_threads" "$_degree"
+    run_case lopnor-prolate  lopnor     "$lopnor_prolate_21" "$_threads" "$_degree"
+    run_case crustpinch      crustpinch "$crustpinch_42"     "$_threads" "$_degree"
   done
 done
 

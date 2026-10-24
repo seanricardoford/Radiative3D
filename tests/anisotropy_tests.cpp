@@ -2250,6 +2250,65 @@ TEST(parallel_for_covers_and_rethrows) {
              << " > 999");
   }
 
+  // Broader (n, threads) coverage (brief's Step 1 extension): n values
+  // spanning smaller-than-, comparable-to-, and much-larger-than- the
+  // chunked claiming grain ('max(1, n/(threads*8))', parallel.hpp), and
+  // not always a multiple of it (100003 is prime). For each combination:
+  // (1) a non-throwing run visits every index in [0,n) exactly once
+  // (same per-index check as above, not just a total); (2) a run that
+  // throws std::logic_error("boom") at i==n/2 is rethrown as exactly
+  // that exception, and no index is ever visited more than once --
+  // regardless of how many higher indices a chunk straddling n/2 skips,
+  // or how many chunks past it other threads had already claimed before
+  // the failure was recorded.
+  const Index extN[] = {1, 7, 1000, 100003};
+  const unsigned extThreads[] = {2, 16, 64};
+  for (std::size_t ni = 0; ni < sizeof(extN)/sizeof(extN[0]); ++ni) {
+    const Index n = extN[ni];
+    for (std::size_t ti = 0; ti < sizeof(extThreads)/sizeof(extThreads[0]); ++ti) {
+      const unsigned threads = extThreads[ti];
+
+      std::vector<std::atomic<int> > hits(n);
+      for (Index i = 0; i < n; ++i) {hits[i].store(0);}
+      ParallelFor((Index) 0, n, threads, [&](Index i) {
+        hits[i].fetch_add(1);
+      });
+      for (Index i = 0; i < n; ++i) {
+        CHECK_MSG(hits[i].load() == 1,
+                 "n=" << n << " threads=" << threads << " index=" << i
+                 << " hit-count=" << hits[i].load());
+      }
+
+      const Index mid = n / 2;
+      std::vector<std::atomic<int> > hits2(n);
+      for (Index i = 0; i < n; ++i) {hits2[i].store(0);}
+      bool threw2 = false;
+      std::string what2;
+      try {
+        ParallelFor((Index) 0, n, threads, [&](Index i) {
+          hits2[i].fetch_add(1);
+          if (i == mid) {throw std::logic_error("boom");}
+        });
+      } catch (const std::logic_error & e) {
+        threw2 = true;
+        what2 = e.what();
+      } catch (...) {
+        threw2 = true;
+        what2 = "<unexpected exception type>";
+      }
+      CHECK_MSG(threw2, "n=" << n << " threads=" << threads
+               << ": expected ParallelFor to throw");
+      CHECK_MSG(what2 == "boom",
+               "n=" << n << " threads=" << threads
+               << ": what()=\"" << what2 << "\"");
+      for (Index i = 0; i < n; ++i) {
+        CHECK_MSG(hits2[i].load() <= 1,
+                 "n=" << n << " threads=" << threads << " index=" << i
+                 << " visited " << hits2[i].load() << " times");
+      }
+    }
+  }
+
 }
 
 
@@ -2972,6 +3031,166 @@ TEST(axi_p_urel_matches_canonical) {
 
   ECS.SetMapping(EarthCoords::ENU_ORTHO);  // restore for later tests
 
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
+// ****  TASK 5b TESTS: Vectorized bound kernel, bit-identical        ****
+// ****                                                              ****
+//
+
+// ::: CheckAxiRatioRunMatchesScalar<AhGeAz>(sp) :::
+//
+//   Brief's Step 1 test: builds the representative geometry a degree-7
+//   AxiProposal construction would use internally (AxiProposal::
+//   kRepDegree==6 caps the representative count below degree 7's own
+//   327,680 fine directions, so repBlock==4 and every representative's
+//   radius is nonzero -- the same reason
+//   CheckAxiGeometryThreadInvariant(7), above, picks degree 7).
+//   GetOrBuildAxiGeometry()/BuildAxiGeometry() (aniso_axi.cpp) that would
+//   normally compute this are file-local (anonymous namespace) and
+//   keyed to a process-wide cache this test shouldn't disturb, so the
+//   geometry is reproduced here directly from AxiProposal's own public
+//   degree constants instead -- a fresh degree-kRepDegree TesselSphere
+//   for the centres, each one's radius the largest angle to any of its
+//   own block of degree-7 fine directions, exactly BuildAxiGeometry()'s
+//   formula.
+//
+//   For every one of AxiProposal's own 45 P and 405 S incidence bins
+//   (same u_c/delta formulas as the constructor and
+//   CheckAxiTablesThreadInvariant, above) and both of that bin type's
+//   (k_in,k_out) pairs (P: (kP,kP),(kP,kS); S: (kS,kP),(kS,kS)),
+//   RatioRun<AhGeAz>()'s output must equal BoundRatio()'s, exactly, for
+//   every representative -- not just within a tolerance, since the only
+//   difference between them is meant to be scalar vs. (GCC-)vectorized
+//   code generation for the *same* arithmetic (see aniso_axi.cpp's
+//   RatioRun() doc comment): any mismatch would mean the vectorized loop
+//   rounds some representative/bin combination differently, which the
+//   task's "never accept a mismatch" rule treats as a bug to fix, not a
+//   tolerance to loosen.
+//
+template <bool AhGeAz>
+static void CheckAxiRatioRunMatchesScalar(const ScatterParams & sp) {
+
+  const S2::TesselSphere & toa7 = UseTOADegree(7);
+
+  S2::TesselSphere repTess(S2::TESS_ICO, AxiProposal::kRepDegree);
+  const Index numReps  = (Index) repTess.size();
+  const Index repBlock = (Index) toa7.size() / numReps;
+  CHECK(repBlock * numReps == (Index) toa7.size());
+  CHECK(repBlock > 1);  // degree 7 > kRepDegree: radii are nonzero.
+
+  std::vector<R3::XYZ> centers(numReps);
+  std::vector<Real> radius(numReps, 0.0);
+  for (Index i = 0; i < numReps; ++i) {
+    centers[i] = repTess[i].XYZ();
+    const Index base = i * repBlock;
+    Real maxAngle = 0.0;
+    for (Index k = base; k < base + repBlock; ++k) {
+      Real c = centers[i].Dot(toa7[k].XYZ());
+      if (c > 1.0)  c = 1.0;
+      if (c < -1.0) c = -1.0;
+      const Real ang = acos(c);
+      if (ang > maxAngle) {maxAngle = ang;}
+    }
+    radius[i] = maxAngle;
+  }
+
+  const Real aMin = sp.GetA();
+  const Real ah   = sp.GetAx();
+  const Real az   = sp.GetAz();
+  CHECK(AhGeAz == (ah >= az));
+
+  std::vector<AxiProposal::BoundRep> repsPP(numReps), repsPS(numReps),
+                                     repsSP(numReps), repsSS(numReps);
+  for (Index i = 0; i < numReps; ++i) {
+    repsPP[i] = AxiProposal::PrepareBoundRep(
+      centers[i], radius[i], sp.GetKP(), sp.GetKP(), aMin);
+    repsPS[i] = AxiProposal::PrepareBoundRep(
+      centers[i], radius[i], sp.GetKP(), sp.GetKS(), aMin);
+    repsSP[i] = AxiProposal::PrepareBoundRep(
+      centers[i], radius[i], sp.GetKS(), sp.GetKP(), aMin);
+    repsSS[i] = AxiProposal::PrepareBoundRep(
+      centers[i], radius[i], sp.GetKS(), sp.GetKS(), aMin);
+  }
+
+  AxiProposal::RepSoA soaPP, soaPS, soaSP, soaSS;
+  soaPP.Assign(repsPP); soaPS.Assign(repsPS);
+  soaSP.Assign(repsSP); soaSS.Assign(repsSS);
+
+  std::vector<Real> ratio0(numReps), ratio1(numReps);
+  long long checked = 0;
+
+  // P bins: theta only (u_c/delta exactly as the AxiProposal
+  // constructor's own P-bin loop), 'repsPP'/'repsPS'.
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    const Real theta_lo = (2.0*b)     * Geometry::DtoR;
+    const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
+    const Real theta_c  = 0.5*(theta_lo+theta_hi);
+    const Real delta    = 0.5*(theta_hi-theta_lo);
+    const R3::XYZ u_c(-sin(theta_c), 0.0, cos(theta_c));
+    const AxiProposal::BinCap cap = AxiProposal::MakeBinCap(u_c, delta);
+
+    AxiProposal::RatioRun<AhGeAz>(soaPP, cap, ah, az, &ratio0[0]);
+    AxiProposal::RatioRun<AhGeAz>(soaPS, cap, ah, az, &ratio1[0]);
+
+    for (Index i = 0; i < numReps; ++i) {
+      const Real wantPP = AxiProposal::BoundRatio(repsPP[i], cap, ah, az);
+      CHECK_MSG(ratio0[i] == wantPP,
+               "P bin=" << b << " PP rep=" << i << ": RatioRun="
+               << ratio0[i] << " BoundRatio=" << wantPP);
+      const Real wantPS = AxiProposal::BoundRatio(repsPS[i], cap, ah, az);
+      CHECK_MSG(ratio1[i] == wantPS,
+               "P bin=" << b << " PS rep=" << i << ": RatioRun="
+               << ratio1[i] << " BoundRatio=" << wantPS);
+      checked += 2;
+    }
+  }
+
+  // S bins: theta and chi (same formulas as the constructor's S-bin
+  // loop), 'repsSP'/'repsSS'.
+  for (int b = 0; b < AxiProposal::kThetaBins; ++b) {
+    for (int c = 0; c < AxiProposal::kChiBins; ++c) {
+      const Real theta_lo = (2.0*b)     * Geometry::DtoR;
+      const Real theta_hi = (2.0*b+2.0) * Geometry::DtoR;
+      const Real theta_c  = 0.5*(theta_lo+theta_hi);
+      const Real chi_lo = (10.0*c)      * Geometry::DtoR;
+      const Real chi_hi = (10.0*c+10.0) * Geometry::DtoR;
+      const Real chi_c  = 0.5*(chi_lo+chi_hi);
+      const Real delta = 0.5*(theta_hi-theta_lo)
+                        + sin(theta_hi)*0.5*(chi_hi-chi_lo);
+      const R3::XYZ u_c(-sin(theta_c)*cos(chi_c),
+                        sin(theta_c)*sin(chi_c),
+                        cos(theta_c));
+      const AxiProposal::BinCap cap = AxiProposal::MakeBinCap(u_c, delta);
+
+      AxiProposal::RatioRun<AhGeAz>(soaSP, cap, ah, az, &ratio0[0]);
+      AxiProposal::RatioRun<AhGeAz>(soaSS, cap, ah, az, &ratio1[0]);
+
+      for (Index i = 0; i < numReps; ++i) {
+        const Real wantSP = AxiProposal::BoundRatio(repsSP[i], cap, ah, az);
+        CHECK_MSG(ratio0[i] == wantSP,
+                 "S bin=" << b << "," << c << " SP rep=" << i
+                 << ": RatioRun=" << ratio0[i] << " BoundRatio=" << wantSP);
+        const Real wantSS = AxiProposal::BoundRatio(repsSS[i], cap, ah, az);
+        CHECK_MSG(ratio1[i] == wantSS,
+                 "S bin=" << b << "," << c << " SS rep=" << i
+                 << ": RatioRun=" << ratio1[i] << " BoundRatio=" << wantSS);
+        checked += 2;
+      }
+    }
+  }
+
+  CHECK(checked == 2LL * (AxiProposal::kThetaBins
+                         + AxiProposal::kThetaBins*AxiProposal::kChiBins)
+                  * numReps);
+
+}
+
+TEST(axi_ratio_run_matches_scalar) {
+  CheckAxiRatioRunMatchesScalar<true>(LopNorCrust(2, 2, 0.5));     // ah >= az
+  CheckAxiRatioRunMatchesScalar<false>(LopNorCrust(0.5, 0.5, 2));  // ah <  az
 }
 
 
