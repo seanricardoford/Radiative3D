@@ -447,6 +447,57 @@ git commit -m "Locate incidence bins once and accept axisymmetric proposals in t
 
 ---
 
+### Task 5b: Remove the remaining axisymmetric build overhead (added 2026-10-23, ruling R6)
+
+A profile and prototype at `6edbe97` measured the degree-9 Lop Nor zero-phonon builds (median of 3, default threads): axi 7.50 s, tri 4.06 s, iso 3.65 s. The axi−tri gap breaks down as:
+- ~1.7 s: `FingerprintOf` runs serially for every scatterer over all 5.24M directions, calling `XYZ()` (sin and cos) on each.
+- ~0.6 s wall (9.7 s CPU): the 450-bin build, 7.3 s of it in `BoundRatio`.
+- ~2 s of CPU in each of `PrepareBoundRep` and `BuildReportRows`: one-index-at-a-time `ParallelFor` claiming contends.
+
+The prototype at `.superpowers/sdd/2026-10-17-axisymmetric-sampler-performance/proto_ABDE-vs-6edbe97.patch` reached axi 4.51 s, tri 3.87 s and iso 3.65 s (axi at `--threads=1`: 21.4 s), with every output bit-identical.
+
+**Files:**
+- Modify: `parallel.hpp`, `aniso_axi.hpp`, `aniso_axi.cpp`, `tests/compare_aniso_reference.sh`
+- Test: `tests/anisotropy_tests.cpp`
+
+**Interfaces:**
+- Consumes: the Task 5 code (`Locate`, `AxiRatio` and the new sampling path). This task changes construction only.
+- Produces:
+  - **`ParallelFor` claims contiguous chunks:** `grain = max(1, n/(threads*8))`; each claim takes `[lo, min(lo+grain, end))` from a 64-bit atomic cursor. The contract is unchanged: every index exactly once; a single `body(i)` call site, used both inline and in the workers; after a throw, unclaimed and later indices are skipped and the exception from the lowest throwing index is rethrown.
+  - **Fingerprint (ruling R6, amending R2):** `Σ_k (k+1)·(θ_k + 2·φ_k)` over the take-off-angle set, using the stored θ and φ with no trigonometry. It is computed as 64 fixed chunks (chunk c covers `[n·c/64, n·(c+1)/64)`, computed in 64-bit) inside a `ParallelFor`, and the partial sums are added serially in chunk order. The value is independent of thread count.
+  - `AxiProposal` private `struct RepSoA { std::vector<Real> Mx, My, Mz, Mr, Rho, M2Lo, M2Hi, Numer; void Assign(const std::vector<BoundRep> &); }` holds one array set per (k_in, k_out) pair.
+  - `template <bool AhGeAz> static void RatioRun(const RepSoA &, const BinCap &, Real ah, Real az, Real * ratio)` writes `ratio[i]` for every representative using exactly `BoundRatio`'s per-element arithmetic. Under GCC (`#if defined(__GNUC__) && !defined(__clang__)`) it carries `__attribute__((optimize("no-math-errno","no-trapping-math")))`. To let the loop vectorize, it uses ternaries equivalent to `std::max`/`std::min`, computes both cap-edge values before selecting, and uses `&` in the `s2_lo` test.
+
+- [ ] **Step 1: Write the failing tests.**
+
+```cpp
+test_axi_ratio_run_matches_scalar: degree 7; specs LopNorCrust(2,2,0.5) (ah >= az) and LopNorCrust(0.5,0.5,2) (ah < az);
+    for every P and S bin cap and each of the bin type's two (k_in,k_out) pairs: RatioRun<AhGeAz>(...)[i] ==
+    BoundRatio(rep_i, cap, ah, az) for every representative i (exact ==)
+test_parallel_for_covers_and_rethrows (extend): also n in {1, 7, 1000, 100003} with threads {2, 16, 64}: every index
+    exactly once; throw at i == n/2 -> rethrown, no index visited twice
+```
+
+- [ ] **Step 2: Run `tests/test_anisotropy_unit.sh`.** Expect a compile failure on `RatioRun`.
+- [ ] **Step 3: Implement.** Use the prototype patch as a guide, adapting it to the post-Task-5 code.
+  - Implement the chunked claiming, the R6 fingerprint, `RepSoA` and `RatioRun` (used by `BuildBinTable`).
+  - Take each cell's max over a nested cell-then-representative loop instead of dividing per element.
+  - When a cell's `maxRatio ≥ 1`, set its bound to M without calling `pow`. This is exact: `pow(x ≥ 1, p > 0) ≥ 1` makes `min(M, M·pow)` equal M.
+  - Do not adopt the saturation early-exit: it skips about 5% of evaluations and blocks vectorization.
+- [ ] **Step 4: Extend `tests/compare_aniso_reference.sh`.** Add a prolate case: the lopnor seven-value layout with crust `0.8,0.01,0.5,0.5,1.0,0.3,1000` and mantle `0.8,0.01,0.7,0.7,1.4,0.5,300`, which exercises the `ah < az` branch.
+- [ ] **Step 5: Run the tests.**
+  - `tests/test_anisotropy_unit.sh` passes.
+  - `REF_EXE=/tmp/r3d-aniso-ref5/main tests/compare_aniso_reference.sh` passes every case, including the prolate one. That binary is a build of Task 5's final commit, made by the controller; this task must leave every output byte-identical to it.
+- [ ] **Step 6: Measure.** Time zero-phonon degree-9 Lop Nor builds (iso, tri, axi) as the median of 3 runs, at default threads and at `--threads=1`.
+- [ ] **Step 7: Run the full check, then commit.**
+
+```bash
+git add parallel.hpp aniso_axi.hpp aniso_axi.cpp tests/anisotropy_tests.cpp tests/compare_aniso_reference.sh
+git commit -m "Remove remaining axisymmetric build overhead"
+```
+
+---
+
 ### Task 6: Near-axisymmetric validation
 
 **Files:**
