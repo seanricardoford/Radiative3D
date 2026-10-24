@@ -83,6 +83,16 @@ BENCH_CRUSTPINCH_PHONONS=${BENCH_CRUSTPINCH_PHONONS:-200000}
 BENCH_THREADS=${BENCH_THREADS:-auto}
 BENCH_REPEATS=${BENCH_REPEATS:-3}
 
+case "$BENCH_REPEATS" in
+  ''|*[!0-9]*)
+    echo "ERROR: BENCH_REPEATS must be a positive integer (got '$BENCH_REPEATS')" >&2
+    exit 1 ;;
+esac
+if [ "$BENCH_REPEATS" -lt 1 ]; then
+  echo "ERROR: BENCH_REPEATS must be >= 1 (got '$BENCH_REPEATS')" >&2
+  exit 1
+fi
+
 if [ "$BENCH_THREADS" = "auto" ]; then
   BENCH_THREADS=$(auto_threads)
 fi
@@ -150,15 +160,15 @@ median3() {
 # median_n v1 v2 ... -> median of N values (any count >= 1; BENCH_REPEATS
 # need not be 3, unlike median3's fixed-3 isotropic check above).
 median_n() {
-  n=$#
-  sorted=$(printf '%s\n' "$@" | sort -n)
-  mid=$(( (n + 1) / 2 ))
-  if [ $((n % 2)) -eq 1 ]; then
-    printf '%s\n' "$sorted" | sed -n "${mid}p"
+  _mn_n=$#
+  _mn_sorted=$(printf '%s\n' "$@" | sort -n)
+  _mn_mid=$(( (_mn_n + 1) / 2 ))
+  if [ $((_mn_n % 2)) -eq 1 ]; then
+    printf '%s\n' "$_mn_sorted" | sed -n "${_mn_mid}p"
   else
-    lo=$(printf '%s\n' "$sorted" | sed -n "${mid}p")
-    hi=$(printf '%s\n' "$sorted" | sed -n "$((mid + 1))p")
-    awk "BEGIN{printf \"%.3f\", ($lo+$hi)/2}"
+    _mn_lo=$(printf '%s\n' "$_mn_sorted" | sed -n "${_mn_mid}p")
+    _mn_hi=$(printf '%s\n' "$_mn_sorted" | sed -n "$((_mn_mid + 1))p")
+    awk "BEGIN{printf \"%.3f\", ($_mn_lo+$_mn_hi)/2}"
   fi
 }
 
@@ -231,7 +241,7 @@ print_row() {
   _pr_sameratio=$8; _pr_samegate=$9
 
   _pr_slowdown=$(awk "BEGIN{printf \"%.3f\", $_pr_total/$_pr_tiso}")
-  if awk "BEGIN{exit !($_pr_slowdown > 2.0)}"; then
+  if awk "BEGIN{exit !($_pr_total/$_pr_tiso > 2.0)}"; then
     _pr_gate="GATE"
   else
     _pr_gate="ok"
@@ -268,7 +278,7 @@ benchmark_scenario() {
       t_gen=$(bench_total "$CURRENT_EXE" "$scenario" "$phonons" "$gen_model")
 
       same_ratio=$(awk "BEGIN{printf \"%.3f\", $t_axi/$t_gen}")
-      if awk "BEGIN{exit !($same_ratio > 1.05)}"; then
+      if awk "BEGIN{exit !($t_axi/$t_gen > 1.05)}"; then
         same_gate="SLOW"
         echo "ERROR: $scenario eps=$eps r=$r axi/gen ratio $same_ratio exceeds 1.05 threshold" >&2
         FAIL=1
