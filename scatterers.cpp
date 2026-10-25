@@ -675,8 +675,20 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
 
   const Real k_in = (intype == RAY_P) ? mParams.GetKP() : mParams.GetKS();
 
-  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol);  // Same
-                              // construction as Phonon::Transform().
+  // Incoming P has no physical polarization-rotation angle, but the
+  // equal-weight take-off-angle quadrature is not rotation-invariant, so
+  // the frame AA is built in determines the realized P rate (see
+  // docs/toa-quadrature-bias.md). Use the canonical frame -- the
+  // highest-rate orientation, same as AttemptAxisymmetricScatter()'s
+  // u_rel closed form -- instead of the carried 'pol', so the two
+  // samplers agree for already-scattered P phonons. S incidence keeps
+  // the real carried polarization unchanged.
+  const Real pol_used = (intype == RAY_P) ?
+                        CanonicalPPolarization(dir, ECS.GetUp(loc)) : pol;
+
+  const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), pol_used);  // Same
+                              // construction as Phonon::Transform()
+                              // would use with pol_used as mPol.
   const R3::XYZ dirXYZ = dir.XYZ();
 
   out_types_e conv = GPP;
@@ -715,13 +727,20 @@ Scatterer::AttemptAnisotropicScatter(raytype intype, const R3::XYZ & loc,
                               // event is found.
 
   AnisoAttempt result;
-  result.InPol = pol;
+  result.InPol = pol;        // Non-real attempts carry the incoming pol
+                              // as-is, matching AttemptAxisymmetric-
+                              // Scatter(): Propagate() reads InPol only
+                              // when IsReal (phonons.cpp).
   result.Conv = (int) conv;
   result.Toa = toa_index;
   result.Draws = draws;
   result.IsReal = accepted;
 
   if (accepted) {
+    if (intype == RAY_P) result.InPol = pol_used;  // Canonical frame,
+                              // so a later scattering event off this
+                              // (now real) P phonon also starts from
+                              // the canonical orientation.
     result.Rel = BuildRelativePhonon(conv, toa_index, intype);
   }
 

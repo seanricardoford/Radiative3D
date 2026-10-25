@@ -174,17 +174,21 @@ static const S2::TesselSphere & UseTOADegree(int degree) {
   return *slot;
 }
 
-// ::: LopNorCrust(ax,ay,az,kappa,eps) :::
+// ::: LopNorCrust(ax,ay,az,kappa,eps,vp,vs) :::
 //
 //   A ScatterParams reference fixture at Lop Nor crustal velocities
-//   (Vp 6.2, Vs 3.6 km/s) and 2 Hz, with caller-chosen heterogeneity
-//   scale lengths. nu is fixed at 0.8, matching the Lop Nor crust layer
-//   (see user_LopNorCylMoho_inc.cpp).
+//   (Vp 6.2, Vs 3.6 km/s by default) and 2 Hz, with caller-chosen
+//   heterogeneity scale lengths. nu is fixed at 0.8, matching the Lop
+//   Nor crust layer (see user_LopNorCylMoho_inc.cpp). The trailing
+//   vp/vs parameters default to the crust values so every existing call
+//   site is unaffected; test_p_frame_consistency passes the Lop Nor
+//   mantle velocities through them.
 //
 static ScatterParams LopNorCrust(Real ax, Real ay, Real az,
-                                  Real kappa=0.5, Real eps=0.01) {
+                                  Real kappa=0.5, Real eps=0.01,
+                                  Real vp=6.2, Real vs=3.6) {
   ScatterParams::SetFrequencyHertz(2.0);
-  return ScatterParams(Elastic::VpVs(6.2,3.6),
+  return ScatterParams(Elastic::VpVs(vp,vs),
                         Elastic::HSnexyzk(0.8,eps,ax,ay,az,kappa));
 }
 
@@ -795,6 +799,14 @@ TEST(isolated_nodeflect) {
   const S2::ThetaPhi dirP(60.0 * Geometry::DtoR, 30.0 * Geometry::DtoR);
   const Real pol = 0.37;
 
+  // Task 6b: SetNoDeflect() only swaps BuildRelativePhonon()'s result for
+  // a non-deflected dummy; it doesn't touch the frame AttemptAnisotropic-
+  // Scatter() samples from or the InPol it reports. For P incidence that
+  // frame -- and a real event's InPol -- is the canonical one, not the
+  // carried 'pol' (see docs/toa-quadrature-bias.md).
+  const Real canonicalPolP =
+    Scatterer::CanonicalPPolarization(dirP, ECS.GetUp(origin));
+
   int realCountP = 0;
   for (int i = 0; i < 2000; ++i) {
     Scatterer::AnisoAttempt att =
@@ -804,7 +816,7 @@ TEST(isolated_nodeflect) {
       CHECK(att.Rel.GetDirection().Theta() < 1.e-6);  // nudge_if_singular() keeps
                                                       // theta slightly off zero
       CHECK(att.Rel.GetRaytype() == RAY_P);
-      CHECK(att.InPol == pol);
+      CHECK(att.InPol == canonicalPolP);
     }
   }
   CHECK_MSG(realCountP > 0, "no real P attempts observed");
@@ -3625,6 +3637,181 @@ TEST(near_axi_cost) {
 
   out.close();
   Scatterer::SetBuildThreads(1);  // restore
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
+// ****  TASK 6b: Canonical P frame in the general sampler           ****
+// ****                                                              ****
+//
+// Investigation (2026-10-17-axisymmetric-sampler-performance, ruling
+// R10): for P incidence the equal-weight take-off-angle grid is not
+// rotation-invariant, so the integrated rate depends on the (unphysical)
+// P frame angle about the ray. The axisymmetric sampler always uses the
+// canonical frame (CanonicalPPolarization()); before this task the
+// general sampler used whatever polarization-rotation angle the
+// incoming phonon happened to carry, so already-scattered P phonons hit
+// the two samplers with different effective rates. See
+// docs/toa-quadrature-bias.md for the mechanism and example magnitudes.
+//
+
+// ::: TwoSampleChiSquare(A, G, dof) :::
+//
+//   The unequal-N two-sample chi-square statistic test_axi_matches_
+//   general() and test_near_axi_sampler_matches() use inline, factored
+//   out here for test_p_frame_consistency(): chi2 = sum_i (a_i*Ng -
+//   g_i*Na)^2 / (Na*Ng*(a_i+g_i)), summed over bins whose combined count
+//   a_i+g_i is at least 20. Returns the total chi2 and sets 'dof' to the
+//   number of bins included.
+//
+static Real TwoSampleChiSquare(const std::map<std::pair<int,int>,int> & A,
+                               const std::map<std::pair<int,int>,int> & G,
+                               int & dof) {
+  Real Na = 0, Ng = 0;
+  for (std::map<std::pair<int,int>,int>::const_iterator it = A.begin();
+       it != A.end(); ++it) {Na += it->second;}
+  for (std::map<std::pair<int,int>,int>::const_iterator it = G.begin();
+       it != G.end(); ++it) {Ng += it->second;}
+
+  Real chi2 = 0; dof = 0;
+  std::map<std::pair<int,int>,int> keys = A;
+  for (std::map<std::pair<int,int>,int>::const_iterator it = G.begin();
+       it != G.end(); ++it) {keys[it->first] = 0;}
+  for (std::map<std::pair<int,int>,int>::const_iterator it = keys.begin();
+       it != keys.end(); ++it) {
+    const Real a = A.count(it->first) ? A.at(it->first) : 0;
+    const Real g = G.count(it->first) ? G.at(it->first) : 0;
+    if (a+g < 20.0) continue;
+    const Real num = a*Ng - g*Na;
+    chi2 += num*num/(Na*Ng*(a+g));
+    ++dof;
+  }
+  return chi2;
+}
+
+
+TEST(p_frame_consistency) {
+
+  UseTOADegree(7);  // Matches the investigation's diagnostic (debug-
+                    // scratch.patch, scratch_lopnor_r10_abs).
+
+  // Lop Nor r=10-like crust and mantle (task-6b-brief.md, Step 1):
+  struct Layer {const char * name; Real vp, vs, a, az, kappa;};
+  const Layer layers[] = {
+    {"crust",  6.40, 3.63, 5.0, 0.5, 0.3},
+    {"mantle", 8.07, 4.63, 7.0, 0.7, 0.5},
+  };
+
+  const Real thetasDeg[] = {30.0, 60.0, 89.0};
+  const Real phiDeg = 20.0;        // Arbitrary, non-axis-aligned, as in
+                                   // the investigation's diagnostic.
+  const Real rot = 0.7;            // Non-canonical carried P
+                                   // polarization-rotation angle (rad);
+                                   // the investigation's diagnostic
+                                   // tested P only at this angle.
+  const int nDist = 20000;
+  const int targetReal = 100000;
+
+  const R3::XYZ origin(0, 0, 0);
+  S2::TesselSphere deg2(S2::TESS_ICO, 2);  // For binning absolute
+                              // outgoing directions, independent of the
+                              // degree-7 array UseTOADegree(7) pointed
+                              // PhononSource at above -- built directly
+                              // rather than through UseTOADegree() so it
+                              // never becomes the global TOA array (that
+                              // would desync it from the degree-7
+                              // mPDists/mpAxi tables the scatterers
+                              // below are built against).
+
+  for (std::size_t li = 0; li < sizeof(layers)/sizeof(layers[0]); ++li) {
+    const Layer & L = layers[li];
+
+    ScatterParams spAxi = LopNorCrust(L.a, L.a, L.az, L.kappa, 0.01,
+                                      L.vp, L.vs);                // ax==ay
+    ScatterParams spGen = LopNorCrust(L.a, L.a*(1.0+1.0e-5), L.az, L.kappa,
+                                      0.01, L.vp, L.vs);          // ax!=ay
+    Scatterer axiScat(spAxi, Scatterer::SAMPLER_AUTO);
+    Scatterer genScat(spGen, Scatterer::SAMPLER_AUTO);
+    CHECK_MSG(axiScat.GetReportMFPs().size() == 8,
+             L.name << ": expected AUTO to route ax==ay to the 8-state "
+             "AXI branch, got " << axiScat.GetReportMFPs().size());
+    CHECK_MSG(genScat.GetReportMFPs().size() == 9,
+             L.name << ": expected AUTO to route ax!=ay to the 9-state "
+             "GENERAL branch, got " << genScat.GetReportMFPs().size());
+
+    for (std::size_t ti = 0; ti < sizeof(thetasDeg)/sizeof(thetasDeg[0]);
+         ++ti) {
+      const S2::ThetaPhi dirTP(thetasDeg[ti]*Geometry::DtoR,
+                               phiDeg*Geometry::DtoR);
+
+      // A 'pol' vector whose RotationForS1(dirTP, pol) is 'rot': the
+      // same construction test_axi_draws_per_event() and others use to
+      // hand a chosen rotation angle to the R3::XYZ-taking helpers.
+      const R3::OrthoAxes polAA(dirTP.Theta(), dirTP.Phi(), rot);
+      const R3::XYZ pol = polAA.S1();
+
+      // --- mean distance to a real event, axi vs general ---
+      const Real meanA = MeanDistanceToRealEvent(axiScat, RAY_P, dirTP,
+                                                 pol, nDist);
+      const Real meanG = MeanDistanceToRealEvent(genScat, RAY_P, dirTP,
+                                                 pol, nDist);
+      const Real sigA = meanA / std::sqrt((Real) nDist);
+      const Real sigG = meanG / std::sqrt((Real) nDist);
+      const Real tol = 4.0 * std::sqrt(sigA*sigA + sigG*sigG);
+      CHECK_MSG(std::fabs(meanA - meanG) < tol,
+               L.name << " theta=" << thetasDeg[ti] << ": meanA=" << meanA
+               << " meanG=" << meanG << " tol=" << tol << " z="
+               << (meanA-meanG)/std::sqrt(sigA*sigA+sigG*sigG));
+
+      // --- joint (Conv, absolute outgoing direction cell) two-sample
+      //     chi-square, applying InPol/Rel through Phonon::Transform()
+      //     exactly as Phonon::Propagate() does on a real event ---
+      std::map<std::pair<int,int>, int> countsA, countsG;
+      int collectedA = 0, collectedG = 0;
+      while (collectedA < targetReal || collectedG < targetReal) {
+        if (collectedA < targetReal) {
+          const Scatterer::AnisoAttempt a =
+            axiScat.AttemptAnisotropicScatter(RAY_P, origin, dirTP, rot);
+          if (a.IsReal) {
+            Phonon ph(dirTP, RAY_P);
+            ph.SetPolarization(a.InPol);
+            ph.Transform(a.Rel);
+            const R3::XYZ e = ph.GetDirection().XYZ();
+            const int cell =
+              deg2.GetBestIndexFromPoint(S2::ThetaPhi(e.Theta(), e.Phi()));
+            countsA[std::make_pair(a.Conv, cell)]++;
+            ++collectedA;
+          }
+        }
+        if (collectedG < targetReal) {
+          const Scatterer::AnisoAttempt g =
+            genScat.AttemptAnisotropicScatter(RAY_P, origin, dirTP, rot);
+          if (g.IsReal) {
+            Phonon ph(dirTP, RAY_P);
+            ph.SetPolarization(g.InPol);
+            ph.Transform(g.Rel);
+            const R3::XYZ e = ph.GetDirection().XYZ();
+            const int cell =
+              deg2.GetBestIndexFromPoint(S2::ThetaPhi(e.Theta(), e.Phi()));
+            countsG[std::make_pair(g.Conv, cell)]++;
+            ++collectedG;
+          }
+        }
+      }
+
+      int dof = 0;
+      const Real chi2 = TwoSampleChiSquare(countsA, countsG, dof);
+      CHECK_MSG(dof > 0, L.name << " theta=" << thetasDeg[ti]
+               << ": no bins had combined count >= 20");
+      const Real chi2_per_dof = chi2 / dof;
+      CHECK_MSG(chi2_per_dof < 1.5,
+               L.name << " theta=" << thetasDeg[ti]
+               << ": chi2/dof too large: " << chi2_per_dof
+               << " (dof=" << dof << ")");
+    }
+  }
 
 }
 

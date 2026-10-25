@@ -41,12 +41,42 @@ The area-weighted values match the original design's independent
 cross-check table, and Task 6 of the 2026-10-16 plan got 374.7 km from a
 200k-point Fibonacci sphere.
 
+## Frame orientation for P incidence
+
+Incoming P has no physical polarization-rotation angle, but a sampler
+must still pick some frame to build its take-off-angle grid in, and the
+equal-weight quadrature's bias makes the realized P rate depend on that
+otherwise-meaningless choice. Scanning the frame angle about the ray, for
+a Lop Nor r=10-like model (unchanged at `--toa-degree` 5, 7, and 8):
+
+- Crust at 60 degrees from vertical: MFP 1442–1518 km across frame angles.
+- Mantle at 89 degrees from vertical: MFP 742–826 km across frame angles.
+
+Both the axisymmetric and general samplers use the canonical orientation
+(`Scatterer::CanonicalPPolarization()`), the highest-rate (shortest-MFP)
+end of each range above, so their P results agree, including for an
+already-scattered P phonon that carries an arbitrary polarization-
+rotation angle from its previous scattering event. Before task 6b of the
+2026-10-17-axisymmetric-sampler-performance plan (ruling R10), the
+general sampler used that carried angle to build its take-off-angle grid
+instead of the canonical one, so an already-scattered P phonon's realized
+rate could land anywhere in the range above; `test_p_frame_consistency`
+(`tests/anisotropy_tests.cpp`) checks that the two samplers now agree at
+a representative non-canonical carried angle. An area-weighted quadrature
+(see below) would remove the orientation dependence itself, rather than
+just pin both samplers to its highest point.
+
 ## Provenance
 
 The tables above come from an independent re-implementation of the sampler
 maths (a numpy prototype, not in this repository). The 397.8 km equal-weight
 S90SH figure is reproduced in-repo by `test_report_directional_mfps`
-(`tests/anisotropy_tests.cpp`).
+(`tests/anisotropy_tests.cpp`). The frame-orientation ranges above come
+from the same investigation's diagnostic scan over 24 frame angles
+(2026-10-17-axisymmetric-sampler-performance, `debug-scratch.patch`'s
+`scratch_p_rate_vs_frame`, not in this repository); `test_p_frame_consistency`
+covers the resulting agreement between samplers, not a re-derivation of the
+ranges themselves.
 
 ## Affected code
 
