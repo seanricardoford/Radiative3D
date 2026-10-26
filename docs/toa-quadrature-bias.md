@@ -221,11 +221,10 @@ mean(Ω)/Ω_k modulation described in Mechanism, above.
   no code change; its bounds (`BoundRatio()`/`AcceptanceBound()`, a ratio
   of a cell's proposal weight to that cell's `mPDists` sum) stay valid in
   either mode; for a cell whose weight comes from the `kWeightFloor`
-  floor rather than `BoundRatio()` (`BuildBinTable()`, `aniso_axi.cpp`),
-  the floor itself scales with the weighted `mPDists` sums, so the
-  bound's value does change between modes there -- always looser, never
-  invalid. `area_axi_bounds_valid` and `area_axi_matches_general`
-  confirm this.
+  floor rather than `BoundRatio()` (`BuildBinTable()`), the floor itself
+  scales with the weighted `mPDists` sums, so the bound's value does
+  change between modes there -- always looser, never invalid.
+  `area_axi_bounds_valid` and `area_axi_matches_general` confirm this.
 - `GetRandomScatteredRelativePhonon` (`scatterers.cpp`) and the general
   sampler's majorant -- also unchanged code, inheriting the weighted
   tables the same way.
