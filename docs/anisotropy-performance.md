@@ -110,9 +110,10 @@ Design decision 5's gate compares the axisymmetric sampler against the
 general sampler on the *same medium* (`gen`'s `ay = ax * (1 + 1e-5)`, the
 near-axisymmetric medium): axi total time must be at most 1.05x the gen
 total time in every configuration. In `bench3-full.out`, four rows exceed
-it, all at `eps = 0.01`, all build-dominated (small absolute totals, where
-the axi/gen build-time gap is a larger fraction of the total), all between
-1.05x and 1.08x:
+it -- three at `eps = 0.01` (lopnor r=2, crustpinch r=2, crustpinch r=4)
+and one at `eps = 0.05` (crustpinch r=2) -- all build-dominated (small
+absolute totals, where the axi/gen build-time gap is a larger fraction of
+the total), ranging from 1.053x to 1.082x:
 
 | Scenario | eps | r | axi/gen ratio | axi total (s) | gen total (s) |
 |---|---|---:|---:|---:|---:|
@@ -121,30 +122,42 @@ the axi/gen build-time gap is a larger fraction of the total), all between
 | crustpinch | 0.01 | 4 | 1.078 | 2.47 | 2.29 |
 | crustpinch | 0.05 | 2 | 1.053 | 2.58 | 2.45 |
 
-`progress.md`'s ruling R8 accepted these rows rather than adding a
-fallback (R8 was made against the equivalent `bench2-full.out` run at an
-earlier commit, `42b2fe6`, which showed the same four build-dominated SLOW
-rows; `progress.md` notes that the final run here reproduces the same
-build-dominated pattern that ruling R8 covers):
+This is not the same set of four rows `bench2-full.out` (an earlier
+commit, `42b2fe6`) showed SLOW, even though both runs have exactly four
+SLOW rows: `bench2-full.out` had crustpinch eps=0.01 r=10 SLOW (1.051),
+which passes here (1.046); and did *not* have crustpinch eps=0.05 r=2
+SLOW (1.042 there, passing), which is SLOW here (1.053). Every run
+involved finishes in 6 seconds or less, and every ratio sits within about
+3% of the 1.05 gate -- the verdict for these short, build-dominated
+configurations flips from run to run at the noise level; which specific
+four rows land on which side of 1.05 is not itself a stable fact about
+the code.
 
-> Ruling: R8 -- accept the four SLOW same-medium rows (all eps 0.01,
-> build-dominated, <= 8%, 0.1-0.4 s absolute); no AUTO fallback -- an
-> M-based fallback would forfeit crustpinch's eps 0.05 r=4/10 wins
-> (0.943/0.597) because those same specs are SLOW at eps 0.01, and the
-> remaining lever (lazy per-bin construction) would relax the original
-> spec's read-only-scatterer constraint, which is the user's call -- cost
-> if wrong: weak-scattering axisymmetric runs stay up to ~8% slower than
-> the general sampler on the same medium. Surfaced to the user.
+`progress.md`'s ruling R14 supersedes the plan's earlier ruling R8 with
+these final numbers (R8 was accepted against the equivalent
+`bench2-full.out` run, before the run-to-run flip above and the degree-7
+finding below -- see "Scenario level" under "Near-axisymmetric
+validation" -- were known):
 
-(R8's own cited crustpinch eps=0.05 r=4/10 figures, 0.943/0.597, are from
-`bench2-full.out`; the equivalent figures in the final `bench3-full.out`
-run above are 0.941/0.592 -- the same pattern, not identical runs.) No
-static fallback (such as an aspect-ratio/`M` threshold that routes small
-axisymmetric specs to the general sampler) was implemented, because it
-would have cost more than it saved: it would forfeit real wins at the same
-`eps` for a different `r`, and the only remaining lever that could close
-the gap without a fallback -- lazy per-bin construction -- would relax the
-plan's read-only-scatterer constraint.
+> Ruling: R14 -- supersedes R8 with the final numbers: keep AUTO (no
+> fallback) though bench3 shows four SLOW same-medium rows (lopnor
+> eps0.01 r2 1.082; crustpinch eps0.01 r2 1.075, r4 1.078; crustpinch
+> eps0.05 r2 1.053; all runs <= 6 s, gate flips run to run) and degree-7
+> runs where axi is 1.24-1.51x slower (fixed ~25-30 ms/scatterer setup at
+> 24 threads, ~0.35 s CPU) -- absolute penalty <= ~0.5 s per run vs
+> up-to-2.1x gains on scattering-heavy runs; options for the user:
+> accept, cap representative degree below D at low degrees, lazy per-bin
+> construction (relaxes read-only constraint), or an AUTO heuristic --
+> cost if wrong: weak-scattering/low-degree axisymmetric runs stay up to
+> ~0.5 s slower. Docs must state this accurately.
+
+No static fallback (such as an aspect-ratio/`M` threshold that routes
+small axisymmetric specs to the general sampler) was implemented, because
+it would have cost more than it saved: it would forfeit real wins at the
+same `eps` for a different `r` (e.g. crustpinch eps=0.05 r=4/10,
+0.941/0.592 above, both SLOW at eps=0.01), and the only remaining lever
+that could close the gap without a fallback -- lazy per-bin construction
+-- would relax the plan's read-only-scatterer constraint.
 
 The remaining configurations pass the same-medium gate (ratios from 0.476
 to 1.046), with large wins at the heaviest workloads, e.g.:
@@ -228,14 +241,36 @@ From `progress.md`'s Task 6 and Task 6b completion notes:
   (`chi2/dof` 2.05-3.09, `z` as extreme as -4.26), and the post-fix
   ("GREEN") cases passing (`chi2/dof` 0.82-1.19, `|z|` 0.21-1.71).
 
+**Validation power (ledger M5):** passing the checks above confirms gross
+agreement, not quantitative identity. The `chi2/dof < 1.5` gate sits
+roughly 8-12 standard deviations above its null mean at the 600-1200
+degrees of freedom these tests use, so it only reliably flags a coherent
+per-bin distortion of about 5-8% or more; the 4-sigma mean-distance checks
+(n=20000 trials) only reliably flag a rate difference of about 4% or
+more -- comparable in size to the quadrature and frame effects
+`doc/MANUAL.md`'s anisotropic-rate section describes, so neither check is
+powerful enough to rule those out on its own. This is not hypothetical:
+the pooled 80-axi-vs-40-gen scenario-level test quoted under "Scenario
+level" below (p=0.99 for total energy, all components p>=0.29) ran on
+data that, at the time, still carried the real R10 P-frame defect (a
+2-3.5% MFP effect for scattered P at aspect 10) -- the pooled test did not
+detect it; only the dedicated unit-level P-frame consistency test above,
+built specifically to target that one effect at a non-canonical carried
+polarization where it is largest, did. A passing scenario-level or pooled
+statistical test is reassurance that nothing gross is wrong, not proof the
+two samplers agree to within their design tolerances.
+
 #### Scenario level
 
-`tests/compare_axi_general.sh` at degree 7, K=8 replicates, 1000
-permutations, all 8 benchmark configurations, captured as `cmp2-full.out`
-(note this script runs at a different take-off-angle degree and replicate
-structure than the degree-9 benchmark above, so its own G/A time-ratio
-column is independent corroboration, not a substitute for the same-medium
-gate):
+`tests/compare_axi_general.sh` at degree 7 (this program's *default*
+`--toa-degree`, `doc/MANUAL.md`), K=8 replicates, 1000 permutations, all 8
+benchmark configurations, captured as `cmp2-full.out`. This script runs at
+a different take-off-angle degree and replicate structure than the
+degree-9 benchmark above, so its G/A time-ratio column is a *separate*
+measurement, not a substitute for the same-medium gate -- see "Timing:
+axisymmetric construction cost at the default degree" below, where it
+turns out to disagree with the degree-9 benchmark in 4 of 8
+configurations:
 
 | Scenario | eps | r | windows | p(A,G) | p(A,A') | median s (A) | median s (G) | G/A time ratio |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
@@ -247,6 +282,34 @@ gate):
 | crustpinch | 0.01 | 10 | 101 | 0.3480 | 0.2500 | 0.502 | 0.350 | 0.697x |
 | crustpinch | 0.05 | 4 | 119 | 0.2500 | 0.1540 | 0.534 | 0.430 | 0.805x |
 | crustpinch | 0.05 | 10 | 145 | 0.6030 | 0.3700 | 0.687 | 0.975 | 1.419x |
+
+##### Timing: axisymmetric construction cost at the default degree
+
+The G/A time-ratio column above (G/A, so a ratio above 1x means axi is
+*faster*) shows the axisymmetric sampler *slower* than the general sampler
+in 4 of the 8 configurations: lopnor eps=0.01 r=4 (0.662x, i.e. axi is
+1.51x slower -- 1.445 s median vs 0.956 s), crustpinch eps=0.01 r=4
+(0.680x, 1.47x slower), crustpinch eps=0.01 r=10 (0.697x, 1.43x slower),
+and crustpinch eps=0.05 r=4 (0.805x, 1.24x slower). This is a real,
+degree-dependent effect, not noise: axisymmetric construction's cost is
+dominated by a fixed per-scatterer term that does not shrink with
+`--toa-degree` (representative directions are capped at degree 6
+regardless of the run's own degree -- see "Build-time history" above),
+while the general/isotropic build's cost does shrink with degree. At
+degree 9 that fixed term is a small fraction of a build dominated by
+other, degree-scaling costs (the "Same-medium verdict" above); at this
+program's *default* degree of 7, with fewer scatterers' construction cost
+to amortize it against, the fixed term is large enough to make
+axisymmetric construction slower overall for some configurations. Rough
+per-scatterer costs: about 25-30 ms at 24 threads (derived from this
+table's own axi/gen median-time gaps over 20 Lop Nor axisymmetric
+scatterers), about 0.35 s single-threaded (Task 5b's own medians: 21.89 s
+vs 14.91 s over the same 20 scatterers). Ruling R14 ("Same-medium verdict"
+above) accepts this trade-off: the axisymmetric sampler is faster on
+scattering-heavy runs, by as much as 2.1x on the same medium (the
+heaviest same-medium configuration above), and slower by at most about
+half a second on short, setup-dominated runs at this program's default
+degree.
 
 `p(A,G)` is the permutation-test p-value comparing the axisymmetric group
 (A) against the near-axisymmetric general group (G) on windowed trace
@@ -283,6 +346,21 @@ investigation's own fresh-seed numbers (0.903/0.090 and 0.312/0.751 above),
 confirming that the default-seed `p(A,G) = 0.0040` is the same documented
 sampling fluke, reproduced deterministically by that one seed set, rather
 than a regression introduced since the original investigation.
+
+**Family-wise correction (ledger I5):** the `p(A,G) < 0.01` gate quoted
+above for `cmp2-full.out` (and `tests/compare_axi_general.sh`'s own exit
+status at the time) was uncorrected for running 16 such comparisons (2 per
+config x 8 configs) in one invocation -- at a nominal alpha=0.01 each, the
+chance of at least one false-positive GATE on fully correct code was about
+1-0.99^16 ~= 15%, and the chance of some config's minimum p-value over 16
+tests reaching <=0.0040 under the null was itself about 6%. The script now
+applies a Bonferroni correction instead (0.01 divided by the number of
+p-values the run actually computes, printed in its output header) and
+raises its default permutation count from 1000 to 2000 so the test retains
+enough resolution below the tighter threshold (the permutation test's own
+resolution floor, 1/(permutations+1), must stay below the threshold or no
+config could ever GATE). Under the corrected threshold for an 8-config run
+(0.01/16 = 0.000625), `cmp2-full.out`'s recorded p(A,G)=0.0040 passes.
 
 ### Draws and tentative collisions per real event (final code)
 
@@ -378,11 +456,20 @@ most of the gap recorded in the
 2026-10-16 baseline below, where every axisymmetric row failed the 2x
 isotropic-slowdown gate (lopnor axi 4.223x-6.313x; crustpinch axi
 3.619x-3.722x). The remaining gap -- four small, build-dominated
-configurations 5-8% slower than general -- is accepted per ruling R8. The
-near-axisymmetric validation above (unit and scenario level) found the
-samplers agree with each other to within statistical noise, after fixing
-one real defect (the P-incidence frame dependence, ruling R10) uncovered
-by that validation work.
+configurations at the degree-9 benchmark's thread count, 5-8% slower than
+general -- plus a separate, degree-7 finding (axisymmetric construction's
+fixed per-scatterer cost does not shrink with `--toa-degree`, so it is up
+to 1.51x slower than general at this program's *default* degree in
+setup-dominated configurations -- see "Timing: axisymmetric construction
+cost at the default degree" above) -- are both accepted per ruling R14
+(superseding R8): axisymmetric is faster on scattering-heavy runs, by as
+much as 2.1x on the same medium, and slower by at most about half a second
+on setup-dominated runs at the default degree. The near-axisymmetric
+validation above (unit and scenario level) found the samplers agree with
+each other to within the resolution of those checks -- see the "Unit
+level" section's validation-power note for what that resolution actually
+is -- after fixing one real defect (the P-incidence frame dependence,
+ruling R10) uncovered by that validation work.
 
 ## 2026-10-16 baseline (3db253a)
 
