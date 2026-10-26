@@ -279,7 +279,7 @@ public:
 //    represented as unit vectors.
 //  * Functions recursively
 //
-class Triangle { 
+class Triangle {
 protected:
 
   // :::::::::::::::::::::::::::::::::::::
@@ -292,8 +292,24 @@ protected:
   int degree;     //Degree of this triangle (When degree==0, we do
                   //not subdivide further)
 
+  bool solidAngles;  // True if this triangle (and, by propagation,
+                     // every triangle produced by subdivide()) should
+                     // compute and keep a per-leaf solid angle
+                     // alongside each leaf's centerpoint. Set once at
+                     // construction (default false; see constructor)
+                     // and never changed afterwards. Off by default
+                     // so existing callers (and their output) are
+                     // completely unaffected.
+
   ThetaPhi_Set _CenterPoints;  // List of center-points within the
                                // fully subdivided triangle
+
+  std::vector<Real> _SolidAngles;  // Parallel to _CenterPoints: the
+                               // solid angle (steradians) of the leaf
+                               // triangle that produced the
+                               // correspondingly-indexed centerpoint.
+                               // Left empty unless 'solidAngles' is
+                               // true.
 
 public:
 
@@ -310,15 +326,25 @@ public:
                 // (is there one?)  assignment operator.  Should look
                 // into this.  Access function may be better idea.
 
-public: 
+public:
 
   // ::::::::::::::::::::::::::::::::::::::
   // ::: Constructors  (Triangle Class) :::
   // ::::::::::::::::::::::::::::::::::::::
 
-  Triangle(Node, Node, Node, int);
+  Triangle(Node, Node, Node, int degree, bool solidAngles = false);
 
   ~Triangle();
+
+
+  // ::::::::::::::::::::::::::::::::::::::::::::::
+  // ::: Property-Get Methods  (Triangle Class) :::
+  // ::::::::::::::::::::::::::::::::::::::::::::::
+
+  const std::vector<Real> & SolidAngles() const {return _SolidAngles;}
+                // One entry per leaf triangle, in the same order as
+                // Centers (index-aligned with it). Empty unless this
+                // Triangle was built with solidAngles=true.
 
 private:
 
@@ -349,12 +375,29 @@ private:
 //
 class TesselSphere : public ThetaPhi_Set {
 public:
-  TesselSphere(TESS_Algorithm algo, int degree);
+  TesselSphere(TESS_Algorithm algo, int degree, bool withSolidAngles = false);
   ~TesselSphere();
+
+  bool HasSolidAngles() const {return _HasSolidAngles;}
+                // True iff constructed with withSolidAngles=true, in
+                // which case SolidAngles() below is populated.
+
+  const std::vector<Real> & SolidAngles() const {return _SolidAngles;}
+                // Omega_k (steradians), index-aligned with *this (ie,
+                // with the inherited ThetaPhi_Set of take-off
+                // directions): SolidAngles()[k] is the solid angle of
+                // the leaf triangle whose centerpoint is (*this)[k].
+                // Empty unless HasSolidAngles() is true.
 
 private:
   void init_icosahedron(int degree);
   void grab_centerpoints_from_tri(const Triangle & tri);
+
+  bool _HasSolidAngles;             // Set once at construction time;
+                                    // see withSolidAngles above.
+  std::vector<Real> _SolidAngles;   // Backing store for SolidAngles();
+                                    // left empty unless
+                                    // _HasSolidAngles is true.
 
 };
 

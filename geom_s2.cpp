@@ -38,7 +38,9 @@ using namespace S2;
 // ****                                                              ****
 //
 
-TesselSphere::TesselSphere(TESS_Algorithm algo, int degree) {
+TesselSphere::TesselSphere(TESS_Algorithm algo, int degree,
+                           bool withSolidAngles) :
+  _HasSolidAngles(withSolidAngles) {
   switch (algo) {
     case TESS_TETRA :
       cerr << "Not Implemented; algo = " << algo << endl;
@@ -121,7 +123,8 @@ void TesselSphere::init_icosahedron(int degree) {
   int ctr;
 
   for (ctr=0; ctr<num_faces; ctr++) {
-    tri = new Triangle(*fa[ctr][0], *fa[ctr][1], *fa[ctr][2], degree);
+    tri = new Triangle(*fa[ctr][0], *fa[ctr][1], *fa[ctr][2], degree,
+                       _HasSolidAngles);
     grab_centerpoints_from_tri(*tri);
     delete tri;
   }
@@ -133,6 +136,13 @@ void TesselSphere::grab_centerpoints_from_tri(const Triangle & tri) {
   ThetaPhi_Set::const_iterator src_begin =  tri.Centers.begin();
   ThetaPhi_Set::const_iterator src_end   =  tri.Centers.end();
   insert(end(), src_begin, src_end);
+
+  // Carry the face's per-leaf solid angles along in lock-step with its
+  // centerpoints, so _SolidAngles stays index-aligned with *this. When
+  // _HasSolidAngles is false, tri.SolidAngles() is empty and this is a
+  // no-op, which is what keeps SolidAngles() empty in that case.
+  _SolidAngles.insert(_SolidAngles.end(),
+                      tri.SolidAngles().begin(), tri.SolidAngles().end());
 }
 
 
@@ -218,8 +228,8 @@ int ThetaPhi_Set::GetBestIndexFromPoint(ThetaPhi point) {
 // ****                                                              ****
 //
 
-Triangle::Triangle(Node n1, Node n2, Node n3, int degree)
-  : n1(n1),n2(n2),n3(n3),degree(degree),
+Triangle::Triangle(Node n1, Node n2, Node n3, int degree, bool solidAngles)
+  : n1(n1),n2(n2),n3(n3),degree(degree),solidAngles(solidAngles),
     Centers(_CenterPoints) {
   //
   reserve_lists();
@@ -246,6 +256,32 @@ void Triangle::populate_lists() {
   Node center;
   center = n1 + n2 + n3; //Normalization happens on assignment
   _CenterPoints.push_back(center);
+
+  if (solidAngles) {
+    // Solid angle (steradians) subtended at the sphere's center by
+    // this leaf's own three (unit-vector) vertices n1, n2, n3, via Van
+    // Oosterom & Strackee's atan2 formula for the solid angle of a
+    // triangle on the unit sphere given its three vertex vectors:
+    //
+    //   Omega = 2*atan2( |n1.(n2 x n3)|, 1 + n1.n2 + n2.n3 + n3.n1 )
+    //
+    // n1.(n2 x n3) is the scalar triple product, ie, (twice) the
+    // signed volume of the parallelepiped spanned by the three unit
+    // vectors; its absolute value makes Omega come out positive
+    // regardless of the n1,n2,n3 vertex winding order. This must be
+    // evaluated on THIS triangle's own three vertices -- not on the
+    // quadrisection nodes q1,q2,q3, which populate_lists() never
+    // touches and which don't even exist yet when degree==0 (subdivide()
+    // computes them only when degree>0). A throwaway prototype
+    // confirmed this reproduces the expected whole-sphere and
+    // per-triangle statistics; see task-1-brief.md.
+    const R3::XYZ v1(n1.x(), n1.y(), n1.z());
+    const R3::XYZ v2(n2.x(), n2.y(), n2.z());
+    const R3::XYZ v3(n3.x(), n3.y(), n3.z());
+    const Real tripleProduct = v1.Dot(v2.Cross(v3));
+    const Real cosSum        = 1.0 + v1.Dot(v2) + v2.Dot(v3) + v3.Dot(v1);
+    _SolidAngles.push_back(2.0 * atan2(fabs(tripleProduct), cosSum));
+  }
 }
 
 void Triangle::subdivide() {
@@ -260,26 +296,38 @@ void Triangle::subdivide() {
   q2 = n2 + n3;
   q3 = n3 + n1;
 
-  //Get CenterLists from each subtriangle:
+  //Get CenterLists from each subtriangle (and, in lock-step, their
+  //SolidAngles lists -- 'solidAngles' is passed down unchanged, so
+  //every descendant triangle computes (or skips) the same way this one
+  //was asked to, and each insert below keeps _SolidAngles index-aligned
+  //with _CenterPoints exactly as the latter is built):
   //FIRST: (lower left subtriangle)
-  tri = new Triangle(n1,q1,q3,degree-1);
-  _CenterPoints.insert(_CenterPoints.end(), 
+  tri = new Triangle(n1,q1,q3,degree-1,solidAngles);
+  _CenterPoints.insert(_CenterPoints.end(),
 			tri->Centers.begin(), tri->Centers.end());
+  _SolidAngles.insert(_SolidAngles.end(),
+                      tri->SolidAngles().begin(), tri->SolidAngles().end());
   delete tri;
   //SECOND: (top triangle)
-  tri = new Triangle(q1,n2,q2,degree-1);
-  _CenterPoints.insert(_CenterPoints.end(), 
+  tri = new Triangle(q1,n2,q2,degree-1,solidAngles);
+  _CenterPoints.insert(_CenterPoints.end(),
 			tri->Centers.begin(), tri->Centers.end());
+  _SolidAngles.insert(_SolidAngles.end(),
+                      tri->SolidAngles().begin(), tri->SolidAngles().end());
   delete tri;
   //THIRD: (bottom right triangle)
-  tri = new Triangle(q3,q2,n3,degree-1);
-  _CenterPoints.insert(_CenterPoints.end(), 
+  tri = new Triangle(q3,q2,n3,degree-1,solidAngles);
+  _CenterPoints.insert(_CenterPoints.end(),
 			tri->Centers.begin(), tri->Centers.end());
+  _SolidAngles.insert(_SolidAngles.end(),
+                      tri->SolidAngles().begin(), tri->SolidAngles().end());
   delete tri;
   //FOURTH: (middle triangle)
-  tri = new Triangle(q2,q3,q1,degree-1);
-  _CenterPoints.insert(_CenterPoints.end(), 
+  tri = new Triangle(q2,q3,q1,degree-1,solidAngles);
+  _CenterPoints.insert(_CenterPoints.end(),
 			tri->Centers.begin(), tri->Centers.end());
+  _SolidAngles.insert(_SolidAngles.end(),
+                      tri->SolidAngles().begin(), tri->SolidAngles().end());
   delete tri;
   tri = 0;
 
@@ -288,7 +336,7 @@ void Triangle::subdivide() {
   //                  /C-Tutorial-A-Beginners-Guide-to-stdvector-Part-1.htm
   //http://www.cplusplus.com/reference/vector/vector/
   //http://stackoverflow.com/questions/201718/concatenating-two-stl-vectors
- 
+
 }
 
 

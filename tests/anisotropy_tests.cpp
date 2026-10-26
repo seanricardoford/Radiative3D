@@ -4022,6 +4022,173 @@ TEST(p_frame_consistency) {
 
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
+// ****  TOA QUADRATURE TESTS                                        ****
+// ****                                                              ****
+//
+// See docs/superpowers/plans/2026-10-25-toa-area-quadrature.md and
+// docs/superpowers/specs/2026-10-25-toa-area-quadrature-design.md, and
+// .superpowers/sdd/2026-10-25-toa-area-quadrature/task-1-brief.md (Task
+// 1: per-direction solid angles in S2::TesselSphere).
+//
+
+TEST(tessel_solid_angles) {
+
+  // S2::TesselSphere's icosahedral quadrisection spreads take-off
+  // directions over the sphere, but not perfectly uniformly: each
+  // direction is really the centerpoint of a small spherical triangle,
+  // and those triangles' solid angles (areas) vary somewhat from leaf
+  // to leaf. This test builds, at every degree from 0 through 8, both a
+  // plain TesselSphere and one with per-direction solid angles turned
+  // on, and checks:
+  //
+  //   o  the plain one (withSolidAngles defaulted to false) is
+  //      completely unaffected: HasSolidAngles() is false and
+  //      SolidAngles() is empty;
+  //   o  the solid-angle-reporting one has exactly the same directions,
+  //      in the same order, as the plain one -- ie, turning the
+  //      feature on never perturbs the direction set itself;
+  //   o  every reported solid angle is positive, and the full set sums
+  //      to 4*pi steradians (the area of the whole unit sphere) to
+  //      within tight relative tolerance;
+  //   o  at degree 0 (20 congruent icosahedral faces, no subdivision
+  //      yet), every leaf has the same solid angle to near machine
+  //      precision;
+  //   o  at degrees 6 through 8, the leaf-to-leaf spread of solid
+  //      angles (relative to the mean) matches the fixed statistics a
+  //      throwaway prototype measured at degree 6 (task-1-brief.md) --
+  //      empirical confirmation that the leaf formula in
+  //      Triangle::populate_lists() (geom_s2.cpp) is being applied
+  //      correctly and consistently across the whole recursive
+  //      subdivision, not just at the one degree it was measured at.
+  //
+  // Per-degree summary statistics are also logged to
+  // build/toa_quadrature_solid_angles.txt for human inspection.
+
+  std::ofstream out("build/toa_quadrature_solid_angles.txt");
+  out << "# degree N sum_rel_err min_over_mean max_over_mean rms\n";
+
+  const Real fourPi = 4.0 * Geometry::Pi;
+
+  for (int d = 0; d <= 8; ++d) {
+
+    S2::TesselSphere plain(S2::TESS_ICO, d);      // withSolidAngles
+    S2::TesselSphere sa(S2::TESS_ICO, d, true);   // defaults to false
+
+    CHECK_MSG(!plain.HasSolidAngles() && plain.SolidAngles().empty(),
+             "degree " << d << ": plain TesselSphere unexpectedly reports "
+             "solid angles");
+    CHECK_MSG(sa.HasSolidAngles()
+             && sa.size() == plain.size()
+             && sa.SolidAngles().size() == sa.size(),
+             "degree " << d << ": sa.HasSolidAngles()=" << sa.HasSolidAngles()
+             << " sa.size()=" << sa.size() << " plain.size()=" << plain.size()
+             << " sa.SolidAngles().size()=" << sa.SolidAngles().size());
+
+    Real sum = 0.0;
+    for (std::size_t k = 0; k < sa.size(); ++k) {
+      CHECK_MSG(sa[k].Theta() == plain[k].Theta()
+               && sa[k].Phi() == plain[k].Phi(),
+               "degree " << d << " k=" << k << ": direction differs between "
+               "plain and solid-angle TesselSpheres");
+      CHECK_MSG(sa.SolidAngles()[k] > 0.0,
+               "degree " << d << " k=" << k << ": Omega="
+               << sa.SolidAngles()[k]);
+      sum += sa.SolidAngles()[k];
+    }
+
+    const Real mean = sum / (Real) sa.size();
+    const Real sumRelErr = std::fabs(sum - fourPi) / fourPi;
+    CHECK_MSG(sumRelErr <= 1e-12,
+             "degree " << d << ": sum=" << sum << " expected " << fourPi
+             << " relerr=" << sumRelErr);
+
+    Real minOmega = sa.SolidAngles()[0];
+    Real maxOmega = sa.SolidAngles()[0];
+    Real sumSqDev = 0.0;
+    for (std::size_t k = 0; k < sa.SolidAngles().size(); ++k) {
+      const Real omega = sa.SolidAngles()[k];
+      minOmega = std::min(minOmega, omega);
+      maxOmega = std::max(maxOmega, omega);
+      const Real dev = omega/mean - 1.0;
+      sumSqDev += dev*dev;
+    }
+    const Real minOverMean = minOmega / mean;
+    const Real maxOverMean = maxOmega / mean;
+    const Real rms = std::sqrt(sumSqDev / (Real) sa.SolidAngles().size());
+
+    out << d << " " << sa.size() << " " << sumRelErr << " "
+        << minOverMean << " " << maxOverMean << " " << rms << "\n";
+
+    if (d == 0) {
+      // Twenty congruent icosahedral faces, undivided: every leaf
+      // triangle is the same shape and size, so the raw min and max
+      // (not just their ratios to the mean) should agree to near
+      // machine precision.
+      CHECK_MSG(maxOmega/minOmega - 1.0 <= 1e-14,
+               "degree 0: minOmega=" << minOmega << " maxOmega=" << maxOmega);
+    }
+    if (d >= 6) {
+      // Recursive quadrisection has run deep enough that the
+      // leaf-shape distribution has settled into the fixed pattern the
+      // throwaway prototype measured at degree 6 (task-1-brief.md):
+      // min/mean=0.9277266, max/mean=1.2065026, rms=0.0864447.
+      CHECK_MSG(minOverMean >= 0.9276 && minOverMean <= 0.9278,
+               "degree " << d << ": min/mean=" << minOverMean);
+      CHECK_MSG(maxOverMean >= 1.2064 && maxOverMean <= 1.2067,
+               "degree " << d << ": max/mean=" << maxOverMean);
+      CHECK_MSG(rms >= 0.0864 && rms <= 0.0865,
+               "degree " << d << ": rms=" << rms);
+    }
+  }
+
+  out.close();
+
+}
+
+
+TEST(tessel_solid_angles_mirror) {
+
+  // The icosahedron's 12 vertices (init_icosahedron(), geom_s2.cpp) sit
+  // symmetrically under reflection through any of the three coordinate
+  // planes, so the whole take-off-angle set -- and, if the leaf formula
+  // is being applied correctly, each direction's solid angle -- should
+  // be invariant under those reflections too: a solid angle depends
+  // only on the pairwise angles between its three vertex vectors (via
+  // dot products) and the unsigned volume of the parallelepiped they
+  // span (via the absolute value in the formula), and both of those are
+  // preserved by any orthogonal map, reflections included. This checks
+  // that at degree 3, for every direction, the images mirrored through
+  // the y-z plane and through the x-z plane each land exactly on some
+  // other direction in the set, with exactly the same solid angle.
+
+  S2::TesselSphere sa(S2::TESS_ICO, 3, true);
+
+  for (std::size_t k = 0; k < sa.size(); ++k) {
+    const R3::XYZ p = sa[k].XYZ();
+    const R3::XYZ images[2] = {
+      R3::XYZ(-p.x(),  p.y(), p.z()),   // Mirror through the y-z plane
+      R3::XYZ( p.x(), -p.y(), p.z()),   // Mirror through the x-z plane
+    };
+    for (int im = 0; im < 2; ++im) {
+      const S2::ThetaPhi imageTP(images[im].Theta(), images[im].Phi());
+      const int j = sa.GetBestIndexFromPoint(imageTP);
+      CHECK_MSG(sa[j].XYZ().DistFrom(images[im]) < 1e-9,
+               "k=" << k << " image=" << im << ": nearest direction j=" << j
+               << " is " << sa[j].XYZ().DistFrom(images[im])
+               << " away from the mirrored point");
+      CHECK_MSG(std::fabs(sa.SolidAngles()[j] - sa.SolidAngles()[k])
+               <= 1e-12 * sa.SolidAngles()[k],
+               "k=" << k << " j=" << j << " image=" << im
+               << ": Omega[k]=" << sa.SolidAngles()[k]
+               << " Omega[j]=" << sa.SolidAngles()[j]);
+    }
+  }
+
+}
+
+
+//////////////////////////////////////////////////////////////////////////
+// &&&&                                                              ****
 // ****  TEST RUNNER                                                 ****
 // ****                                                              ****
 //
