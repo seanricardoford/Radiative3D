@@ -22,16 +22,20 @@ set -eu
 #       itself (not the theory) is unreliable at this K/permutation
 #       count.
 #
-# Seeds: replicate k of A uses 596 + k*2^32 (k = 1..K, K = CMP_REPLICATES);
-# G uses k = K+1..2K; A' uses k = 2K+1..3K. 2^32 is far larger than any
-# phonon count used here, so MixRandomSeed(seed ^ phonon_id)
-# (model.cpp) never lets two replicates' per-phonon streams collide --
-# see docs/superpowers/specs/2026-10-17-axisymmetric-sampler-performance-
-# design.md, decision 6's seed rule. 596 + k*2^32 is always an exact
-# integer in IEEE double precision for any k used here (doubles are
-# exact up to 2^53), so it is computed with awk (seed_for(), below)
-# rather than shell arithmetic, and passed through run_aniso_case.sh's
-# SEED env var to --seed, which parses an unsigned 64-bit integer.
+# Seeds: replicate k of A uses CMP_SEED_BASE + k*2^32 (k = 1..K, K =
+# CMP_REPLICATES; CMP_SEED_BASE defaults to 596, see the Environment list
+# below for why it is configurable); G uses k = K+1..2K; A' uses
+# k = 2K+1..3K. 2^32 is far larger than any phonon count used here, so
+# MixRandomSeed(seed ^ phonon_id) (model.cpp) never lets two replicates'
+# per-phonon streams collide -- see docs/superpowers/specs/2026-10-17-
+# axisymmetric-sampler-performance-design.md, decision 6's seed rule.
+# CMP_SEED_BASE + k*2^32 is exact in IEEE double precision (awk's only
+# numeric type) only while the sum stays under 2^53; since CMP_SEED_BASE
+# may be set as large as (2^64-1) - 3K*2^32 (see the Environment list's
+# CMP_SEED_BASE entry), seeds are computed with bc's arbitrary-precision
+# integers (seed_for(), below) rather than awk or shell arithmetic, then
+# passed through run_aniso_case.sh's SEED env var to --seed, which parses
+# an unsigned 64-bit integer.
 #
 # Statistic: from each run's seis_traces_asc.dat, every station's
 # energy (the sum of its X+Y+Z axis-energy columns, equal to the sum of
@@ -75,6 +79,16 @@ set -eu
 #   CMP_LOPNOR_PHONONS        --num-phonons for lopnor runs.  Default: 250000
 #   CMP_CRUSTPINCH_PHONONS    --num-phonons for crustpinch.   Default: 50000
 #   CMP_REPLICATES            K, replicates per group.        Default: 8
+#   CMP_SEED_BASE             Base seed added to k*2^32 for each replicate
+#                             (see "Seeds" above). Seeds whose XOR is
+#                             smaller than the phonon count share streams
+#                             (doc/MANUAL.md's --seed entry), so
+#                             independent replicate sets must differ
+#                             above bit 32; a different CMP_SEED_BASE
+#                             (e.g. 596 + 1000*2^32) gives a fresh set.
+#                             Must be a non-negative integer keeping
+#                             every seed (k = 1..3*CMP_REPLICATES) within
+#                             unsigned 64-bit range.          Default: 596
 #   CMP_THREADS               --threads for all runs, or "auto" for the
 #                             logical CPU count.              Default: auto
 #   CMP_PERMUTATIONS          Random relabellings per comparison per
@@ -112,6 +126,8 @@ CMP_CRUSTPINCH_PHONONS=${CMP_CRUSTPINCH_PHONONS:-50000}
 CMP_REPLICATES=${CMP_REPLICATES:-8}
 CMP_THREADS=${CMP_THREADS:-auto}
 CMP_PERMUTATIONS=${CMP_PERMUTATIONS:-1000}
+CMP_SEED_BASE_DEFAULT=596
+CMP_SEED_BASE=${CMP_SEED_BASE:-$CMP_SEED_BASE_DEFAULT}
 
 DOSCRIPT_EPS=0.01   # The epsilon value used by do-lopnor.sh and
                     # do-crustpinch.sh for every region, by default --
@@ -124,6 +140,26 @@ LCG_SEED=20261017   # Fixed (not time-based) seed for window_stat()'s
 
 if [ "$CMP_REPLICATES" -lt 2 ]; then
   echo "ERROR: CMP_REPLICATES must be >= 2 (need a sample variance per group)" >&2
+  exit 1
+fi
+
+case "$CMP_SEED_BASE" in
+  ''|*[!0-9]*)
+    echo "ERROR: CMP_SEED_BASE must be a non-negative integer (got \"$CMP_SEED_BASE\")" >&2
+    exit 1
+    ;;
+esac
+
+# Every seed actually used (k = 1..3*CMP_REPLICATES, the last replicate
+# of A') must fit the unsigned 64-bit integer --seed parses (main.cpp's
+# strtoull). Checked exactly with bc: CMP_SEED_BASE can be set close to
+# 2^64-1, and shell arithmetic ($(( ))) is only a signed 64-bit type on
+# most sh implementations -- too narrow to even hold 2^64-1 itself.
+CMP_SEED_MAX_K=$((3 * CMP_REPLICATES))
+if [ "$(echo "$CMP_SEED_BASE + $CMP_SEED_MAX_K * 4294967296 > 18446744073709551615" | bc)" = 1 ]; then
+  echo "ERROR: CMP_SEED_BASE=$CMP_SEED_BASE would push replicate" \
+       "k=$CMP_SEED_MAX_K's seed (CMP_SEED_BASE + k*2^32) past the" \
+       "unsigned 64-bit limit (2^64-1 = 18446744073709551615)" >&2
   exit 1
 fi
 
@@ -150,10 +186,13 @@ K=$CMP_REPLICATES
 # Helpers
 # ---------------------------------------------------------------------
 
-# seed_for K_OFFSET -> prints 596 + K_OFFSET*2^32 as an exact unsigned
-# 64-bit integer (see the header comment's seed rule).
+# seed_for K_OFFSET -> prints CMP_SEED_BASE + K_OFFSET*2^32 as an exact
+# unsigned 64-bit integer (see the header comment's seed rule). Uses
+# bc's arbitrary-precision integers, not awk's IEEE doubles (exact only
+# up to 2^53) or shell arithmetic (signed 64-bit on most sh
+# implementations) -- see the header comment above.
 seed_for() {
-  awk -v k="$1" 'BEGIN{printf "%.0f", 596 + k*4294967296}'
+  echo "$CMP_SEED_BASE + $1 * 4294967296" | bc
 }
 
 # cmp_config_fields TOKEN  -> prints "SCENARIO EPS R" (space-separated) on
@@ -390,7 +429,11 @@ window_stat() {
 echo ""
 echo "# Axisymmetric vs. Near-Axisymmetric-General Scenario Validation"
 echo ""
-echo "Degree: $CMP_DEGREE, Threads: $CMP_THREADS, Replicates (K): $CMP_REPLICATES, Permutations: $CMP_PERMUTATIONS"
+HEADER_LINE="Degree: $CMP_DEGREE, Threads: $CMP_THREADS, Replicates (K): $CMP_REPLICATES, Permutations: $CMP_PERMUTATIONS"
+if [ "$CMP_SEED_BASE" != "$CMP_SEED_BASE_DEFAULT" ]; then
+  HEADER_LINE="$HEADER_LINE, Seed base: $CMP_SEED_BASE"
+fi
+echo "$HEADER_LINE"
 echo ""
 echo "| Scenario | eps | r | windows | p(A,G) | p(A,A') | median s (A) | median s (G) | G/A time ratio |"
 echo "|---|---|---:|---:|---:|---:|---:|---:|---:|"
