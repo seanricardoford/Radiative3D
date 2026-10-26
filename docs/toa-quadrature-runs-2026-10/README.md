@@ -86,3 +86,40 @@ Two changes, both documented in full in
    added; see the script's header comment and the "Energy table:
    per-station detail" section of `compare-toa-quadrature.out`.
 
+**Deterministic storage figure, vs. the noisy measured delta.** The data
+the reserve in item 1 is sized for is exact and computable at compile
+time, independent of any run: at degree 9 there are 20*4^9 = 5,242,880
+directions, and `_SolidAngles` holds one `Real` (`double`, 8 bytes) per
+direction, so the data itself is 5,242,880 x 8 bytes = 41,943,040 bytes =
+**41.9 MB**. That is now allocated exactly once, by the exact reserve.
+Before this fix, `TesselSphere::_SolidAngles`'s unreserved growth (20
+`insert()` calls, doubling capacity each time it was exceeded) landed on
+a *final* capacity of 8,388,608 entries, not 5,242,880 -- 67.1 MB
+steady-state, a 25.2 MB overshoot above the 41.9 MB actually needed --
+plus a transient spike at the last reallocation (old 4,194,304-entry /
+33.6 MB buffer and new 8,388,608-entry / 67.1 MB buffer briefly coexisting,
+for a momentary ~100.7 MB). (Verified directly: a standalone
+`std::vector<double>` reproducing that exact 20-insert sequence with this
+machine's compiler/standard library prints precisely these capacities; see
+`task-5-report.md`'s "Fix round 2" section for the full trace.) So the
+fix's theoretical benefit spans a wide range -- anywhere from the 25.2 MB
+steady-state overshoot alone up to the full ~58.7 MB difference between
+the old transient peak and the new exact allocation -- depending on
+whether "maximum resident set size" happens to catch that momentary
+spike.
+That range is itself comparable to, or larger than, the build-check
+table's actual measured RSS deltas (`compare-toa-quadrature.out`,
+"Degree-9 build check" section), which is why those deltas are noisy: at
+only 3 replicates per cell, run-to-run allocator noise on a several-GB
+process is large enough to swamp a signal in this range. Taking the
+pre-fix and post-fix build-check captures together (see
+`task-5-report.md`'s "Fix round 1" -> "Build-check table: old vs. new"),
+the measured delta went the *wrong* way for `iso` after the fix (+68.4 ->
++78.0 MB -- a fix that can only reduce allocation overhead cannot
+legitimately increase the steady-state delta) while `axi10` dropped to
++28.6 MB, below even the 41.9 MB exact-data figure. **Task 6 should cite
+the 41.9 MB exact-data figure (and, if useful, the 67.1 MB old-capacity /
+25.2 MB-overshoot figures above) for the storage cost itself, and should
+not treat the build-check table's specific per-variant MB deltas as more
+precise than this noise floor allows.**
+
