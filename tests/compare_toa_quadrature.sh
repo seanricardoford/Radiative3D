@@ -70,6 +70,23 @@ set -eu
 # count, min/median/max r_s across stations, and how many stations have
 # |r_s - 1| > 3*SE(r_s).
 #
+# Energy table, per-station detail (spec decision 11): the summary row
+# alone can't be interpreted -- a median r_s a long way from 1 could be
+# one wildly-off station or a genuine broad shift, and the two look the
+# same in a single summary number. So, per config, an appendix table
+# gives one row per station: station id, mean(E, equal), mean(E, area),
+# r_s, SE(r_s), and z = (r_s - 1)/SE(r_s) (how many of its own standard
+# errors a station's ratio sits from 1; the summary row's "flagged"
+# count is just the stations with |z| > 3 here). A final "all stations"
+# row gives the scenario-wide ratio R: for each replicate, sum that
+# run's energy over every station first, then treat those K per-replicate
+# whole-scenario totals exactly like a single station's K values --
+# R = mean(sum_s E_s, area) / mean(sum_s E_s, equal), with SE(R) by the
+# same error-propagation formula as SE(r_s) above. R answers "does area
+# mode move the scenario's total energy", which is a different (and
+# usually much less noisy) question than "does it move any one station's
+# share of it" -- the per-station rows answer that one.
+#
 # MFP table, per config: the first equal-mode run's and first area-mode
 # run's stdout.txt each contain a scatterer dump (the lines between
 # "BEGIN SCATTERER DUMP" and "END SCATTERERS" that don't start with "#");
@@ -294,19 +311,33 @@ extract_total_energy() {
   ' "$1" > "$2"
 }
 
-# energy_table_row EQLIST ARLIST K -> prints "stations min_r median_r
-# max_r flagged" on stdout. EQLIST/ARLIST are files with K energy.tsv
-# paths each, one per line (as written by extract_total_energy, one row
-# per station per run). See the header comment's "Energy table" section
-# for the statistic.
+# energy_table_row EQLIST ARLIST K CFG DETAILOUT -> prints "stations
+# min_r median_r max_r flagged" on stdout, for the existing summary row.
+# EQLIST/ARLIST are files with K energy.tsv paths each, one per line (as
+# written by extract_total_energy, one row per station per run). See the
+# header comment's "Energy table" section for the summary statistic.
+#
+# As a side effect, writes CFG's per-station detail appendix rows (see
+# the header comment's "Energy table, per-station detail" section) to
+# DETAILOUT, as ready-to-print Markdown table rows: one per station
+# (sorted by station number) plus a final "all stations" row.
 energy_table_row() {
-  _etr_eq=$1; _etr_ar=$2; _etr_k=$3
-  awk -v K="$_etr_k" -v EQLIST="$_etr_eq" -v ARLIST="$_etr_ar" '
+  _etr_eq=$1; _etr_ar=$2; _etr_k=$3; _etr_cfg=$4; _etr_detailout=$5
+  awk -v K="$_etr_k" -v EQLIST="$_etr_eq" -v ARLIST="$_etr_ar" \
+      -v CFG="$_etr_cfg" -v DETAILOUT="$_etr_detailout" '
     function stderr_of(n, sumv, sumsq,    m, var) {
       m = sumv / n
       var = (sumsq - n*m*m) / (n-1)
       if (var < 0) var = 0   # guards tiny negative from fp roundoff
       return sqrt(var / n)
+    }
+    # ratio_and_se(meanA, meanE, seA, seE) -> prints "r se_r" via global
+    # out_r/out_se_r (awk has no multi-return; see call sites). r =
+    # meanA/meanE; SE(r) by the same first-order error-propagation
+    # formula the header comment gives for both r_s and R.
+    function ratio_and_se(meanA, meanE, seA, seE) {
+      out_r = meanA / meanE
+      out_se_r = out_r * sqrt((seA/meanA)*(seA/meanA) + (seE/meanE)*(seE/meanE))
     }
     BEGIN {
       neq = 0
@@ -322,20 +353,24 @@ energy_table_row() {
       }
 
       for (k=1; k<=K; k++) {
+        eqtotal[k] = 0
         while ((getline line < eqfiles[k]) > 0) {
           split(line, f, "\t")
           s = f[1]; v = f[2] + 0
           eqsum[s] += v; eqsumsq[s] += v*v; eqn[s]++
           seen[s] = 1
+          eqtotal[k] += v
         }
         close(eqfiles[k])
       }
       for (k=1; k<=K; k++) {
+        artotal[k] = 0
         while ((getline line < arfiles[k]) > 0) {
           split(line, f, "\t")
           s = f[1]; v = f[2] + 0
           arsum[s] += v; arsumsq[s] += v*v; arn[s]++
           seen[s] = 1
+          artotal[k] += v
         }
         close(arfiles[k])
       }
@@ -353,17 +388,52 @@ energy_table_row() {
         seeq = stderr_of(K, eqsum[s], eqsumsq[s])
         separ = stderr_of(K, arsum[s], arsumsq[s])
 
-        r = mar / meq
-        se_r = r * sqrt((separ/mar)*(separ/mar) + (seeq/meq)*(seeq/meq))
+        ratio_and_se(mar, meq, separ, seeq)
+        r = out_r; se_r = out_se_r
 
         nstations++
+        stations[nstations] = s + 0
         ratio[nstations] = r
         diff = (r >= 1) ? r - 1 : 1 - r
         if (diff > 3*se_r) flagged++
+
+        z = (se_r > 0) ? (r - 1)/se_r : 0   # se_r==0 needs identical
+                                             # floating-point sums across
+                                             # K independent-seed runs --
+                                             # not observed in practice
+        detail[s] = sprintf("| %s | %s | %.6e | %.6e | %.6f | %.6f | %+.3f |", \
+                             CFG, s, meq, mar, r, se_r, z)
       }
 
+      # "All stations" row: treat each replicate'"'"'s whole-scenario total
+      # (summed over every station of that one run) as that replicate'"'"'s
+      # single data point, K of them per mode, same formula as a station.
+      eqt_sum = 0; eqt_sumsq = 0
+      art_sum = 0; art_sumsq = 0
+      for (k=1; k<=K; k++) { eqt_sum += eqtotal[k]; eqt_sumsq += eqtotal[k]*eqtotal[k] }
+      for (k=1; k<=K; k++) { art_sum += artotal[k]; art_sumsq += artotal[k]*artotal[k] }
+      meq_all = eqt_sum / K
+      mar_all = art_sum / K
+      seeq_all = stderr_of(K, eqt_sum, eqt_sumsq)
+      separ_all = stderr_of(K, art_sum, art_sumsq)
+      ratio_and_se(mar_all, meq_all, separ_all, seeq_all)
+      R = out_r; se_R = out_se_r
+      z_all = (se_R > 0) ? (R - 1)/se_R : 0
+
+      # Sort stations ascending by number for a stable, readable,
+      # reproducible appendix (awk'"'"'s for-in order is unspecified).
       for (i=2; i<=nstations; i++) {    # insertion sort; nstations is small
-        key = ratio[i]; j = i-1
+        keys = stations[i]; j = i-1
+        while (j>=1 && stations[j] > keys) { stations[j+1]=stations[j]; j-- }
+        stations[j+1] = keys
+      }
+      for (i=1; i<=nstations; i++) print detail[stations[i]] > DETAILOUT
+      printf "| %s | all | %.6e | %.6e | %.6f | %.6f | %+.3f |\n", \
+             CFG, meq_all, mar_all, R, se_R, z_all > DETAILOUT
+      close(DETAILOUT)
+
+      for (i=2; i<=nstations; i++) {    # separate sort of ratio[], for
+        key = ratio[i]; j = i-1         # min/median/max below
         while (j>=1 && ratio[j] > key) { ratio[j+1]=ratio[j]; j-- }
         ratio[j+1] = key
       }
@@ -482,6 +552,7 @@ echo "| config | stations | min r | median r | max r | stations with \\|r-1\\| >
 echo "|---|---:|---:|---:|---:|---:|"
 
 : > "$work/mfp_table_body"
+: > "$work/energy_detail_body"
 
 for cfg in $TQ_CONFIGS; do
   fields=$(tq_config_fields "$cfg")
@@ -526,12 +597,14 @@ for cfg in $TQ_CONFIGS; do
   done
 
   echo "  Computing energy-table statistic..." >&2
-  result=$(energy_table_row "$work/eq.list" "$work/ar.list" "$K")
+  result=$(energy_table_row "$work/eq.list" "$work/ar.list" "$K" "$cfg" "$work/.energy_detail_rows")
   set -- $result
   n_stations=$1; min_r=$2; med_r=$3; max_r=$4; flagged=$5
 
   printf '| %s | %s | %s | %s | %s | %s |\n' \
     "$cfg" "$n_stations" "$min_r" "$med_r" "$max_r" "$flagged"
+  cat "$work/.energy_detail_rows" >> "$work/energy_detail_body"
+  rm -f "$work/.energy_detail_rows"
 
   echo "  Computing MFP-table rows..." >&2
   mfp_table_rows "$first_eq_stdout" "$first_ar_stdout" "$cfg" >> "$work/mfp_table_body"
@@ -539,6 +612,18 @@ for cfg in $TQ_CONFIGS; do
   # Free this config's run directories before the next one.
   rm -rf "$work"/run.* "$work/eq.list" "$work/ar.list"
 done
+
+echo ""
+echo "## Energy table: per-station detail"
+echo ""
+echo "One row per station (sorted by station number), plus a final \"all\"" \
+     "row: R = mean(sum-over-stations E, area) / mean(sum-over-stations E, equal)," \
+     "the same formula applied to each replicate's whole-scenario total" \
+     "instead of one station. z = (r_s - 1)/SE(r_s) (or (R-1)/SE(R) for \"all\")."
+echo ""
+echo "| config | station | mean E equal | mean E area | r_s | SE(r_s) | z |"
+echo "|---|---|---:|---:|---:|---:|---:|"
+cat "$work/energy_detail_body"
 
 echo ""
 echo "## MFP table"

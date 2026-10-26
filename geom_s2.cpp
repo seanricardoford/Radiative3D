@@ -122,6 +122,20 @@ void TesselSphere::init_icosahedron(int degree) {
   Triangle * tri = 0;
   int ctr;
 
+  if (_HasSolidAngles) {
+    // _SolidAngles grows face-by-face below via grab_centerpoints_
+    // from_tri()'s insert() (num_faces calls, each appending one
+    // face's pow(4,degree) leaf values); without a reservation, the
+    // vector's capacity-doubling growth strategy leaves old and new
+    // buffers briefly live together at the final reallocation, right
+    // when the vector is largest -- a transient peak-RSS cost on top
+    // of the vector's own steady-state size. Reserving the exact
+    // final size up front (same total this loop will insert) avoids
+    // that reallocation entirely. No-op when solid angles aren't
+    // requested, so equal mode is unaffected.
+    _SolidAngles.reserve( num_faces * pow(4,degree) );
+  }
+
   for (ctr=0; ctr<num_faces; ctr++) {
     tri = new Triangle(*fa[ctr][0], *fa[ctr][1], *fa[ctr][2], degree,
                        _HasSolidAngles);
@@ -247,6 +261,17 @@ Triangle::~Triangle(){
 void Triangle::reserve_lists() {
   //Reserve space for the data we want this Triangle to return:
   _CenterPoints.reserve( pow(4,degree) );
+  if (solidAngles) {
+    // Same reallocation-avoidance reasoning as TesselSphere::
+    // init_icosahedron()'s _SolidAngles reservation: subdivide()
+    // below grows _SolidAngles by repeated insert() calls (one per
+    // recursive subtriangle), and without a reservation that would
+    // otherwise double the backing buffer's capacity (old and new
+    // buffers briefly live together) on the way to its final size.
+    // No-op when this triangle wasn't asked to compute solid angles,
+    // so equal mode is unaffected.
+    _SolidAngles.reserve( pow(4,degree) );
+  }
 }
 
 void Triangle::populate_lists() {
