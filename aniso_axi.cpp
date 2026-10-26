@@ -597,6 +597,14 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // they depend only on conv and cell, never on the incidence bin, so
   // the old BuildBinTable() recomputed the same mNumCells values on
   // every one of the 45 P (or 405 S) calls that shared a conv group.
+  // Task 3: in TOA_AREA mode, mPDists' entries already carry Scatterer::
+  // PopulateProbDists()'s per-direction TOAWeight() factor, so these
+  // sums -- and DrawProposal()'s in-cell GetRandomIndexInRange()/
+  // GetRangeMagnitude() draws, further below in this file -- inherit
+  // that weighting automatically, with no code change here; the bounds
+  // (BoundRatio()/AcceptanceBound(), a ratio of a cell's proposal weight
+  // to this same per-cell sum) are correspondingly unaffected. See
+  // aniso_axi.hpp's mPDists member comment.
   std::vector<Real> S0_P(mNumCells), S1_P(mNumCells);
   std::vector<Real> S0_S(mNumCells), S1_S(mNumCells);
   for (Index c = 0; c < mNumCells; c++) {

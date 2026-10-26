@@ -265,6 +265,23 @@ Scatterer::Scatterer(ScatterParams par, sampler_e choice) :
 //   specs/2026-10-17-axisymmetric-sampler-performance-design.md,
 //   decision 8.
 //
+//   AREA-WEIGHTED QUADRATURE (Task 3): Get_TOA_Quadrature() is read once,
+//   into 'areaMode' below, before ParallelFor spawns any worker -- not
+//   re-read per chunk or per direction. In TOA_AREA mode, each of the
+//   four GSATO() values (never m_spol[k]; see Scatterer::IntegrateRows()'s
+//   identical rule and the Global Constraints) is multiplied by
+//   TOAWeight(k) before SetRelativeProb(). The TOA_EQUAL branch is its
+//   own textually separate loop, storing exactly the values it always
+//   has: this file is compiled with GCC's default -ffp-contract=fast,
+//   which could otherwise fuse a weight multiply -- even one behind an
+//   'if' that's always false in TOA_EQUAL mode, even one that would
+//   evaluate to exactly 1.0 -- into a different FMA than before, shifting
+//   the default mode's output by a rounding ulp and breaking byte-
+//   identity with commit 319c8dd (see IntegrateRows()'s own precaution in
+//   this file). Both branches still write every (distribution, k) pair
+//   at most once from a single chunk, so the thread-invariance argument
+//   above holds in either mode.
+//
 void Scatterer::PopulateProbDists(ScatterParams par) {
 
   S2::S2Set & toa = (*pTOA);    // (Convenience alias)
@@ -299,18 +316,33 @@ void Scatterer::PopulateProbDists(ScatterParams par) {
   const Index n = (Index) nTOA;
   const unsigned threads = GetBuildThreads();
   const Index nChunks = (threads == 0) ? 1 : (Index) threads;
+  const bool areaMode = (Get_TOA_Quadrature() == TOA_AREA);  // Read once;
+                              // see header comment above.
 
   ParallelFor(0, nChunks, threads, [&](Index c) {
     const Index chunkBegin = (Index) (((BigIndex) n * c)       / nChunks);
     const Index chunkEnd   = (Index) (((BigIndex) n * (c + 1)) / nChunks);
-    for (Index k = chunkBegin; k < chunkEnd; k++) {
-      Real gpp, gps, gsp, gss, spolv;
-      par.GSATO(toa[k], gpp, gps, gsp, gss, spolv); // Get g-values and
-      mPDists[GPP].SetRelativeProb(k, gpp);         // spol value
-      mPDists[GPS].SetRelativeProb(k, gps);
-      mPDists[GSP].SetRelativeProb(k, gsp);
-      mPDists[GSS].SetRelativeProb(k, gss);
-      m_spol[k]  = spolv;
+    if (areaMode) {
+      for (Index k = chunkBegin; k < chunkEnd; k++) {
+        Real gpp, gps, gsp, gss, spolv;
+        par.GSATO(toa[k], gpp, gps, gsp, gss, spolv); // Get g-values and
+        const Real w = TOAWeight(k);                  // spol value
+        mPDists[GPP].SetRelativeProb(k, w * gpp);
+        mPDists[GPS].SetRelativeProb(k, w * gps);
+        mPDists[GSP].SetRelativeProb(k, w * gsp);
+        mPDists[GSS].SetRelativeProb(k, w * gss);
+        m_spol[k]  = spolv;        // Never weighted.
+      }
+    } else {
+      for (Index k = chunkBegin; k < chunkEnd; k++) {
+        Real gpp, gps, gsp, gss, spolv;
+        par.GSATO(toa[k], gpp, gps, gsp, gss, spolv); // Get g-values and
+        mPDists[GPP].SetRelativeProb(k, gpp);         // spol value
+        mPDists[GPS].SetRelativeProb(k, gps);
+        mPDists[GSP].SetRelativeProb(k, gsp);
+        mPDists[GSS].SetRelativeProb(k, gss);
+        m_spol[k]  = spolv;
+      }
     }
   });
 
@@ -358,18 +390,20 @@ void Scatterer::ComputeMFPs() {
   //
   // Compute mean-free-paths:
   //
-  //   (The imfp's currently contain the sums of the G-functions.  The
-  //   "probability of scattering per unit length" is the "surface
-  //   average" of the G-functions. Note that the individual G-values
-  //   have NOT been scaled by the size of their area element (this
-  //   remains on the TODO: list - for now we make the approximation
-  //   that each ToA represents an equal area), thus instead of
-  //   dividing by 4Pi to get the surface average, we actually need to
-  //   divide by nTOA.)  //TODO: TesselSphere needs to code area
-  //   elements. See docs/toa-quadrature-bias.md for the bias this
-  //   introduces and a future-fix plan.
+  //   (The imfp's currently contain the sums of the G-functions -- each
+  //   term already weighted by TOAWeight(k) when Get_TOA_Quadrature() ==
+  //   TOA_AREA, or left unweighted (today's TOA_EQUAL behavior)
+  //   otherwise; see PopulateProbDists(). The "probability of scattering
+  //   per unit length" is the "surface average" of the G-functions, so
+  //   instead of dividing by 4*Pi we divide by nTOA; that stays correct
+  //   in EITHER mode, because Sum_k TOAWeight(k) == nTOA always --
+  //   TOA_EQUAL sums nTOA terms of 1.0, and TOA_AREA's terms
+  //   SolidAngles()[k]*(nTOA/(4*Pi)) sum to nTOA precisely because the
+  //   solid angles themselves sum to 4*Pi (tessel_solid_angles,
+  //   tests/anisotropy_tests.cpp). See docs/toa-quadrature-bias.md for
+  //   the bias this quadrature choice resolves.)
   //
-  imfp_p /= nTOA;  // TODO: This will change when above TODO fixed
+  imfp_p /= nTOA;
   imfp_s /= nTOA;
   mMeanFreeP[IN_P] = 1.0 / imfp_p;
   mMeanFreeP[IN_S] = 1.0 / imfp_s;
@@ -398,6 +432,16 @@ void Scatterer::ComputeMFPs() {
 //
 //   Assumes mPDists[] and mWholeProbs[] have already been computed
 //   and are available for analysis.
+//
+//   Inherits whichever quadrature PopulateProbDists() applied to
+//   mPDists (TOA_EQUAL or TOA_AREA) with no code change here:
+//   GetDiffProb() normalizes by GetMagnitude(), so each moments[*] term
+//   and the magnitude it's eventually scaled by (mWholeProbs[*]'s own
+//   GetDiffProb(), computed the same way from PopulateWholeProbs()'s
+//   already-weighted mPDists[*].GetMagnitude() sums) carry the same
+//   per-direction TOAWeight() factors throughout -- an area-mode dipole
+//   is therefore the properly area-weighted moment, not the equal-
+//   weighted approximation.
 //
 void Scatterer::ComputeDipoles() {
 

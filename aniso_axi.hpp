@@ -402,6 +402,26 @@ private:
                                          // (a=a_min) take-off-angle
                                          // tables, indexed by the same
                                          // out_types_e codes as 'Conv'.
+                                         // Task 3: in TOA_AREA mode these
+                                         // already carry Scatterer::
+                                         // PopulateProbDists()'s per-
+                                         // direction TOAWeight() factor,
+                                         // so every per-cell sum built
+                                         // from them (the constructor's
+                                         // S0_P/S1_P/S0_S/S1_S, aniso_axi.
+                                         // cpp) and every in-cell draw
+                                         // (DrawProposal()'s
+                                         // GetRandomIndexInRange()/
+                                         // GetRangeMagnitude()) inherits
+                                         // that weighting with no code
+                                         // change in this class; the
+                                         // rigorous bounds (BoundRatio(),
+                                         // AcceptanceBound()) are ratios
+                                         // of a cell's proposal weight to
+                                         // that same cell's mPDists sum,
+                                         // so they stay valid, and
+                                         // numerically unchanged, in
+                                         // either mode.
 
   Index mToaSize;
   Index mNumCells;

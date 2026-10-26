@@ -39,8 +39,19 @@
 //   needed to get the local NED directions, as it is assumed the
 //   relevant transformation has already been applied.
 //
+//   AREA-WEIGHTED QUADRATURE (Task 3): 'areaMode' is read once, before
+//   the loop, exactly as Scatterer::PopulateProbDists() reads
+//   Get_TOA_Quadrature() -- this file, like scatterers.cpp, is compiled
+//   with GCC's default -ffp-contract=fast, so the TOA_EQUAL branch below
+//   stays a completely separate code path, storing exactly the squared
+//   amplitude SetRelativeProb() always has, never a weight factor (even
+//   one that would evaluate to 1.0) folded into the same expression; see
+//   PopulateProbDists()'s header comment for why that distinction
+//   matters under this flag. In TOA_AREA mode, each conversion's squared
+//   amplitude is multiplied by TOAWeight(ctr) before SetRelativeProb().
+//
 ShearDislocation::ShearDislocation(Tensor::Tensor MT, R3::XYZ Loc) :
-  // Initialize base class, allocate probability matrices: 
+  // Initialize base class, allocate probability matrices:
   PhononSource(1,RAY_NUMTYPES),
   // Set up event-source specific class vars:
   mLoc(Loc),
@@ -60,6 +71,9 @@ ShearDislocation::ShearDislocation(Tensor::Tensor MT, R3::XYZ Loc) :
   Real mxz = MT.xz();  // ''
   Real myz = MT.yz();  // ''
 
+  const bool areaMode = (Get_TOA_Quadrature() == TOA_AREA);  // Read once;
+                              // see header comment above.
+
   //
   // RADIATION PATTERNS:
   //
@@ -72,13 +86,17 @@ ShearDislocation::ShearDislocation(Tensor::Tensor MT, R3::XYZ Loc) :
     // Calculate the probability *amplitude* at this theta,phi:
     //
     Real prob;
-    prob = pow(sin(theta),2) 
+    prob = pow(sin(theta),2)
       * (mxx*pow(cos(az),2) + mxy*sin(2*az) + myy*pow(sin(az),2) - mzz)
       + 2*sin(theta)*cos(theta)
-      * (mxz * cos(az)  +  myz * sin(az)) 
+      * (mxz * cos(az)  +  myz * sin(az))
       + mzz;
     prob = prob * prob;    // Actual probability is amplitude squared.
-    mPDists[RAY_P].SetRelativeProb(ctr, prob);  // Store in the array.
+    if (areaMode) {
+      mPDists[RAY_P].SetRelativeProb(ctr, TOAWeight(ctr) * prob);
+    } else {
+      mPDists[RAY_P].SetRelativeProb(ctr, prob);  // Store in the array.
+    }
     //
     // SH-WAVE PATTERN:
     // Calculate the probability *amplitude* at this theta,phi:
@@ -86,16 +104,24 @@ ShearDislocation::ShearDislocation(Tensor::Tensor MT, R3::XYZ Loc) :
     prob = sin(theta) * (0.5*sin(2*az)*(myy-mxx) + cos(2*az)*mxy)
                 + cos(theta) * (cos(az)*myz - sin(az)*mxz);
     prob = prob * prob;    // Actual probability is amplitude squared.
-    mPDists[RAY_SH].SetRelativeProb(ctr, prob); // Store in the array.
+    if (areaMode) {
+      mPDists[RAY_SH].SetRelativeProb(ctr, TOAWeight(ctr) * prob);
+    } else {
+      mPDists[RAY_SH].SetRelativeProb(ctr, prob); // Store in the array.
+    }
     //
     // SV-WAVE PATTERN:
     // Calculate the probability *amplitude* at this theta,phi:
     //
-    prob = sin(theta)*cos(theta) 
+    prob = sin(theta)*cos(theta)
       * (mxx*pow(cos(az),2) + mxy*sin(2*az) + myy*pow(sin(az),2) - mzz)
       + (1.0 - 2*pow(sin(theta),2)) * (mxz*cos(az) + myz*sin(az));
     prob = prob * prob;    // Actual probability is amplitude squared.
-    mPDists[RAY_SV].SetRelativeProb(ctr, prob); // Store in the array.
+    if (areaMode) {
+      mPDists[RAY_SV].SetRelativeProb(ctr, TOAWeight(ctr) * prob);
+    } else {
+      mPDists[RAY_SV].SetRelativeProb(ctr, prob); // Store in the array.
+    }
   }
   //
   // And now the (relative) whole space probabilities:

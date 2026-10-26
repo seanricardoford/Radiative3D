@@ -60,6 +60,7 @@
 #include "phonons.hpp"
 #include "scatterers.hpp"
 #include "aniso_axi.hpp"
+#include "events.hpp"     /* ShearDislocation; pulls in tensors.hpp (Tensor::SDR) */
 #include "ecs.hpp"
 
 
@@ -478,13 +479,24 @@ static Real MeanDrawsPerRealEvent(Scatterer & s, raytype in,
 //   since out_types_e itself is a protected implementation detail of
 //   Scatterer.
 //
+//   'solidAngles', if non-null, area-weights the expected distribution
+//   to match whatever quadrature 'scat' was itself built under (Task 3:
+//   PopulateProbDists() bakes TOAWeight() into mPDists in TOA_AREA mode,
+//   so AttemptAnisotropicScatter()'s realized proposal distribution is
+//   area-weighted too): each direction t's contribution is scaled by
+//   w_t = (*solidAngles)[t] * n/(4*Pi), 'n' being 'toas.size()' -- the
+//   same formula PhononSource::TOAWeight() and Scatterer::IntegrateRows()
+//   use. Null (the default) reproduces today's equal-weighted target.
+//
 static void CheckDistributionMatchesTarget(Scatterer & scat,
                                            const ScatterParams & sp,
                                            raytype intype,
                                            const S2::ThetaPhi & dir,
                                            const R3::XYZ & pol,
                                            const S2::TesselSphere & toas,
-                                           int divisor, int ndraws) {
+                                           int divisor, int ndraws,
+                                           const std::vector<Real> *
+                                             solidAngles = nullptr) {
   const Real rot = Scatterer::RotationForS1(dir, pol);
   const R3::OrthoAxes AA(dir.Theta(), dir.Phi(), rot);
   const R3::XYZ dirXYZ = dir.XYZ();
@@ -501,17 +513,20 @@ static void CheckDistributionMatchesTarget(Scatterer & scat,
   std::map<std::pair<int,int>, Real> expectedWeight;
   Real totalWeight = 0;
   const std::size_t n = toas.size();
+  const Real areaScale = (Real) n / (4.0 * Geometry::Pi);
   for (std::size_t t = 0; t < n; ++t) {
     Real gpp, gps, gsp, gss, spol;
     sp.GSATO(toas[t], gpp, gps, gsp, gss, spol);
     const Real gvals[4] = {gpp, gps, gsp, gss};
     const R3::XYZ e_out = AA.Express(toas[t].XYZ());
     const int coarse = (int)(t / divisor);
+    const Real wt = (solidAngles != nullptr) ?
+      (*solidAngles)[t] * areaScale : (Real) 1.0;
     for (int ci = 0; ci < 2; ++ci) {
       const int conv = convs[ci];
       const Real k_out = (outrt[conv] == RAY_P) ? sp.GetKP() : sp.GetKS();
       const R3::XYZ m = e_out.ScaledBy(k_out) + dirXYZ.ScaledBy(-k_in);
-      const Real w = gvals[conv] * sp.AnisoRatio(m);
+      const Real w = wt * gvals[conv] * sp.AnisoRatio(m);
       expectedWeight[std::make_pair(ci, coarse)] += w;
       totalWeight += w;
     }
@@ -551,9 +566,18 @@ static void CheckDistributionMatchesTarget(Scatterer & scat,
 }
 
 
-TEST(general_iso_forced) {
+// ::: CheckGeneralIsoForced() :::
+//
+//   Shared body for test_general_iso_forced and its TOA_AREA repeat
+//   (test_area_iso_forced): forcing SAMPLER_GENERAL on an isotropic spec
+//   must still report the same majorant MFPs as SAMPLER_AUTO's own
+//   isotropic path, and every proposal must be accepted (AnisoRatio()==1
+//   everywhere for an isotropic spec, regardless of quadrature mode).
+//   Does not call UseTOADegree() itself, so a caller wrapped in
+//   AreaQuadratureScope keeps that scope's mode.
+//
+static void CheckGeneralIsoForced() {
 
-  UseTOADegree(5);
   ScatterParams sp = LopNorCrust(0.5, 0.5, 0.5);  // isotropic spec
   Scatterer general(sp, Scatterer::SAMPLER_GENERAL);
   Scatterer autoSc(sp, Scatterer::SAMPLER_AUTO);
@@ -576,9 +600,27 @@ TEST(general_iso_forced) {
 }
 
 
-TEST(general_rate_matches_integration) {
+TEST(general_iso_forced) {
 
-  const S2::TesselSphere & toas = UseTOADegree(5);
+  UseTOADegree(5);
+  CheckGeneralIsoForced();
+
+}
+
+
+// ::: CheckGeneralRateMatchesIntegration(toas, solidAngles) :::
+//
+//   Shared body for test_general_rate_matches_integration and its
+//   TOA_AREA repeat (test_area_general_rate_matches_integration): the
+//   mean distance to a real (accepted) event must match
+//   1/IntegratedRate(..., toas, solidAngles) -- 'solidAngles' selects
+//   which quadrature both the reference integral and (via the ambient
+//   Get_TOA_Quadrature() mode a caller has already set) the sampler
+//   itself use, so the two stay comparable in either mode.
+//
+static void CheckGeneralRateMatchesIntegration(
+    const S2::TesselSphere & toas, const std::vector<Real> * solidAngles) {
+
   ScatterParams sp = LopNorCrust(2, 2, 0.5);
   Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
 
@@ -596,7 +638,7 @@ TEST(general_rate_matches_integration) {
   for (std::size_t i = 0; i < sizeof(cases)/sizeof(cases[0]); ++i) {
     const S2::ThetaPhi dirTP(cases[i].dir.Theta(), cases[i].dir.Phi());
     const Real g0 = scat.IntegratedRate(cases[i].in, cases[i].dir,
-                                        cases[i].pol, toas);
+                                        cases[i].pol, toas, solidAngles);
     const Real expected = 1.0 / g0;
     const Real mean = MeanDistanceToRealEvent(scat, cases[i].in, dirTP,
                                               cases[i].pol, n);
@@ -609,9 +651,26 @@ TEST(general_rate_matches_integration) {
 }
 
 
-TEST(general_distribution_matches_target) {
+TEST(general_rate_matches_integration) {
 
   const S2::TesselSphere & toas = UseTOADegree(5);
+  CheckGeneralRateMatchesIntegration(toas, nullptr);
+
+}
+
+
+// ::: CheckGeneralDistributionStates(toas, solidAngles) :::
+//
+//   Shared body for test_general_distribution_matches_target and its
+//   TOA_AREA repeat (test_area_general_distribution_matches_target):
+//   runs CheckDistributionMatchesTarget() for a P and an S incidence
+//   state, forwarding 'solidAngles' to both so the expected distribution
+//   matches whichever quadrature the ambient mode (set by the caller)
+//   has the sampler itself drawing from.
+//
+static void CheckGeneralDistributionStates(
+    const S2::TesselSphere & toas, const std::vector<Real> * solidAngles) {
+
   ScatterParams sp = LopNorCrust(2, 2, 0.5);
   Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
   int divisor = 1;
@@ -619,12 +678,20 @@ TEST(general_distribution_matches_target) {
 
   const S2::ThetaPhi dirP(60.0 * Geometry::DtoR, 30.0 * Geometry::DtoR);
   CheckDistributionMatchesTarget(scat, sp, RAY_P, dirP, dirP.XYZ(),
-                                 toas, divisor, 200000);
+                                 toas, divisor, 200000, solidAngles);
 
   const S2::ThetaPhi dirS(Geometry::Pi90, 0.0);  // E
   const R3::XYZ polU(0, 0, 1);                   // U
   CheckDistributionMatchesTarget(scat, sp, RAY_S, dirS, polU,
-                                 toas, divisor, 200000);
+                                 toas, divisor, 200000, solidAngles);
+
+}
+
+
+TEST(general_distribution_matches_target) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  CheckGeneralDistributionStates(toas, nullptr);
 
 }
 
@@ -766,9 +833,19 @@ TEST(general_eps_zero_triaxial_ani) {
 }
 
 
-TEST(isolated_overridemfp) {
+// ::: CheckOverrideMFP(toas, solidAngles) :::
+//
+//   Shared body for test_isolated_overridemfp and its TOA_AREA repeat
+//   (test_isolated_area_overridemfp): under Scatterer::OverrideMFP(),
+//   AttemptAnisotropicScatter()'s redraw-until-accepted loop (Review
+//   Focus item 2) must still land on the weighted target distribution,
+//   not just reproduce the overridden mean path length. 'solidAngles' is
+//   forwarded to CheckDistributionMatchesTarget() to match whichever
+//   quadrature the ambient mode has 'scat' actually sampling under.
+//
+static void CheckOverrideMFP(const S2::TesselSphere & toas,
+                             const std::vector<Real> * solidAngles) {
 
-  const S2::TesselSphere & toas = UseTOADegree(5);
   Scatterer::OverrideMFP(100, 50);
   ScatterParams sp = LopNorCrust(2, 2, 0.5);
   Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
@@ -790,7 +867,15 @@ TEST(isolated_overridemfp) {
   int divisor = 1;
   for (int i = 0; i < 5-2; ++i) divisor *= 4;  // 4^(5-2) = 64
   CheckDistributionMatchesTarget(scat, sp, RAY_P, dirP, dirP.XYZ(),
-                                 toas, divisor, 200000);
+                                 toas, divisor, 200000, solidAngles);
+
+}
+
+
+TEST(isolated_overridemfp) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+  CheckOverrideMFP(toas, nullptr);
 
 }
 
@@ -965,7 +1050,7 @@ TEST(probdist_range) {
 }
 
 
-// ::: BuildIsoPDists(sp, toas, pdists) :::
+// ::: BuildIsoPDists(sp, toas, pdists, solidAngles) :::
 //
 //   Populates 'pdists' (4 ProbDist objects, GPP,GPS,GSP,GSS) the same
 //   way Scatterer::PopulateProbDists() does, and forces integration
@@ -973,18 +1058,32 @@ TEST(probdist_range) {
 //   result is suitable for passing straight into an AxiProposal
 //   constructor, exactly as Scatterer does with its own mPDists.
 //
+//   'solidAngles', if non-null, multiplies each direction k's entry by
+//   w_k = (*solidAngles)[k] * toas.size()/(4*Pi) before storing it --
+//   the same TOA_AREA weighting PopulateProbDists() applies -- so a
+//   caller (e.g. CheckAxiBoundsValid()) can build an AxiProposal from
+//   tables matching an area-mode Scatterer's own mPDists. Null (the
+//   default) reproduces today's unweighted tables; this is test code,
+//   not scatterers.cpp/events.cpp, so the per-mode branch-duplication
+//   discipline those files need under -ffp-contract=fast doesn't apply
+//   here.
+//
 static void BuildIsoPDists(const ScatterParams & sp,
                            const S2::S2Set & toas,
-                           std::vector<ProbDist> & pdists) {
+                           std::vector<ProbDist> & pdists,
+                           const std::vector<Real> * solidAngles = nullptr) {
   pdists.clear();
   for (int c = 0; c < 4; ++c) {pdists.push_back(ProbDist((int)toas.size()));}
+  const Real areaScale = (Real) toas.size() / (4.0 * Geometry::Pi);
   for (Index k = 0; k < toas.size(); ++k) {
     Real gpp,gps,gsp,gss,spol;
     sp.GSATO(toas[k], gpp,gps,gsp,gss,spol);
-    pdists[0].SetRelativeProb(k, gpp);
-    pdists[1].SetRelativeProb(k, gps);
-    pdists[2].SetRelativeProb(k, gsp);
-    pdists[3].SetRelativeProb(k, gss);
+    const Real w = (solidAngles != nullptr) ?
+      (*solidAngles)[k] * areaScale : (Real) 1.0;
+    pdists[0].SetRelativeProb(k, w*gpp);
+    pdists[1].SetRelativeProb(k, w*gps);
+    pdists[2].SetRelativeProb(k, w*gsp);
+    pdists[3].SetRelativeProb(k, w*gss);
   }
   for (int c = 0; c < 4; ++c) {pdists[c].GetMagnitude();} // force Integrate()
 }
@@ -1013,7 +1112,8 @@ static Real RatioForAxisymmetric(const ScatterParams & sp, const R3::XYZ & m,
 }
 
 
-// ::: CheckAxiBoundsValid(sp, toas, thetaDegsP, thetaChiPairsS, stride) :::
+// ::: CheckAxiBoundsValid(sp, toas, thetaDegsP, thetaChiPairsS, stride,
+//                         solidAngles) :::
 //
 //   For each u_rel direction named by 'thetaDegsP' (P incidence angles,
 //   degrees, chi implicitly 0) and 'thetaChiPairsS' (S (theta,chi)
@@ -1024,14 +1124,25 @@ static Real RatioForAxisymmetric(const ScatterParams & sp, const R3::XYZ & m,
 //   equivalently (dividing by CellSum, skipped when CellSum==0 since
 //   both sides are then exactly 0) R(k) <= AcceptanceBound(..)*(1+1e-12).
 //
+//   'solidAngles' is forwarded to BuildIsoPDists(): non-null builds the
+//   AxiProposal from TOA_AREA-weighted tables (matching an area-mode
+//   Scatterer's own mPDists), null (the default) from today's unweighted
+//   ones. The bound itself (AcceptanceBound(), via BoundRatio()) is a
+//   ratio of a per-cell proposal weight to that same cell's isotropic
+//   sum, so it is unaffected by any per-cell scale both share -- only
+//   the direction-dependent weighting that varies *within* the physical
+//   quantities above could matter, and that's exactly what this test
+//   (run under both nullptr and an area 'solidAngles') checks.
+//
 static void CheckAxiBoundsValid(const ScatterParams & sp,
                                 const S2::TesselSphere & toas,
                                 const std::vector<Real> & thetaDegsP,
                                 const std::vector<std::pair<Real,Real> > & thetaChiPairsS,
-                                unsigned stride) {
+                                unsigned stride,
+                                const std::vector<Real> * solidAngles = nullptr) {
 
   std::vector<ProbDist> pdists;
-  BuildIsoPDists(sp, toas, pdists);
+  BuildIsoPDists(sp, toas, pdists, solidAngles);
   AxiProposal axi(sp, toas, pdists);
 
   const Real kP = sp.GetKP();
@@ -1091,27 +1202,27 @@ static void CheckAxiBoundsValid(const ScatterParams & sp,
 }
 
 
-TEST(axi_bounds_valid) {
+// ::: AxiBoundDirections(thetasP, thetaChiS) :::
+//
+//   Fills 'thetasP' (P incidence angles, degrees) and 'thetaChiS' (S
+//   (theta,chi) incidence pairs, degrees) with the direction lists
+//   test_axi_bounds_valid and test_area_axi_bounds_valid both check:
+//   every P bin corner (0,2,...,90) plus a handful past 90 (up to 180,
+//   to exercise the z<0 fold), and a 3x3 subset of (theta,chi) S bin
+//   corners repeated into all four chi quadrants via the chi value
+//   itself (0-360).
+//
+static void AxiBoundDirections(std::vector<Real> & thetasP,
+                               std::vector<std::pair<Real,Real> > & thetaChiS) {
 
-  const S2::TesselSphere & toas = UseTOADegree(5);
-
-  struct SpecCase {Real ax,ay,az;};
-  const SpecCase specs[3] = { {2,2,0.5}, {5,5,0.5}, {0.5,0.5,2} };
-  const Real kappas[2] = {0.3, 0.5};
-  const Real freqs[2]  = {1.0, 4.0};
-
-  // P: every bin corner (0,2,...,90) plus a handful past 90 (up to
-  // 180) to exercise the z<0 fold.
-  std::vector<Real> thetaDegsP;
-  for (int b = 0; b <= AxiProposal::kThetaBins; ++b) {thetaDegsP.push_back(2.0*b);}
+  thetasP.clear();
+  for (int b = 0; b <= AxiProposal::kThetaBins; ++b) {thetasP.push_back(2.0*b);}
   const Real extra[] = {100, 135, 150, 170, 180};
   for (std::size_t i = 0; i < sizeof(extra)/sizeof(extra[0]); ++i) {
-    thetaDegsP.push_back(extra[i]);
+    thetasP.push_back(extra[i]);
   }
 
-  // S: a 3x3 subset of (theta,chi) bin corners, repeated into all four
-  // chi quadrants via the chi value itself (0-360).
-  std::vector<std::pair<Real,Real> > thetaChiS;
+  thetaChiS.clear();
   const Real thetaCorners[3] = {0.0, 44.0, 90.0};
   const Real chiBase[3] = {0.0, 40.0, 90.0};
   for (int qi = 0; qi < 4; ++qi) {
@@ -1123,6 +1234,22 @@ TEST(axi_bounds_valid) {
       }
     }
   }
+
+}
+
+
+TEST(axi_bounds_valid) {
+
+  const S2::TesselSphere & toas = UseTOADegree(5);
+
+  struct SpecCase {Real ax,ay,az;};
+  const SpecCase specs[3] = { {2,2,0.5}, {5,5,0.5}, {0.5,0.5,2} };
+  const Real kappas[2] = {0.3, 0.5};
+  const Real freqs[2]  = {1.0, 4.0};
+
+  std::vector<Real> thetaDegsP;
+  std::vector<std::pair<Real,Real> > thetaChiS;
+  AxiBoundDirections(thetaDegsP, thetaChiS);
 
   for (int si = 0; si < 3; ++si) {
     for (int ki = 0; ki < 2; ++ki) {
@@ -1205,10 +1332,21 @@ TEST(axi_proposal_rejects_non_icosahedral_toa) {
 }
 
 
-TEST(axi_matches_general) {
+// ::: CheckAxiMatchesGeneral(sp) :::
+//
+//   Shared body for test_axi_matches_general and its TOA_AREA repeat
+//   (test_area_axi_matches_general): the axisymmetric and general
+//   samplers must agree on both the mean distance to a real event and
+//   the realized (Conv, coarse take-off-angle) distribution, for 'sp'
+//   under whichever quadrature mode a caller has already set (both
+//   samplers draw from the same, possibly TOA_AREA-weighted, mPDists --
+//   see aniso_axi.hpp's mPDists comment -- so this comparison carries no
+//   discriminating power between the two modes by itself; it's a
+//   same-mode cross-check). Does not call UseTOADegree() itself, so a
+//   caller wrapped in AreaQuadratureScope keeps that scope's mode.
+//
+static void CheckAxiMatchesGeneral(const ScatterParams & sp) {
 
-  UseTOADegree(5);
-  ScatterParams sp = LopNorCrust(2, 2, 0.5);
   Scatterer axiScat(sp, Scatterer::SAMPLER_AXISYMMETRIC);
   Scatterer genScat(sp, Scatterer::SAMPLER_GENERAL);
 
@@ -1293,6 +1431,14 @@ TEST(axi_matches_general) {
   const Real chi2_per_dof = chi2/dof;
   CHECK_MSG(chi2_per_dof < 1.5,
            "chi2/dof too large: " << chi2_per_dof << " (dof=" << dof << ")");
+
+}
+
+
+TEST(axi_matches_general) {
+
+  UseTOADegree(5);
+  CheckAxiMatchesGeneral(LopNorCrust(2, 2, 0.5));
 
 }
 
@@ -2843,7 +2989,7 @@ static std::vector<PhononObs> DrawPhononSequence(Scatterer & s,
   return obs;
 }
 
-// TEST(iso_tables_thread_invariant):
+// ::: CheckIsoTablesThreadInvariant() :::
 //
 //   Guard test (brief Step 1): construction-time parallelism must never
 //   change a table, a report value, or any output of a subsequently-
@@ -2872,9 +3018,14 @@ static std::vector<PhononObs> DrawPhononSequence(Scatterer & s,
 //   thread count -- recorded as such per the brief's own instruction for
 //   this situation.
 //
-TEST(iso_tables_thread_invariant) {
-
-  UseTOADegree(5);
+//   Shared, unchanged, with test_area_tables_thread_invariant (Task 3):
+//   PopulateProbDists()'s TOA_AREA branch is built from the same chunked
+//   ParallelFor as its TOA_EQUAL one (see that method's header comment),
+//   so this guard applies identically under either mode; this helper
+//   doesn't call UseTOADegree() itself, so a caller wrapped in
+//   AreaQuadratureScope keeps that scope's mode.
+//
+static void CheckIsoTablesThreadInvariant() {
 
   Scatterer::SetBuildThreads(1);
   Scatterer isoScat1(LopNorCrust(0.5, 0.5, 0.5));   // isotropic
@@ -2955,6 +3106,14 @@ TEST(iso_tables_thread_invariant) {
              << drawsS7[i].phi << " pol=" << drawsS7[i].pol << " rt="
              << drawsS7[i].rt << ")");
   }
+
+}
+
+
+TEST(iso_tables_thread_invariant) {
+
+  UseTOADegree(5);
+  CheckIsoTablesThreadInvariant();
 
 }
 
@@ -4628,6 +4787,268 @@ TEST(area_p_frame_residual) {
 
   out.close();
 
+}
+
+
+//
+// Task 3: area-weighted scatterer and event-source tables
+// (.superpowers/sdd/2026-10-25-toa-area-quadrature/task-3-brief.md).
+//
+
+TEST(area_tables_weighted) {
+
+  // ScatterProbe exposes Scatterer's protected mPDists/m_spol so this
+  // test can compare individual table entries (not just totals) between
+  // a TOA_EQUAL and a TOA_AREA build of the same ScatterParams. Entries
+  // are read back via GetRangeMagnitude(k,k+1)/GetCumulative(n-1) --
+  // const, and valid once PopulateWholeProbs() has integrated every
+  // mPDists[] entry (true by the time the Scatterer constructor
+  // returns) -- rather than the declared-but-never-defined
+  // ProbDist::GetRelativeProb().
+  struct ScatterProbe : public Scatterer {
+    explicit ScatterProbe(const ScatterParams & p) : Scatterer(p) {}
+    Real Entry(int c, Index k) const {
+      return mPDists[c].GetRangeMagnitude(k, k+1);
+    }
+    Real Mag(int c) const {return mPDists[c].GetCumulative(nTOA-1);}
+    Real Spol(Index k) const {return m_spol[k];}
+  };
+
+  ScatterParams specs[2] = {LopNorCrust(0.5, 0.5, 0.5), LopNorCrust(2, 2, 0.5)};
+
+  for (int si = 0; si < 2; ++si) {
+
+    UseTOADegree(3);
+    ScatterProbe e(specs[si]);
+
+    const S2::TesselSphere & toas = UseTOADegree(3, PhononSource::TOA_AREA);
+    ScatterProbe a(specs[si]);
+
+    UseTOADegree(3);   // Restore TOA_EQUAL for later tests.
+
+    const std::vector<Real> & sa = toas.SolidAngles();
+    const Real scale = (Real) toas.size() / (4.0 * Geometry::Pi);
+
+    // Entries come from differencing cumulative sums, so their rounding
+    // error scales with the table total, not with any one entry --
+    // compare on an absolute scale set by Mag(c).
+    for (int c = 0; c < 4; ++c) {
+      Real sumWeighted = 0.0;
+      for (Index k = 0; k < toas.size(); ++k) {
+        const Real w = sa[k] * scale;
+        const Real expected = w * e.Entry(c, k);
+        CHECK_MSG(std::fabs(a.Entry(c,k) - expected) <= 1e-11 * a.Mag(c),
+                 "spec " << si << " c=" << c << " k=" << k << ": a="
+                 << a.Entry(c,k) << " w*e=" << expected);
+        if (c == 0) {sumWeighted += expected;}
+      }
+      if (c == 0) {
+        CHECK(NearRel(a.Mag(0), sumWeighted, 1e-12));   // weights really
+                                                        // applied, not a
+                                                        // no-op.
+      }
+    }
+
+    for (Index k = 0; k < toas.size(); ++k) {
+      CHECK_MSG(a.Spol(k) == e.Spol(k),
+               "spec " << si << " k=" << k << ": spol differs between "
+               "TOA_EQUAL and TOA_AREA (m_spol must never be weighted)");
+    }
+
+  }
+
+}
+
+
+TEST(area_event_source_tables) {
+
+  // SourceProbe is ScatterProbe's analogue for ShearDislocation: Entry()/
+  // Mag() read mPDists exactly as above (indexed by raytype here, since
+  // ShearDislocation's mPDists has RAY_NUMTYPES==3 entries, not the four
+  // out_types_e conversions Scatterer uses); PFrac() reads the P share of
+  // mWholeProbs[0] via GetDiffProb() -- not const, since (unlike mPDists)
+  // mWholeProbs[0] isn't forced into integrated form until GetDiffProb()'s
+  // own GetMagnitude() call does so.
+  struct SourceProbe : public ShearDislocation {
+    explicit SourceProbe(const Tensor::Tensor & mt) :
+      ShearDislocation(mt, R3::XYZ(0,0,0)) {}
+    Real Entry(raytype rt, Index k) const {
+      return mPDists[rt].GetRangeMagnitude(k, k+1);
+    }
+    Real Mag(raytype rt) const {return mPDists[rt].GetCumulative(nTOA-1);}
+    Real PFrac() {return mWholeProbs[0].GetDiffProb(RAY_P);}
+  };
+
+  const Tensor::Tensor mts[2] = {Tensor::SDR(125,40,90), Tensor::SDR(22.5,90,0)};
+
+  for (int mi = 0; mi < 2; ++mi) {
+
+    UseTOADegree(3);
+    SourceProbe e(mts[mi]);
+
+    const S2::TesselSphere & toas = UseTOADegree(3, PhononSource::TOA_AREA);
+    SourceProbe a(mts[mi]);
+
+    UseTOADegree(3);   // Restore TOA_EQUAL for later tests.
+
+    const std::vector<Real> & sa = toas.SolidAngles();
+    const Real scale = (Real) toas.size() / (4.0 * Geometry::Pi);
+
+    const raytype rts[3] = {RAY_P, RAY_SH, RAY_SV};
+    for (int ri = 0; ri < 3; ++ri) {
+      const raytype rt = rts[ri];
+      for (Index k = 0; k < toas.size(); ++k) {
+        const Real w = sa[k] * scale;
+        const Real expected = w * e.Entry(rt, k);
+        CHECK_MSG(std::fabs(a.Entry(rt,k) - expected) <= 1e-11 * a.Mag(rt),
+                 "mt " << mi << " rt=" << (int)rt << " k=" << k << ": a="
+                 << a.Entry(rt,k) << " w*e=" << expected);
+      }
+    }
+
+    // Icosahedral symmetry integrates these degree-4 radiation patterns
+    // exactly under either quadrature (both share the same, fully
+    // icosahedrally-symmetric direction set -- only the per-direction
+    // weight differs), so the P-fraction total cannot discriminate
+    // TOA_EQUAL from TOA_AREA; the per-entry check above does that
+    // instead.
+    CHECK_MSG(std::fabs(e.PFrac() - 0.4) <= 1e-12
+             && std::fabs(a.PFrac() - 0.4) <= 1e-12,
+             "mt " << mi << ": e.PFrac()=" << e.PFrac()
+             << " a.PFrac()=" << a.PFrac());
+
+  }
+
+}
+
+
+TEST(area_iso_mfp_exact) {
+
+  // Writes build/toa_quadrature_iso.txt:
+  //   "a kappa degree P_equal_relerr P_area_relerr S_equal_relerr S_area_relerr"
+  // (MFP rel err = exact/rate - 1, where 1/rate = GetMajorantMeanFreePath()
+  // -- exact for an isotropic spec, since IsIsotropic() keeps it off the
+  // general/axisymmetric samplers entirely, straight from ComputeMFPs()).
+  std::ofstream out("build/toa_quadrature_iso.txt");
+  out << "# a kappa degree P_equal_relerr P_area_relerr "
+      << "S_equal_relerr S_area_relerr\n";
+
+  const R3::XYZ U(0,0,1), E(1,0,0);
+
+  struct Case {Real a; Real kappa; int checkDeg;};
+  const Case cases[2] = {{0.5, 0.3, 5}, {2.0, 0.5, 6}};
+
+  for (int ci = 0; ci < 2; ++ci) {
+    const Real a = cases[ci].a;
+    const Real kappa = cases[ci].kappa;
+    const int checkDeg = cases[ci].checkDeg;
+
+    ScatterParams sp = LopNorCrust(a, a, a, kappa);   // isotropic spec
+    const Real xP = ExactRate(sp, RAY_P, U, E, 400, 64);
+    const Real xS = ExactRate(sp, RAY_S, U, E, 400, 64);
+
+    for (int d = 5; d <= 7; ++d) {
+
+      UseTOADegree(d);
+      Scatterer e(sp);
+      const Real eP = xP * e.GetMajorantMeanFreePath(RAY_P) - 1.0;
+      const Real eS = xS * e.GetMajorantMeanFreePath(RAY_S) - 1.0;
+
+      Real aP, aS;
+      {
+        AreaQuadratureScope q(d);
+        Scatterer s(sp);
+        aP = xP * s.GetMajorantMeanFreePath(RAY_P) - 1.0;
+        aS = xS * s.GetMajorantMeanFreePath(RAY_S) - 1.0;
+      }
+
+      out << a << " " << kappa << " " << d << " " << eP << " " << aP
+          << " " << eS << " " << aS << "\n";
+
+      if (d == checkDeg) {
+        CHECK_MSG(std::fabs(aP) <= 1e-4,
+                 "a=" << a << " kappa=" << kappa << " degree=" << d
+                 << ": area P relerr=" << aP);
+        CHECK_MSG(std::fabs(aS) <= 1e-4,
+                 "a=" << a << " kappa=" << kappa << " degree=" << d
+                 << ": area S relerr=" << aS);
+        if (a == 2.0) {
+          CHECK_MSG(std::fabs(eP) >= 3e-3,
+                   "a=" << a << " kappa=" << kappa << " degree=" << d
+                   << ": equal P relerr=" << eP << " should exceed 3e-3 "
+                   "(discriminating the two quadratures)");
+          CHECK_MSG(std::fabs(eS) >= 3e-3,
+                   "a=" << a << " kappa=" << kappa << " degree=" << d
+                   << ": equal S relerr=" << eS << " should exceed 3e-3 "
+                   "(discriminating the two quadratures)");
+        }
+      }
+
+    }
+
+  }
+
+  out.close();
+
+  UseTOADegree(5);   // Leave the usual state for later tests.
+
+}
+
+
+TEST(area_iso_forced) {
+  AreaQuadratureScope q(5);
+  CheckGeneralIsoForced();
+}
+
+
+TEST(area_tables_thread_invariant) {
+  AreaQuadratureScope q(5);
+  CheckIsoTablesThreadInvariant();
+}
+
+
+TEST(area_general_rate_matches_integration) {
+  AreaQuadratureScope q(5);
+  CheckGeneralRateMatchesIntegration(q.toas, &q.toas.SolidAngles());
+}
+
+
+TEST(area_general_distribution_matches_target) {
+  AreaQuadratureScope q(5);
+  CheckGeneralDistributionStates(q.toas, &q.toas.SolidAngles());
+}
+
+
+TEST(area_axi_matches_general) {
+  AreaQuadratureScope q(5);
+  CheckAxiMatchesGeneral(LopNorCrust(2, 2, 0.5));
+}
+
+
+TEST(area_axi_bounds_valid) {
+
+  AreaQuadratureScope q(5);
+
+  std::vector<Real> thetasP;
+  std::vector<std::pair<Real,Real> > thetaChiS;
+  AxiBoundDirections(thetasP, thetaChiS);
+
+  struct SpecCase {Real ax,ay,az;};
+  const SpecCase specs[2] = { {2,2,0.5}, {0.5,0.5,2} };
+
+  for (int si = 0; si < 2; ++si) {
+    ScatterParams sp = LopNorCrust(specs[si].ax, specs[si].ay,
+                                  specs[si].az, 0.5);
+    CheckAxiBoundsValid(sp, q.toas, thetasP, thetaChiS, 5,
+                       &q.toas.SolidAngles());
+  }
+
+}
+
+
+TEST(isolated_area_overridemfp) {
+  AreaQuadratureScope q(5);
+  CheckOverrideMFP(q.toas, &q.toas.SolidAngles());
 }
 
 
