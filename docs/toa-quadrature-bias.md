@@ -55,13 +55,14 @@ P −0.04%; `a` = 2 km P +0.62%, S +0.78%.
 `area_iso_mfp_exact` (`tests/anisotropy_tests.cpp`) measures this same
 kind of offset directly against an exact 2-D numerical integral, for
 both quadratures, at take-off-angle degrees 5-7
-(`docs/toa-quadrature-runs-2026-10/toa_quadrature_iso.txt`). Its first
-row below (`a` = 0.5, `kappa` = 0.3, the same Lop Nor crust velocities
-and `kappa` as the prototype's S +1.11% example above) is an
-independent, in-repo measurement of the same quantity by a different
-method (`ExactRate()`'s own numerical quadrature against `Scatterer`,
-not the prototype); the two agree closely (+1.0893% here) but are not
-expected to match to more digits than that:
+(`docs/toa-quadrature-runs-2026-10/toa_quadrature_iso.txt`), using the
+test suite's `LopNorCrust` fixture (Vp 6.2 km/s, Vs 3.6 km/s, 2 Hz). Its
+first row below (`a` = 0.5, `kappa` = 0.3) is an independent, in-repo
+measurement of a comparable crustal layer by a different method
+(`ExactRate()`'s own numerical quadrature against `Scatterer`, not the
+prototype). The prototype's exact inputs are not recorded, so its S
++1.11% above and this row's +1.0893% come from different sources and
+need not agree beyond their leading digits:
 
 | a | kappa | degree | P equal | P area | S equal | S area |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -336,14 +337,22 @@ standard errors (`tests/compare_toa_quadrature.sh`'s header comment), and
 z = (r_s − 1)/SE(r_s). A matching "all stations" row, R, applies the same
 ratio to each replicate's whole-scenario total instead of one station.
 
-At the whole-scenario level, three of the four configurations are not
-resolved at 2 SE: R = 1.0043 ± 0.0287 for lopnor:iso (z=+0.150), 1.0018 ±
+At the whole-scenario level, three of the four configurations show no
+resolved shift: R = 1.0043 ± 0.0287 for lopnor:iso (z=+0.150), 1.0018 ±
 0.0307 for lopnor:axi4 (z=+0.058), and 0.9958 ± 0.0668 for crustpinch:iso
-(z=−0.063) -- consistent with no net scenario-wide shift, though each
-SE is wide enough that a few-percent shift still cannot be excluded. The
-fourth is resolved well past 3 SE: crustpinch:axi4's R = 0.8521 ± 0.0426
-(z=−3.475), `area` mode's total scenario energy about 14.8% lower than
-`equal` mode's.
+(z=−0.063). How large a shift they still allow differs. The 95%
+Student-t intervals (11 to 22 degrees of freedom, explained in the next
+paragraph) are about [0.93, 1.07] for both Lop Nor configurations but
+about [0.85, 1.14] for crustpinch:iso, so a shift of roughly ±14% cannot
+be excluded there; at 11 degrees of freedom that interval's lower end
+(0.849) even falls below crustpinch:axi4's ratio. The fourth
+configuration, crustpinch:axi4, has R = 0.8521 ± 0.0426 (z=−3.475):
+`area` mode's total scenario energy is about 14.8% lower than `equal`
+mode's, 95% interval about [0.76, 0.95]. Its two-sided p-value is
+0.002-0.005; correcting for the four configurations tested (Bonferroni
+or Šidák) gives about 0.009-0.021, so the drop is significant at a 5%
+family-wise level, but not at 1% if the effective degrees of freedom are
+near 11.
 
 At the individual-station level, 17 of the 80 station-rows (16+16+24+24,
 one set per configuration) have |z| >= 2, and 4 reach |z| >= 3 (1 in

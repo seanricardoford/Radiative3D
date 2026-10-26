@@ -371,9 +371,11 @@ private:
 // based quadrisection algorithm produces points which are
 // approximately, though not exactly, uniformly spread across the
 // surface of the sphere.  (Surface-area-per-point variability: rms
-// 8.64%, ranging 0.928x-1.207x the mean at degrees 6-9; measured by
-// tests/anisotropy_tests.cpp's tessel_solid_angles, logged to
-// docs/toa-quadrature-runs-2026-10/toa_quadrature_solid_angles.txt.)
+// 8.64%, ranging 0.928x-1.207x the mean -- at degrees 6-8 as measured
+// by tests/anisotropy_tests.cpp's tessel_solid_angles, logged to
+// docs/toa-quadrature-runs-2026-10/toa_quadrature_solid_angles.txt,
+// and at degree 9 by the feasibility check in docs/superpowers/specs/
+// 2026-10-25-toa-area-quadrature-design.md.)
 //
 class TesselSphere : public ThetaPhi_Set {
 public:

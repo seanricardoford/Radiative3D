@@ -8,8 +8,8 @@ set -eu
 # (station energies) move, how much do per-scatterer mean free paths
 # shift, and what does area mode cost to build at a high take-off-angle
 # degree. Not named test_*, so the full test-suite check skips it; run it
-# directly. See .superpowers/sdd/2026-10-25-toa-area-quadrature/
-# task-5-brief.md and docs/superpowers/specs/2026-10-25-toa-area-
+# directly. See docs/superpowers/plans/2026-10-25-toa-area-quadrature.md
+# (Task 5) and docs/superpowers/specs/2026-10-25-toa-area-
 # quadrature-design.md.
 #
 # Environment, with defaults:

@@ -4192,10 +4192,9 @@ TEST(p_frame_consistency) {
 // ****  TOA QUADRATURE TESTS                                        ****
 // ****                                                              ****
 //
-// See docs/superpowers/plans/2026-10-25-toa-area-quadrature.md and
-// docs/superpowers/specs/2026-10-25-toa-area-quadrature-design.md, and
-// .superpowers/sdd/2026-10-25-toa-area-quadrature/task-1-brief.md (Task
-// 1: per-direction solid angles in S2::TesselSphere).
+// See docs/superpowers/plans/2026-10-25-toa-area-quadrature.md (Task 1:
+// per-direction solid angles in S2::TesselSphere) and
+// docs/superpowers/specs/2026-10-25-toa-area-quadrature-design.md.
 //
 
 TEST(tessel_solid_angles) {
@@ -4222,7 +4221,7 @@ TEST(tessel_solid_angles) {
   //      precision;
   //   o  at degrees 6 through 8, the leaf-to-leaf spread of solid
   //      angles (relative to the mean) matches the fixed statistics a
-  //      throwaway prototype measured at degree 6 (task-1-brief.md) --
+  //      throwaway prototype measured at degree 6 (the plan's Task 1) --
   //      empirical confirmation that the leaf formula in
   //      Triangle::populate_lists() (geom_s2.cpp) is being applied
   //      correctly and consistently across the whole recursive
@@ -4297,7 +4296,7 @@ TEST(tessel_solid_angles) {
     if (d >= 6) {
       // Recursive quadrisection has run deep enough that the
       // leaf-shape distribution has settled into the fixed pattern the
-      // throwaway prototype measured at degree 6 (task-1-brief.md):
+      // throwaway prototype measured at degree 6 (the plan's Task 1):
       // min/mean=0.9277266, max/mean=1.2065026, rms=0.0864447.
       CHECK_MSG(minOverMean >= 0.9276 && minOverMean <= 0.9278,
                "degree " << d << ": min/mean=" << minOverMean);
@@ -4356,8 +4355,8 @@ TEST(tessel_solid_angles_mirror) {
 
 //
 // Task 2: quadrature mode in PhononSource and area-weighted report
-// integration (.superpowers/sdd/2026-10-25-toa-area-quadrature/
-// task-2-brief.md). The helpers below are shared with Task 3.
+// integration (docs/superpowers/plans/2026-10-25-toa-area-quadrature.md,
+// Task 2). The helpers below are shared with Task 3.
 //
 
 // ::: AreaQuadratureScope :::
@@ -4821,7 +4820,7 @@ TEST(area_p_frame_residual) {
 
 //
 // Task 3: area-weighted scatterer and event-source tables
-// (.superpowers/sdd/2026-10-25-toa-area-quadrature/task-3-brief.md).
+// (docs/superpowers/plans/2026-10-25-toa-area-quadrature.md, Task 3).
 //
 
 TEST(area_tables_weighted) {

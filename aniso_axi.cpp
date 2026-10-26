@@ -601,9 +601,14 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // PopulateProbDists()'s per-direction TOAWeight() factor, so these
   // sums -- and DrawProposal()'s in-cell GetRandomIndexInRange()/
   // GetRangeMagnitude() draws, further below in this file -- inherit
-  // that weighting automatically, with no code change here; the bounds
-  // (BoundRatio()/AcceptanceBound(), a ratio of a cell's proposal weight
-  // to this same per-cell sum) are correspondingly unaffected. See
+  // that weighting automatically, with no code change here. The bounds
+  // stay valid in either mode: BoundRatio() depends only on the
+  // representative geometry, and a cell's acceptance bound
+  // (AcceptanceBound(), its proposal weight over this same per-cell sum)
+  // is unchanged up to rounding too, except in cells where kWeightFloor
+  // sets the proposal weight (BuildBinTable(), below) -- that floor
+  // scales with the now-weighted sums, so the bound's value there
+  // differs between modes, always looser, never invalid. See
   // aniso_axi.hpp's mPDists member comment.
   std::vector<Real> S0_P(mNumCells), S1_P(mNumCells);
   std::vector<Real> S0_S(mNumCells), S1_S(mNumCells);

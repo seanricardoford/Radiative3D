@@ -1,6 +1,6 @@
 # TOA Quadrature Runs, 2026-10
 
-Captured output for Task 5 of `.superpowers/sdd/2026-10-25-toa-area-quadrature/`
+Captured output for Task 5 of `docs/superpowers/plans/2026-10-25-toa-area-quadrature.md`
 (scenario-level report and degree-9 build check for `--toa-quadrature`).
 Task 6 quotes these files; every number in that documentation task must
 trace back to something here.
@@ -26,13 +26,12 @@ K=4); its own narrative and figures are untouched by this K=12 change.
 - **Git revision:** working tree at commit `fa33661` plus this final-review
   fix wave's changes to `tests/compare_toa_quadrature.sh` (the
   `TQ_REPLICATES` default and the per-configuration seed-block scheme;
-  the `make` inside the script built exactly this tree); committed as
-  part of this fix wave's commit(s) immediately after capture -- `git
-  log` on branch `quadrature` shows them as `fa33661`'s child(ren) at
-  capture time. (`git rev-parse --short HEAD` at the moment of capture
-  still read `fa33661`, since the fix wave was not yet committed; citing
-  that alone would omit the script change this fix wave made, so it's
-  spelled out here instead.)
+  the `make` inside the script built exactly this tree), committed
+  together with this capture, immediately after it, as `d6382a0`.
+  (`git rev-parse --short HEAD` at the moment of capture still read
+  `fa33661`, since the fix wave was not yet committed; citing that alone
+  would omit the script change this fix wave made, so it's spelled out
+  here instead.)
 - **Wall time:** 121.2s (whole-script elapsed time, `date +%s.%N` before/after
   the invocation above; includes a `make` of the current build, 96 energy/MFP
   runs, and 12 degree-9 build-check runs)
@@ -107,23 +106,26 @@ for a momentary ~100.7 MB). (Verified directly: a standalone
 machine's compiler/standard library confirms this capacity progression --
 262144 -> 524288 -> 1048576 -> 2097152 -> 4194304 -> 8388608 -- landing
 on size=5,242,880, capacity=8,388,608.) So the fix's theoretical benefit
-spans a wide range -- anywhere from the 25.2 MB
-steady-state overshoot alone up to the full ~58.7 MB difference between
-the old transient peak and the new exact allocation -- depending on
-whether "maximum resident set size" happens to catch that momentary
-spike.
-That range is itself comparable to, or larger than, the build-check
-table's actual measured RSS deltas (`compare-toa-quadrature.out`,
-"Degree-9 build check" section), which is why those deltas are noisy: at
-only 3 replicates per cell, run-to-run allocator noise on a several-GB
-process is large enough to swamp a signal in this range. Taking the
-pre-fix and post-fix build-check captures together, the measured delta
-went the *wrong* way for `iso` after the fix (+68.4 ->
-+78.0 MB -- a fix that can only reduce allocation overhead cannot
-legitimately increase the steady-state delta) while `axi10` dropped to
-+28.6 MB, below even the 41.9 MB exact-data figure. **Task 6 should cite
-the 41.9 MB exact-data figure (and, if useful, the 67.1 MB old-capacity /
-25.2 MB-overshoot figures above) for the storage cost itself, and should
-not treat the build-check table's specific per-variant MB deltas as more
-precise than this noise floor allows.**
+spans 25.2 MB (the steady-state overshoot alone) to about 58.7 MB (the
+old transient peak minus the new exact allocation), depending on whether
+"maximum resident set size" happens to catch that momentary spike.
+
+The build-check RSS deltas cannot resolve effects of this size. Each is a
+median of 3 runs of a roughly 5 GB process, and the same post-fix code
+gave quite different deltas in two captures: `iso` +78.0 MB at commit
+`ea9e6f4` and +52.9 MB at commit `d6382a0` (the current
+`compare-toa-quadrature.out`, "Degree-9 build check" section), `axi10`
++28.6 MB and +71.1 MB. The pre-fix capture at commit `2eb8eea` gave
++68.4 MB and +91.7 MB. The older figures exist only in those commits'
+versions of the file (`git show
+<commit>:docs/toa-quadrature-runs-2026-10/compare-toa-quadrature.out`).
+Run-to-run differences of 25-43 MB on identical code are as large as the
+41.9 MB being measured, so no single before/after comparison isolates
+the fix. **Cite the 41.9 MB exact-data figure (and, if useful, the
+67.1 MB old-capacity / 25.2 MB-overshoot figures above) for the storage
+cost itself, and do not treat the build-check table's per-variant MB
+deltas as more precise than this noise floor allows.** The build-time
+deltas are steadier: +0.26 s (`iso`) and +0.33 s (`axi10`) in the current
+capture, against +0.29 s and +0.32 s in the post-fix capture at
+`ea9e6f4`.
 
