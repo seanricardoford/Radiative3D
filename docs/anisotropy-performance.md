@@ -8,15 +8,15 @@ to a captured test or benchmark run, as each section states.
 ## 2026-10-25 measurements (code 65128c6)
 
 Measured by running `BASELINE_EXE=/tmp/r3d-baseline/main tests/benchmark_aniso.sh`
-(captured as `bench3-full.out`), `tests/compare_axi_general.sh` (captured as
-`cmp2-full.out`), two fresh-seed confirmation runs of
+(captured as `anisotropy-runs-2026-10/bench3-full.out`), `tests/compare_axi_general.sh` (captured as
+`anisotropy-runs-2026-10/cmp2-full.out`), two fresh-seed confirmation runs of
 `tests/compare_axi_general.sh` using its new `CMP_SEED_BASE` option
-(captured as `cmp3-fresh.out`, run at `8a996ec` -- one commit after
+(captured as `anisotropy-runs-2026-10/cmp3-fresh.out`, run at `8a996ec` -- one commit after
 `65128c6` that only adds `CMP_SEED_BASE` itself, so it exercises the same
 production code as `65128c6`), and `tests/test_anisotropy_unit.sh
 near_axi_cost`, snapshotted as
 `docs/anisotropy-near-axi-cost-2026-10-25.txt` (that file's own header
-names the exact command and commit). That exact filtered command is
+names the exact command and commit). The raw captures are kept in `docs/anisotropy-runs-2026-10/`. That exact filtered command is
 reproducible: `random.hpp`'s `RandomUniform()` falls back to a
 `thread_local` engine fixed-seeded `0x7261643364` whenever no
 `RandomContext` is active, which is always true entering a standalone
@@ -43,7 +43,7 @@ medium* (`gen`: `ay = ax * (1 + 1e-5)` instead of `ay = ax`), alongside the
 original isotropic and triaxial (`tri`: `ax = r*a`, `ay = sqrt(r)*a`) rows.
 Each row also reports a zero-phonon build time (construction only, a single
 measurement) alongside the total time (the median of the 3 repeats).
-Output, verbatim from `bench3-full.out`:
+Output, verbatim from `anisotropy-runs-2026-10/bench3-full.out`:
 
 | Scenario | eps | Mode | r | Build s | Total s | Slowdown vs isotropic | Gate vs isotropic | axi/gen ratio | Gate same-medium |
 |---|---|---|---|---:|---:|---:|---|---:|---|
@@ -95,7 +95,7 @@ Isotropic current/baseline ratios (median of 3 current runs over 3 baseline
 runs now take about 21-27% of the pre-anisotropy time. Both are comfortably
 under the 1.05 no-slowdown threshold, so this check passed.
 
-The run as a whole still exited nonzero (`EXIT=1` in `bench3-full.out`).
+The run as a whole still exited nonzero (`EXIT=1` in `anisotropy-runs-2026-10/bench3-full.out`).
 That is not from a failed case or an isotropic-ratio violation -- it is from
 four same-medium rows marked `SLOW`, covered next. A `GATE` row (more than
 2x the isotropic time) is reported but, per `tests/benchmark_aniso.sh`'s own
@@ -109,7 +109,7 @@ workload, not a sign of a defect.
 Design decision 5's gate compares the axisymmetric sampler against the
 general sampler on the *same medium* (`gen`'s `ay = ax * (1 + 1e-5)`, the
 near-axisymmetric medium): axi total time must be at most 1.05x the gen
-total time in every configuration. In `bench3-full.out`, four rows exceed
+total time in every configuration. In `anisotropy-runs-2026-10/bench3-full.out`, four rows exceed
 it -- three at `eps = 0.01` (lopnor r=2, crustpinch r=2, crustpinch r=4)
 and one at `eps = 0.05` (crustpinch r=2) -- all build-dominated (small
 absolute totals, where the axi/gen build-time gap is a larger fraction of
@@ -122,9 +122,9 @@ the total), ranging from 1.053x to 1.082x:
 | crustpinch | 0.01 | 4 | 1.078 | 2.47 | 2.29 |
 | crustpinch | 0.05 | 2 | 1.053 | 2.58 | 2.45 |
 
-This is not the same set of four rows `bench2-full.out` (an earlier
+This is not the same set of four rows `anisotropy-runs-2026-10/bench2-full.out` (an earlier
 commit, `42b2fe6`) showed SLOW, even though both runs have exactly four
-SLOW rows: `bench2-full.out` had crustpinch eps=0.01 r=10 SLOW (1.051),
+SLOW rows: `anisotropy-runs-2026-10/bench2-full.out` had crustpinch eps=0.01 r=10 SLOW (1.051),
 which passes here (1.046); and did *not* have crustpinch eps=0.05 r=2
 SLOW (1.042 there, passing), which is SLOW here (1.053). Every run
 involved finishes in 6 seconds or less, and every ratio sits within about
@@ -135,7 +135,7 @@ the code.
 
 `progress.md`'s ruling R14 supersedes the plan's earlier ruling R8 with
 these final numbers (R8 was accepted against the equivalent
-`bench2-full.out` run, before the run-to-run flip above and the degree-7
+`anisotropy-runs-2026-10/bench2-full.out` run, before the run-to-run flip above and the degree-7
 finding below -- see "Scenario level" under "Near-axisymmetric
 validation" -- were known):
 
@@ -264,7 +264,7 @@ two samplers agree to within their design tolerances.
 
 `tests/compare_axi_general.sh` at degree 7 (this program's *default*
 `--toa-degree`, `doc/MANUAL.md`), K=8 replicates, 1000 permutations, all 8
-benchmark configurations, captured as `cmp2-full.out`. This script runs at
+benchmark configurations, captured as `anisotropy-runs-2026-10/cmp2-full.out`. This script runs at
 a different take-off-angle degree and replicate structure than the
 degree-9 benchmark above, so its G/A time-ratio column is a *separate*
 measurement, not a substitute for the same-medium gate -- see "Timing:
@@ -334,7 +334,7 @@ pre-existing issue from the P-frame defect.)
 Per ruling R11, two fresh-seed confirmations of lopnor eps=0.01 r=10 were
 re-run directly on the final code (`8a996ec`) using the new
 `CMP_SEED_BASE` option, K=16, 2000 permutations each, captured as
-`cmp3-fresh.out`:
+`anisotropy-runs-2026-10/cmp3-fresh.out`:
 
 | Seed base | windows | p(A,G) | p(A,A') |
 |---|---:|---:|---:|
@@ -348,7 +348,7 @@ sampling fluke, reproduced deterministically by that one seed set, rather
 than a regression introduced since the original investigation.
 
 **Family-wise correction (ledger I5):** the `p(A,G) < 0.01` gate quoted
-above for `cmp2-full.out` (and `tests/compare_axi_general.sh`'s own exit
+above for `anisotropy-runs-2026-10/cmp2-full.out` (and `tests/compare_axi_general.sh`'s own exit
 status at the time) was uncorrected for running 16 such comparisons (2 per
 config x 8 configs) in one invocation -- at a nominal alpha=0.01 each, the
 chance of at least one false-positive GATE on fully correct code was about
@@ -360,7 +360,7 @@ raises its default permutation count from 1000 to 2000 so the test retains
 enough resolution below the tighter threshold (the permutation test's own
 resolution floor, 1/(permutations+1), must stay below the threshold or no
 config could ever GATE). Under the corrected threshold for an 8-config run
-(0.01/16 = 0.000625), `cmp2-full.out`'s recorded p(A,G)=0.0040 passes.
+(0.01/16 = 0.000625), `anisotropy-runs-2026-10/cmp2-full.out`'s recorded p(A,G)=0.0040 passes.
 
 ### Draws and tentative collisions per real event (final code)
 

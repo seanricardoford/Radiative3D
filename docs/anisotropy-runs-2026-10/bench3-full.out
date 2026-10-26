@@ -1,0 +1,55 @@
+Sun Oct 25 16:18:38 PDT 2026
+Apple M2 Ultra
+g++ (Homebrew GCC 16.2.0) 16.2.0
+65128c6
+Isotropic ratio (lopnor, current/baseline, median of 3): 0.2115
+Isotropic ratio (crustpinch, current/baseline, median of 3): 0.2699
+
+# Anisotropic Scale-Length Performance Benchmark
+
+Degree: 9, Threads: 24, Repeats: 3
+
+| Scenario | eps | Mode | r | Build s | Total s | Slowdown vs isotropic | Gate vs isotropic | axi/gen ratio | Gate same-medium |
+|---|---|---|---|---:|---:|---:|---|---:|---|
+| lopnor | 0.01 | iso | - | 3.79 | 4.92 | 1.000x | ok | - | - |
+| lopnor | 0.01 | axi | 2 | 4.43 | 5.74 | 1.166x | ok | 1.082 | SLOW |
+| lopnor | 0.01 | gen | 2 | 3.86 | 5.30 | 1.078x | ok | - | - |
+| lopnor | 0.01 | tri | 2 | 3.86 | 5.22 | 1.061x | ok | - | - |
+| lopnor | 0.01 | axi | 4 | 4.51 | 6.00 | 1.220x | ok | 1.005 | ok |
+| lopnor | 0.01 | gen | 4 | 3.89 | 5.97 | 1.214x | ok | - | - |
+| lopnor | 0.01 | tri | 4 | 3.89 | 5.46 | 1.109x | ok | - | - |
+| lopnor | 0.01 | axi | 10 | 4.54 | 7.58 | 1.541x | ok | 0.726 | ok |
+| lopnor | 0.01 | gen | 10 | 3.94 | 10.44 | 2.122x | GATE | - | - |
+| lopnor | 0.01 | tri | 10 | 3.88 | 6.84 | 1.391x | ok | - | - |
+| lopnor | 0.05 | iso | - | 3.73 | 11.18 | 1.000x | ok | - | - |
+| lopnor | 0.05 | axi | 2 | 4.53 | 19.00 | 1.700x | ok | 0.988 | ok |
+| lopnor | 0.05 | gen | 2 | 3.86 | 19.23 | 1.720x | ok | - | - |
+| lopnor | 0.05 | tri | 2 | 3.90 | 16.06 | 1.437x | ok | - | - |
+| lopnor | 0.05 | axi | 4 | 4.54 | 30.42 | 2.722x | GATE | 0.703 | ok |
+| lopnor | 0.05 | gen | 4 | 3.95 | 43.30 | 3.874x | GATE | - | - |
+| lopnor | 0.05 | tri | 4 | 3.90 | 27.98 | 2.503x | GATE | - | - |
+| lopnor | 0.05 | axi | 10 | 4.47 | 79.26 | 7.093x | GATE | 0.476 | ok |
+| lopnor | 0.05 | gen | 10 | 3.96 | 166.41 | 14.892x | GATE | - | - |
+| lopnor | 0.05 | tri | 10 | 3.85 | 69.21 | 6.194x | GATE | - | - |
+| crustpinch | 0.01 | iso | - | 2.04 | 2.24 | 1.000x | ok | - | - |
+| crustpinch | 0.01 | axi | 2 | 2.25 | 2.48 | 1.104x | ok | 1.075 | SLOW |
+| crustpinch | 0.01 | gen | 2 | 2.12 | 2.31 | 1.027x | ok | - | - |
+| crustpinch | 0.01 | tri | 2 | 2.08 | 2.31 | 1.030x | ok | - | - |
+| crustpinch | 0.01 | axi | 4 | 2.27 | 2.47 | 1.099x | ok | 1.078 | SLOW |
+| crustpinch | 0.01 | gen | 4 | 2.08 | 2.29 | 1.020x | ok | - | - |
+| crustpinch | 0.01 | tri | 4 | 2.08 | 2.31 | 1.028x | ok | - | - |
+| crustpinch | 0.01 | axi | 10 | 2.26 | 2.50 | 1.113x | ok | 1.046 | ok |
+| crustpinch | 0.01 | gen | 10 | 2.11 | 2.39 | 1.064x | ok | - | - |
+| crustpinch | 0.01 | tri | 10 | 2.13 | 2.31 | 1.029x | ok | - | - |
+| crustpinch | 0.05 | iso | - | 2.02 | 2.29 | 1.000x | ok | - | - |
+| crustpinch | 0.05 | axi | 2 | 2.26 | 2.58 | 1.127x | ok | 1.053 | SLOW |
+| crustpinch | 0.05 | gen | 2 | 2.11 | 2.45 | 1.070x | ok | - | - |
+| crustpinch | 0.05 | tri | 2 | 2.11 | 2.42 | 1.058x | ok | - | - |
+| crustpinch | 0.05 | axi | 4 | 2.30 | 2.68 | 1.168x | ok | 0.941 | ok |
+| crustpinch | 0.05 | gen | 4 | 2.10 | 2.84 | 1.241x | ok | - | - |
+| crustpinch | 0.05 | tri | 4 | 2.07 | 2.63 | 1.147x | ok | - | - |
+| crustpinch | 0.05 | axi | 10 | 2.28 | 3.38 | 1.475x | ok | 0.592 | ok |
+| crustpinch | 0.05 | gen | 10 | 2.12 | 5.70 | 2.490x | GATE | - | - |
+| crustpinch | 0.05 | tri | 10 | 2.08 | 3.53 | 1.542x | ok | - | - |
+EXIT=1
+Sun Oct 25 16:52:46 PDT 2026

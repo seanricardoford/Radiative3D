@@ -1,0 +1,19 @@
+Sat Oct 24 02:37:53 PDT 2026
+96d6538
+
+# Axisymmetric vs. Near-Axisymmetric-General Scenario Validation
+
+Degree: 7, Threads: 24, Replicates (K): 8, Permutations: 1000
+
+| Scenario | eps | r | windows | p(A,G) | p(A,A') | median s (A) | median s (G) | G/A time ratio |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| lopnor | 0.01 | 4 | 76 | 0.7420 | 0.9580 | 1.437 | 0.964 | 0.671x |
+| lopnor | 0.01 | 10 | 75 | 0.0020 | 0.6170 | 1.796 | 1.910 | 1.063x |
+| lopnor | 0.05 | 4 | 655 | 0.1040 | 0.1320 | 7.011 | 9.019 | 1.286x |
+| lopnor | 0.05 | 10 | 602 | 0.1330 | 0.7900 | 17.798 | 35.798 | 2.011x |
+| crustpinch | 0.01 | 4 | 105 | 0.2820 | 0.1620 | 0.498 | 0.342 | 0.687x |
+| crustpinch | 0.01 | 10 | 101 | 0.3570 | 0.2500 | 0.502 | 0.349 | 0.695x |
+| crustpinch | 0.05 | 4 | 119 | 0.2760 | 0.1540 | 0.536 | 0.437 | 0.815x |
+| crustpinch | 0.05 | 10 | 154 | 0.3570 | 0.3700 | 0.684 | 0.970 | 1.418x |
+EXIT=1
+Sat Oct 24 02:53:14 PDT 2026
