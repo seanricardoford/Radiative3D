@@ -964,8 +964,10 @@ TEST(report_directional_mfps) {
   // ruling R9, the reference below (398) is this implementation's own
   // converged value, not the exact integral, so the report states the
   // rate the simulation actually realizes under its own quadrature. See
-  // docs/toa-quadrature-bias.md for the bias mechanism and a future-fix
-  // plan.
+  // docs/toa-quadrature-bias.md for the bias mechanism, and
+  // area_report_directional_mfps (below) for the implemented
+  // area-weighted fix, which converges this same state to its exact
+  // integral (374.7) instead.
   const Real expected[8] = {1603, 0, 1203, 755, 0, 0, 443, 398};
   const int checkIdx[]   = {0, 2, 3, 6, 7};  // P0, P90, S0, S90SV, S90SH
                                              // -- the reference values
