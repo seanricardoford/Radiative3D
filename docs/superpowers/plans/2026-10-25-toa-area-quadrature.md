@@ -308,7 +308,7 @@ git commit -m "Add the take-off-angle quadrature mode and area-weighted report i
   - `m_spol` is unchanged in both modes;
   - test helpers `CheckDistributionMatchesTarget(..., const std::vector<Real> * solidAngles = nullptr)` and `BuildIsoPDists(sp, toas, pdists, const std::vector<Real> * solidAngles = nullptr)`, each multiplying its weight or entry by w_k = Ω_k·n/(4π) when the pointer is non-null;
   - `CheckAxiBoundsValid(..., const std::vector<Real> * solidAngles = nullptr)`, which forwards to `BuildIsoPDists`;
-  - `static void CheckAxiMatchesGeneral(const ScatterParams & sp)`, the factored body of `axi_matches_general`, which keeps that test's behavior unchanged.
+  - `static void CheckAxiMatchesGeneral(const ScatterParams & sp)` and the other factored helpers listed under Step 1. Each preserves its original test's behavior.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -316,22 +316,28 @@ git commit -m "Add the take-off-angle quadrature mode and area-weighted report i
 TEST(area_tables_weighted)
   // degree 3; ScatterProbe : Scatterer exposes
   //   Real Entry(int c, Index k) const {return mPDists[c].GetRangeMagnitude(k, k+1);}
+  //   Real Mag(int c) const {return mPDists[c].GetCumulative(size-1);}
   //   Real Spol(Index k) const {return m_spol[k];}
+  // Entries come from differencing cumulative sums, so their rounding error scales with
+  // the table total, not with the entry: compare on an absolute scale set by the total.
   for spec in {LopNorCrust(0.5,0.5,0.5), LopNorCrust(2,2,0.5)}:
     UseTOADegree(3) -> ScatterProbe e(spec);
     UseTOADegree(3, TOA_AREA) -> ScatterProbe a(spec), with w_k from the sphere's solid angles;
     UseTOADegree(3);
-    each c in 0..3, k with e.Entry(c,k) > 0:
-      CHECK(NearRel(a.Entry(c,k)/e.Entry(c,k), w_k, 1e-9));
+    each c in 0..3, each k:
+      CHECK(std::fabs(a.Entry(c,k) - w_k*e.Entry(c,k)) <= 1e-11 * a.Mag(c));
+    CHECK(NearRel(a.Mag(0), sum_k w_k*e.Entry(0,k), 1e-12));   // weights really applied
     each k: CHECK(a.Spol(k) == e.Spol(k));
 TEST(area_event_source_tables)
-  // SourceProbe : ShearDislocation(mt, R3::XYZ(0,0,0)) exposes Entry(rt,k) as above, and
-  //   Real PFrac() {return mWholeProbs[0].GetDiffProb(RAY_P);}
+  // SourceProbe : ShearDislocation(mt, R3::XYZ(0,0,0)) exposes Entry(rt,k) and Mag(rt)
+  //   as above, and Real PFrac() {return mWholeProbs[0].GetDiffProb(RAY_P);}
   for mt in {Tensor::SDR(125,40,90), Tensor::SDR(22.5,90,0)}:
     equal and area probes at degree 3, as above;
-    rt in {RAY_P, RAY_SH, RAY_SV}, k with e.Entry > 1e-12*max: ratio == w_k within 1e-9;
+    each rt in {RAY_P, RAY_SH, RAY_SV}, each k:
+      CHECK(std::fabs(a.Entry(rt,k) - w_k*e.Entry(rt,k)) <= 1e-11 * a.Mag(rt));
     CHECK(std::fabs(e.PFrac() - 0.4) <= 1e-12 && std::fabs(a.PFrac() - 0.4) <= 1e-12);
     // icosahedral symmetry integrates these degree-4 patterns exactly
+    // (so the totals cannot discriminate; the per-entry check does)
 TEST(area_iso_mfp_exact)
   // writes build/toa_quadrature_iso.txt:
   //   "a kappa degree P_equal_relerr P_area_relerr S_equal_relerr S_area_relerr"
@@ -343,26 +349,31 @@ TEST(area_iso_mfp_exact)
       CHECK(std::fabs(xP*s.GetMajorantMeanFreePath(RAY_P) - 1) <= 1e-4);   // and S
       if (a == 2) CHECK(std::fabs(xP*e.GetMajorantMeanFreePath(RAY_P) - 1) >= 3e-3);   // and S
 TEST(area_iso_forced)
-  // general_iso_forced's checks, inside AreaQuadratureScope q(5)
+  // AreaQuadratureScope q(5); CheckGeneralIsoForced();
 TEST(area_tables_thread_invariant)
-  // iso_tables_thread_invariant's checks inside AreaQuadratureScope q(5). Factor its body
-  // into a helper with no mode parameter; the scope selects the mode.
+  // AreaQuadratureScope q(5); CheckIsoTablesThreadInvariant();
 TEST(area_general_rate_matches_integration)
-  // general_rate_matches_integration's 10 cases and 4-sigma tolerance, inside
-  // AreaQuadratureScope q(5), with expected = 1/IntegratedRate(..., toas, &toas.SolidAngles())
+  // AreaQuadratureScope q(5); CheckGeneralRateMatchesIntegration(q.toas, &q.toas.SolidAngles());
 TEST(area_general_distribution_matches_target)
-  // general_distribution_matches_target's two states, inside AreaQuadratureScope q(5),
-  // passing &toas.SolidAngles() to CheckDistributionMatchesTarget
+  // AreaQuadratureScope q(5); CheckGeneralDistributionStates(q.toas, &q.toas.SolidAngles());
 TEST(area_axi_matches_general)
   // AreaQuadratureScope q(5); CheckAxiMatchesGeneral(LopNorCrust(2,2,0.5));
 TEST(area_axi_bounds_valid)
-  // AreaQuadratureScope q(5); axi_bounds_valid's P/S direction lists, specs {2,2,0.5} and
-  // {0.5,0.5,2}, kappa 0.5, frequency 2 Hz;
-  // CheckAxiBoundsValid(sp, q.toas, thetasP, thetaChiS, 5, &q.toas.SolidAngles())
+  // AreaQuadratureScope q(5); AxiBoundDirections(thetasP, thetaChiS);
+  // specs {2,2,0.5} and {0.5,0.5,2}, kappa 0.5, frequency 2 Hz:
+  //   CheckAxiBoundsValid(sp, q.toas, thetasP, thetaChiS, 5, &q.toas.SolidAngles())
 TEST(isolated_area_overridemfp)
-  // isolated_overridemfp's checks inside AreaQuadratureScope q(5), passing
-  // &q.toas.SolidAngles() to CheckDistributionMatchesTarget
+  // AreaQuadratureScope q(5); CheckOverrideMFP(q.toas, &q.toas.SolidAngles());
 ```
+
+  The area variants must not copy test bodies. Factor each existing test's body into the helper it names, and leave the existing test as a one-line call with `nullptr`, or with no mode argument where the scope decides. The existing tests' behavior must not change.
+  - `general_iso_forced` → `static void CheckGeneralIsoForced()`
+  - `iso_tables_thread_invariant` → `static void CheckIsoTablesThreadInvariant()`
+  - `general_rate_matches_integration` → `static void CheckGeneralRateMatchesIntegration(const S2::TesselSphere & toas, const std::vector<Real> * solidAngles)`, with expected = 1/IntegratedRate(..., toas, solidAngles)
+  - `general_distribution_matches_target` → `static void CheckGeneralDistributionStates(const S2::TesselSphere & toas, const std::vector<Real> * solidAngles)`
+  - `isolated_overridemfp` → `static void CheckOverrideMFP(const S2::TesselSphere & toas, const std::vector<Real> * solidAngles)`
+  - `axi_matches_general` → `static void CheckAxiMatchesGeneral(const ScatterParams & sp)`
+  - `axi_bounds_valid`'s direction lists → `static void AxiBoundDirections(std::vector<Real> & thetasP, std::vector<std::pair<Real,Real> > & thetaChiS)`
 
 - [ ] **Step 2: Run `tests/test_anisotropy_unit.sh`.**
   - Expect failures in `area_tables_weighted`, `area_event_source_tables`, `area_iso_mfp_exact`, `area_general_rate_matches_integration` and `area_general_distribution_matches_target`.
@@ -461,7 +472,7 @@ git commit -m "Add the --toa-quadrature option with area-mode provenance output"
   - **MFP table, per config:** from the first run of each mode, print one row per scatterer-dump data row. Rows lie between `BEGIN SCATTERER DUMP` and `END SCATTERERS`, excluding those that start with `#`; match rows by order. Columns: `a ay az mode | MFP(P) equal area %change | MFP(S) equal area %change`. Isotropic rows have no ay, az or mode; print `-`.
   - **Build check** (`TQ_BUILD_CHECK=1`):
     - degree 9, `--num-phonons=0`, Lop Nor `iso` and `axi10`, equal against area, 3 runs each;
-    - measure median wall seconds and maximum resident set size with `/usr/bin/time -l` on macOS (parse `maximum resident set size`, in bytes), falling back to `-v` on Linux (parse `Maximum resident set size (kbytes)`);
+    - measure median wall seconds and maximum resident set size of the `main` process itself, not the shell around it. Set `R3D_EXE` to a small wrapper script that runs `/usr/bin/time -l "$ROOT/main" "$@"` on macOS (parse `maximum resident set size`, in bytes) or `/usr/bin/time -v` on Linux (parse `Maximum resident set size (kbytes)`), with time's own output going to a file in the run directory;
     - print a Markdown table.
   - **Streams:** progress goes to stderr. The script exits nonzero if any run fails or lacks `__SIMULATION_COMPLETE__`.
 - [ ] **Step 2: Smoke-test** with `TQ_CONFIGS=lopnor:iso TQ_REPLICATES=2 TQ_LOPNOR_PHONONS=20000 TQ_BUILD_CHECK=0 TQ_DEGREE=5 tests/compare_toa_quadrature.sh`. It prints both tables and exits 0.
