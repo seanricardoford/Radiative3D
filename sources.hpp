@@ -65,6 +65,27 @@ protected:
   typedef std::vector<ProbabilityArray>   ProbabilityMatrix;
   */
 
+public:
+
+  // ::::::::::::::::::::::::::::::::::::::::::::::::
+  // ::: Custom Data Types  (PhononSource Class) :::
+  // ::::::::::::::::::::::::::::::::::::::::::::::::
+
+  enum toa_quadrature_e {TOA_EQUAL, // One vote per take-off direction:
+                                    // every PhononSource integrates and
+                                    // samples the class-level take-off-
+                                    // angle array with weight 1 at every
+                                    // index. Today's (and, before this
+                                    // enum existed, the only) behavior.
+                         TOA_AREA}; // Area-weighted: TOAWeight(k) scales
+                                    // index k by its share of solid
+                                    // angle, correcting the icosahedral
+                                    // tessellation's leaf-to-leaf
+                                    // density bias -- see docs/toa-
+                                    // quadrature-bias.md and docs/
+                                    // superpowers/specs/2026-10-25-toa-
+                                    // area-quadrature-design.md.
+
 protected:
 
   // ::::::::::::::::::::::::::::::::::::::::::::
@@ -79,19 +100,62 @@ protected:
                              // Set_TOA_Array() at some point prior to
                              // construction of first object.
 
+  static toa_quadrature_e cm_TOAQuadrature;  // The mode most recently
+                                      // set by Set_TOA_Array()
+                                      // (TOA_EQUAL until the first
+                                      // call). Read by Get_TOA_
+                                      // Quadrature() and TOAWeight().
+
+  static const std::vector<Real> * cm_pTOASolidAngles;
+                                      // 'toa'->SolidAngles() from the
+                                      // most recent Set_TOA_Array()
+                                      // call, or null if that
+                                      // TesselSphere had none.
+                                      // TOAWeight() only dereferences
+                                      // this in TOA_AREA mode, where
+                                      // Set_TOA_Array() guarantees it is
+                                      // non-null (it validates
+                                      // toa->HasSolidAngles() first).
+
+  static Real cm_TOAAreaScale;        // nTOA/(4*Pi): TOA_AREA's fixed
+                                      // per-call scale factor, so that
+                                      // Sum_k TOAWeight(k) == nTOA (the
+                                      // same convention Scatterer::
+                                      // IntegrateRows()'s w_k uses).
+                                      // Computed once by Set_TOA_Array(),
+                                      // alongside pTOA and nTOA.
+
 public:
 
   // ::::::::::::::::::::::::::::::::::::::::::::
   // ::: Static Methods  (PhononSource Class) :::
   // ::::::::::::::::::::::::::::::::::::::::::::
 
-  static void Set_TOA_Array(S2::S2Set * toa) {
-    pTOA = toa;
-    nTOA = pTOA->size();
-  }
+  static void Set_TOA_Array(S2::TesselSphere * toa,
+                            toa_quadrature_e quad = TOA_EQUAL);
+      // Points every subsequently-constructed PhononSource at 'toa'
+      // (and sets nTOA to its size) and records the quadrature mode,
+      // exactly like the Set_TOA_Array(S2::S2Set*) this replaces, plus:
+      // TOA_AREA additionally requires toa->HasSolidAngles() -- an
+      // equal-weight TesselSphere can't supply TOAWeight()'s Omega_k --
+      // and throws std::logic_error, leaving pTOA, nTOA, the mode and
+      // the weights completely unchanged, when it doesn't (validated
+      // before anything is touched). See sources.cpp.
 
+  static toa_quadrature_e Get_TOA_Quadrature() {return cm_TOAQuadrature;}
+      // The mode most recently set by Set_TOA_Array() (TOA_EQUAL before
+      // the first call).
 
 protected:
+
+  static Real TOAWeight(Index k);
+      // The class-level take-off-angle array's quadrature weight for
+      // index k: 1.0 in TOA_EQUAL mode (today's behavior -- every
+      // direction counted equally); SolidAngles()[k]*(nTOA/(4*Pi)) in
+      // TOA_AREA mode, i.e. direction k's share of the whole sphere's
+      // solid angle, rescaled so the weights sum to nTOA. The scale
+      // factor (cm_TOAAreaScale) is fixed once, in Set_TOA_Array(). See
+      // sources.cpp.
 
   // :::::::::::::::::::::::::::::::::::::::::
   // ::: Member Data  (PhononSource Class) :::

@@ -329,7 +329,11 @@ protected:
   void ComputeReportStats();   // Populates mReportMeanFreeP,
                                // mReportDipoles, and mReportMFPs.
                                // Called by the constructor whenever
-                               // IsAnisotropic() is true.
+                               // IsAnisotropic() is true. Integrates
+                               // ReportDirs() area-weighted (passing its
+                               // SolidAngles()) when Get_TOA_Quadrature()
+                               // == TOA_AREA, equal-weighted (nullptr)
+                               // otherwise.
 
   struct GRow {
     Real G[NUM_OUTTYPES]; // gpp,gps,gsp,gss (ScatterParams::GSATO()'s
@@ -360,6 +364,7 @@ protected:
   void IntegrateRows(raytype intype, const R3::XYZ & dir,
                      const R3::XYZ & pol, const S2::S2Set & dirs,
                      const std::vector<GRow> & rows,
+                     const std::vector<Real> * solidAngles,
                      Real & rate, Real & dipole) const;
                       // The row-based integrator shared by
                       // IntegrateRateAndDipole() and
@@ -373,12 +378,38 @@ protected:
                       // today's single combined loop -- so a call's
                       // result never depends on how (or on how many
                       // threads) 'rows' was built.
+                      //
+                      // solidAngles == nullptr (TOA_EQUAL): today's loop,
+                      // byte for byte unchanged -- see scatterers.cpp
+                      // and the project's Global Constraints (GCC
+                      // contracts multiply-adds in this file under
+                      // -ffp-contract=fast, so this path must never be
+                      // touched by the weighted branch below it).
+                      // Otherwise (TOA_AREA, or any other explicit
+                      // per-direction quadrature): solidAngles->size()
+                      // must equal dirs.size() (std::logic_error if
+                      // not), and each direction k's term is scaled by
+                      // w_k = (*solidAngles)[k] * dirs.size()/(4*Pi):
+                      //   rate   = Sum_k w_k*Sum_conv(G*AnisoRatio) / n
+                      //   dipole = Sum w_k*G*AnisoRatio*cos(psi)
+                      //            / Sum w_k*G*AnisoRatio
+                      //            (0 when that denominator is 0)
+                      // 'n' here is THIS call's dirs.size(), not the
+                      // class-level nTOA -- 'dirs' is often ReportDirs(),
+                      // a fixed degree-6 set independent of the run's
+                      // --toa-degree.
 
   static const S2::TesselSphere & ReportDirs();
                                // The fixed degree-6 direction set
                                // ComputeReportStats() integrates over,
                                // independent of a run's --toa-degree.
-                               // Built lazily on first use.
+                               // Built lazily on first use, always with
+                               // solid angles (Task 1's TesselSphere
+                               // third argument), so ComputeReportStats()
+                               // can integrate it area-weighted in
+                               // TOA_AREA mode; the solid angles cost
+                               // about 0.66 MB and a few ms once per
+                               // process, paid in either mode.
 
 
 public:
@@ -453,7 +484,8 @@ public:
                       // !IsAnisotropic().
 
   Real IntegratedRate(raytype intype, const R3::XYZ & dir,
-                      const R3::XYZ & pol, const S2::S2Set & dirs) const;
+                      const R3::XYZ & pol, const S2::S2Set & dirs,
+                      const std::vector<Real> * solidAngles = nullptr) const;
                       // Exact total scattering rate (1/mean-free-path)
                       // for an incoming ray of type 'intype' travelling
                       // in direction 'dir' with polarization direction
@@ -464,13 +496,18 @@ public:
                       // the corresponding exchange wavevector, summed
                       // over the two conversions available to
                       // 'intype'. Used to validate AttemptAnisotropic-
-                      // Scatter()'s realized event rate. A thin wrapper
-                      // around IntegrateRateAndDipole() that discards
-                      // the dipole.
+                      // Scatter()'s realized event rate. 'solidAngles',
+                      // if non-null, area-weights the average instead
+                      // of averaging equally -- see IntegrateRows();
+                      // must be the same size as 'dirs' or this throws
+                      // std::logic_error. A thin wrapper around
+                      // IntegrateRateAndDipole() that discards the
+                      // dipole.
 
   void IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
                               const R3::XYZ & pol, const S2::S2Set & dirs,
-                              Real & rate, Real & dipole) const;
+                              Real & rate, Real & dipole,
+                              const std::vector<Real> * solidAngles = nullptr) const;
                       // Computes the same 'rate' as IntegratedRate(),
                       // plus the dipole moment of the corresponding
                       // integrated scattering pattern, Sum(cos(psi)*G)
@@ -481,7 +518,8 @@ public:
                       // G-value*AnisoRatio() weight -- the same
                       // convention ComputeDipoles() uses for the
                       // isotropic case, applied here to the anisotropic
-                      // integral.
+                      // integral. 'solidAngles' is forwarded to
+                      // IntegrateRows() unchanged; see IntegratedRate().
 
   const std::vector<Real> & GetReportMFPs() const {return mReportMFPs;}
                       // Directional mean free paths, in dump order:

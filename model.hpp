@@ -319,7 +319,7 @@ private:;
   // ::: Private Member Variables  (Model Class) :::
   // :::::::::::::::::::::::::::::::::::::::::::::::
 
-  S2::S2Set        * mpTOA_Array;   // Take-off Angle Array
+  S2::TesselSphere * mpTOA_Array;   // Take-off Angle Array
 
   ShearDislocation * mpEventSource; // Event Source (Current
                                     // incarnation of the code

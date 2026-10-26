@@ -154,24 +154,30 @@ static bool NearRel(Real actual, Real expected, Real reltol) {
 // ****                                                              ****
 //
 
-// ::: UseTOADegree(degree) :::
+// ::: UseTOADegree(degree, quad) :::
 //
 //   Ensures a take-off-angle set (S2::TesselSphere) of the given
 //   icosahedral tessellation degree exists, building and caching it on
 //   first request (one TesselSphere per distinct degree, kept for the
 //   life of the program -- rebuilding a high-degree sphere repeatedly
-//   would be wasteful across tests that share a degree), points
-//   PhononSource at it via Set_TOA_Array(), and returns it by reference
-//   so callers can also iterate its directions directly.
+//   would be wasteful across tests that share a degree). Cached spheres
+//   are now always built WITH solid angles (withSolidAngles=true), so
+//   the same cached sphere serves either quadrature mode; points
+//   PhononSource at it in the requested mode via Set_TOA_Array() (quad
+//   defaults to TOA_EQUAL, so every existing call site -- which only
+//   ever passes 'degree' -- is unaffected), and returns it by reference
+//   so callers can also iterate its directions (and, in TOA_AREA mode,
+//   its SolidAngles()) directly.
 //
-static const S2::TesselSphere & UseTOADegree(int degree) {
+static const S2::TesselSphere & UseTOADegree(int degree,
+    PhononSource::toa_quadrature_e quad = PhononSource::TOA_EQUAL) {
   static std::map<int, S2::TesselSphere *> cache;
 
   S2::TesselSphere *& slot = cache[degree];
   if (slot == nullptr) {
-    slot = new S2::TesselSphere(S2::TESS_ICO, degree);
+    slot = new S2::TesselSphere(S2::TESS_ICO, degree, true);
   }
-  PhononSource::Set_TOA_Array(slot);
+  PhononSource::Set_TOA_Array(slot, quad);
   return *slot;
 }
 
@@ -4183,6 +4189,444 @@ TEST(tessel_solid_angles_mirror) {
                << " Omega[j]=" << sa.SolidAngles()[j]);
     }
   }
+
+}
+
+
+//
+// Task 2: quadrature mode in PhononSource and area-weighted report
+// integration (.superpowers/sdd/2026-10-25-toa-area-quadrature/
+// task-2-brief.md). The helpers below are shared with Task 3.
+//
+
+// ::: AreaQuadratureScope :::
+//
+//   RAII helper that switches the class-level take-off-angle array to
+//   TOA_AREA quadrature, at a given icosahedral degree, for its
+//   lifetime, then switches back to TOA_EQUAL (at the same degree) when
+//   it goes out of scope -- so a test can write
+//
+//       { AreaQuadratureScope q(5); ...area-mode checks using q.toas... }
+//
+//   and trust that later tests still see today's default TOA_EQUAL
+//   mode, even if this one throws partway through (the destructor still
+//   runs during stack unwinding). 'toas' aliases the same cached
+//   degree-'degree' TesselSphere UseTOADegree() returns, so a test can
+//   use q.toas directly too (e.g. to pass its SolidAngles() to
+//   IntegratedRate()).
+//
+struct AreaQuadratureScope {
+  const S2::TesselSphere & toas;
+  const int degree;
+
+  explicit AreaQuadratureScope(int deg) :
+    toas(UseTOADegree(deg, PhononSource::TOA_AREA)), degree(deg) {}
+
+  ~AreaQuadratureScope() {
+    UseTOADegree(degree);   // Back to TOA_EQUAL, same degree.
+  }
+};
+
+
+// ::: GaussLegendreNodes(n, x, w) :::
+//
+//   Computes the n nodes (in increasing order, x[i] in (-1,1)) and
+//   weights of the n-point Gauss-Legendre quadrature rule on [-1,1]:
+//   the standard algorithm (e.g. Numerical Recipes' gauleg) that starts
+//   each of the ceil(n/2) non-negative roots of the degree-n Legendre
+//   polynomial P_n from the asymptotic guess cos(Pi*(i+0.75)/(n+0.5))
+//   and refines it by Newton iteration -- using the three-term
+//   recurrence (j+1)*P_(j+1)(z) = (2j+1)*z*P_j(z) - j*P_(j-1)(z) to
+//   evaluate P_n and, via the standard derivative relation, P_n' at
+//   each iterate -- until successive iterates agree to 1e-15, then
+//   mirrors each root (and its weight) across zero, since the roots of
+//   a Legendre polynomial are symmetric about 0. Used by ExactRate()
+//   below to integrate over cos(psi) directly, so the sin(psi) Jacobian
+//   of the usual spherical-polar measure never has to appear
+//   explicitly.
+//
+static void GaussLegendreNodes(int n, std::vector<Real> & x,
+                               std::vector<Real> & w) {
+
+  x.assign(n, 0.0);
+  w.assign(n, 0.0);
+
+  const int m = (n + 1) / 2;   // Roots come in +/- pairs about 0; only
+                               // the non-negative half needs solving.
+  for (int i = 0; i < m; ++i) {
+
+    Real z = std::cos(Geometry::Pi * (i + 0.75) / (n + 0.5));  // Initial
+                                                               // guess.
+    Real z1, pp;
+    do {
+      Real p1 = 1.0;
+      Real p2 = 0.0;
+      for (int j = 0; j < n; ++j) {
+        const Real p3 = p2;
+        p2 = p1;
+        p1 = ((2.0*j + 1.0) * z * p2 - j * p3) / (j + 1.0);
+      }
+      // p1 now holds P_n(z) and p2 holds P_(n-1)(z); this is the
+      // standard relation for P_n'(z) in terms of those two.
+      pp = n * (z * p1 - p2) / (z*z - 1.0);
+      z1 = z;
+      z = z1 - p1 / pp;
+    } while (std::fabs(z - z1) > 1e-15);
+
+    x[i]         = -z;
+    x[n - 1 - i] =  z;
+    w[i]         = 2.0 / ((1.0 - z*z) * pp*pp);
+    w[n - 1 - i] = w[i];
+
+  }
+
+}
+
+
+// ::: ExactRate(sp, intype, dir, pol, nTheta, nPhi) :::
+//
+//   An independent reference for Scatterer::IntegratedRate(), built
+//   directly from a ScatterParams rather than through a Scatterer or a
+//   discrete take-off-angle set. Uses the same integrand
+//   Scatterer::IntegrateRows() sums over 'dirs' -- GSATO() times
+//   AnisoRatio() at the exchange wavevector k_out*e_out - k_in*dir,
+//   summed over intype's two conversions -- but evaluates it at
+//   arbitrary points t on the ray-frame sphere rather than at a fixed
+//   take-off-angle grid: AA = OrthoAxes(dir.Theta(), dir.Phi(),
+//   RotationForS1(dirTP,pol)) and e_out = AA.Express(t.XYZ()), exactly
+//   as IntegrateRows() builds them from 'dir' and 'pol' (with 'dirs[k]'
+//   playing the role of 't' there). The integral over t is evaluated by
+//   true quadrature instead of an equal- or area-weighted average over
+//   a fixed grid: Gauss-Legendre in cos(psi) (nTheta nodes;
+//   GaussLegendreNodes() above) crossed with the midpoint rule in phi
+//   (nPhi equally-spaced nodes) -- each spectrally accurate for the
+//   smooth, phi-periodic integrand here, so a resolution self-check
+//   (two different (nTheta,nPhi) pairs agreeing to near machine
+//   precision) confirms convergence rather than merely self-consistency.
+//   The result is divided by 4*Pi, matching IntegrateRows()'s own
+//   divide-by-n convention (n directions averaging the same integral,
+//   here evaluated exactly rather than sampled).
+//
+static Real ExactRate(const ScatterParams & sp, raytype intype,
+                      const R3::XYZ & dir, const R3::XYZ & pol,
+                      int nTheta, int nPhi) {
+
+  std::vector<Real> u, wgl;
+  GaussLegendreNodes(nTheta, u, wgl);
+
+  const Real k_in = (intype == RAY_P) ? sp.GetKP() : sp.GetKS();
+  const S2::ThetaPhi dirTP(dir.Theta(), dir.Phi());
+  const Real rot = Scatterer::RotationForS1(dirTP, pol);
+  const R3::OrthoAxes AA(dirTP.Theta(), dirTP.Phi(), rot);
+
+  const Real dPhi = 2.0 * Geometry::Pi / nPhi;
+
+  Real sum = 0.0;
+  for (int i = 0; i < nTheta; ++i) {
+    const Real psi = std::acos(u[i]);
+    for (int j = 0; j < nPhi; ++j) {
+      const Real phi = (j + 0.5) * dPhi;
+      const S2::ThetaPhi t(psi, phi);
+
+      Real gpp, gps, gsp, gss, spol;
+      sp.GSATO(t, gpp, gps, gsp, gss, spol);
+      const R3::XYZ e_out = AA.Express(t.XYZ());
+
+      Real rowSum;
+      if (intype == RAY_P) {
+        const R3::XYZ mpp = e_out.ScaledBy(sp.GetKP()) + dir.ScaledBy(-k_in);
+        const R3::XYZ mps = e_out.ScaledBy(sp.GetKS()) + dir.ScaledBy(-k_in);
+        rowSum = gpp * sp.AnisoRatio(mpp) + gps * sp.AnisoRatio(mps);
+      } else {
+        const R3::XYZ msp = e_out.ScaledBy(sp.GetKP()) + dir.ScaledBy(-k_in);
+        const R3::XYZ mss = e_out.ScaledBy(sp.GetKS()) + dir.ScaledBy(-k_in);
+        rowSum = gsp * sp.AnisoRatio(msp) + gss * sp.AnisoRatio(mss);
+      }
+
+      sum += wgl[i] * dPhi * rowSum;
+    }
+  }
+
+  return sum / (4.0 * Geometry::Pi);
+
+}
+
+
+TEST(quadrature_mode_switch) {
+
+  // Set_TOA_Array()'s TOA_AREA mode requires solid angles; TOAWeight()
+  // (reached here through a protected-static-accessing probe subclass,
+  // since it's protected) must return 1.0 per direction in TOA_EQUAL
+  // mode and SolidAngles()[k]*(N/(4*Pi)) in TOA_AREA mode, summing to N
+  // either way; and a rejected Set_TOA_Array() call (missing solid
+  // angles) must leave the array, mode and weights completely
+  // unchanged.
+
+  S2::TesselSphere plain(S2::TESS_ICO, 3);
+  S2::TesselSphere withSA(S2::TESS_ICO, 3, true);
+
+  struct WeightProbe : public PhononSource {
+    static Real W(Index k) {return TOAWeight(k);}
+  };
+
+  PhononSource::Set_TOA_Array(&withSA, PhononSource::TOA_AREA);
+  CHECK(PhononSource::Get_TOA_Quadrature() == PhononSource::TOA_AREA);
+
+  Real sum = 0.0;
+  for (std::size_t k = 0; k < withSA.size(); ++k) {
+    sum += WeightProbe::W((Index) k);
+  }
+  CHECK(NearRel(sum, (Real) withSA.size(), 1e-12));
+
+  const Real areaScale = (Real) withSA.size() / (4.0 * Geometry::Pi);
+  for (std::size_t k = 0; k < withSA.size(); ++k) {
+    CHECK(NearRel(WeightProbe::W((Index) k),
+                 withSA.SolidAngles()[k] * areaScale, 1e-14));
+  }
+
+  bool threw = false;
+  try {
+    PhononSource::Set_TOA_Array(&plain, PhononSource::TOA_AREA);
+  } catch (const std::logic_error &) {
+    threw = true;
+  }
+  CHECK_MSG(threw && PhononSource::Get_TOA_Quadrature()
+           == PhononSource::TOA_AREA,
+           "a Set_TOA_Array() call rejected for missing solid angles "
+           "must leave the previous mode (TOA_AREA) unchanged");
+
+  PhononSource::Set_TOA_Array(&withSA);   // quad defaults to TOA_EQUAL.
+  CHECK(PhononSource::Get_TOA_Quadrature() == PhononSource::TOA_EQUAL);
+  for (std::size_t k = 0; k < withSA.size(); ++k) {
+    CHECK(WeightProbe::W((Index) k) == 1.0);
+  }
+
+  UseTOADegree(5);   // Leave the usual state for later tests.
+
+}
+
+
+TEST(integrated_rate_solid_angles) {
+
+  // IntegratedRate()'s new 'solidAngles' argument: a size mismatch
+  // against 'dirs' must throw std::logic_error (not silently read out
+  // of bounds or produce a wrong answer), and a correctly area-weighted
+  // call must land far closer to the exact spherical integral
+  // (ExactRate()) than the unweighted (TOA_EQUAL) call does, for an
+  // isotropic medium -- the a=2 km case the design doc's feasibility
+  // check used for this comparison.
+
+  const S2::TesselSphere & d6 = UseTOADegree(6);
+  ScatterParams sp = LopNorCrust(2, 2, 2);   // isotropic, a = 2 km
+  Scatterer s(sp, Scatterer::SAMPLER_GENERAL);
+
+  const R3::XYZ U(0, 0, 1), E(1, 0, 0);
+
+  std::vector<Real> bad(d6.size() - 1, 1.0);
+  bool threw = false;
+  try {
+    s.IntegratedRate(RAY_P, U, E, d6, &bad);
+  } catch (const std::logic_error &) {
+    threw = true;
+  }
+  CHECK_MSG(threw, "IntegratedRate() with a mis-sized solidAngles vector "
+           "should throw std::logic_error");
+
+  // Reference self-check: ExactRate() at two resolutions should agree
+  // to near machine precision, confirming the reference integrator has
+  // actually converged, not merely that it's self-consistent by luck.
+  CHECK(NearRel(ExactRate(sp, RAY_P, U, E, 400, 64),
+               ExactRate(sp, RAY_P, U, E, 800, 128), 1e-12));
+
+  const raytype intypes[2] = {RAY_P, RAY_S};
+  for (int i = 0; i < 2; ++i) {
+    const raytype in = intypes[i];
+    const Real x = ExactRate(sp, in, U, E, 400, 64);
+    const Real areaRate = s.IntegratedRate(in, U, E, d6, &d6.SolidAngles());
+    const Real equalRate = s.IntegratedRate(in, U, E, d6);
+    CHECK_MSG(std::fabs(x / areaRate - 1.0) <= 1e-4,
+             "intype " << i << ": exact=" << x << " area=" << areaRate);
+    CHECK_MSG(std::fabs(x / equalRate - 1.0) >= 3e-3,
+             "intype " << i << ": exact=" << x << " equal=" << equalRate
+             << " (expected equal-weight error to exceed 3e-3, "
+             "discriminating the two quadratures)");
+  }
+
+}
+
+
+TEST(area_report_directional_mfps) {
+
+  // TOA_AREA mode must reproduce docs/toa-quadrature-bias.md's
+  // area-weighted (2,2,0.5) table (P0, P90, S0, S90SV, S90SH; P45,
+  // S45SV, S45SH have no independently-given reference there, same as
+  // test_report_directional_mfps's equal-mode analogue) to within tight
+  // relative tolerance. Order: P0 P45 P90 S0 S45SV S45SH S90SV S90SH.
+  //
+  // Also writes build/toa_quadrature_report.txt, comparing every one of
+  // the 8 states' equal- and area-weighted directional MFPs side by
+  // side for human inspection.
+
+  std::vector<Real> areaMfps;
+  {
+    AreaQuadratureScope q(5);   // Degree for the Scatterer's own
+                                // (general-sampler) tables; GetReport-
+                                // MFPs() always integrates over the
+                                // fixed degree-6 ReportDirs() regardless,
+                                // now in TOA_AREA mode for the scope's
+                                // life.
+    ScatterParams sp = LopNorCrust(2, 2, 0.5);  // axisymmetric
+    CHECK(sp.IsAxisymmetric());
+    Scatterer scat(sp, Scatterer::SAMPLER_GENERAL);
+    areaMfps = scat.GetReportMFPs();
+  }
+  // AreaQuadratureScope's destructor has restored TOA_EQUAL (degree 5)
+  // above, so this second Scatterer's ComputeReportStats() integrates
+  // ReportDirs() with equal weights, same as test_report_directional_mfps.
+  ScatterParams sp2 = LopNorCrust(2, 2, 0.5);
+  Scatterer scat2(sp2, Scatterer::SAMPLER_GENERAL);
+  const std::vector<Real> & equalMfps = scat2.GetReportMFPs();
+
+  CHECK_MSG(areaMfps.size() == 8, "expected 8 AXI directional MFPs, got "
+           << areaMfps.size());
+
+  const Real expected[8] = {1602.7, 0, 1203.2, 754.7, 0, 0, 442.8, 374.7};
+  const int checkIdx[] = {0, 2, 3, 6, 7};   // P0, P90, S0, S90SV, S90SH
+  for (int i = 0; i < 5; ++i) {
+    int idx = checkIdx[i];
+    CHECK_MSG(NearRel(areaMfps[idx], expected[idx], 2e-4),
+             "area directional MFP[" << idx << "]=" << areaMfps[idx]
+             << " expected " << expected[idx] << " within 2e-4");
+  }
+
+  const char * stateNames[8] =
+    {"P0", "P45", "P90", "S0", "S45SV", "S45SH", "S90SV", "S90SH"};
+  std::ofstream out("build/toa_quadrature_report.txt");
+  out << "# state equal_mfp area_mfp\n";
+  for (int i = 0; i < 8; ++i) {
+    out << stateNames[i] << " " << equalMfps[i] << " " << areaMfps[i] << "\n";
+  }
+
+}
+
+
+TEST(area_report_thread_invariant) {
+
+  // Same guarantee as test_report_stats_thread_invariant, but in
+  // TOA_AREA mode: ComputeReportStats()'s single ParallelFor spans
+  // every state regardless of quadrature mode, and the weighted
+  // IntegrateRows() branch sums serially in the same fixed
+  // k-ascending order as the unweighted one, so GetReportMFPs() must
+  // still be bit-identical for any build-thread count.
+
+  AreaQuadratureScope q(5);
+
+  ScatterParams specs[2] = {
+    LopNorCrust(2, 2, 0.5),   // axisymmetric: AUTO -> AXI sampler,
+                              // 8-state GetReportMFPs() branch.
+    LopNorCrust(2, 1, 0.5),   // triaxial: AUTO -> GENERAL sampler,
+                              // 9-state GetReportMFPs() branch.
+  };
+
+  for (int s = 0; s < 2; ++s) {
+
+    Scatterer::SetBuildThreads(1);
+    Scatterer a(specs[s]);
+    const std::vector<Real> mfpsA = a.GetReportMFPs();
+
+    Scatterer::SetBuildThreads(7);
+    Scatterer b(specs[s]);
+    const std::vector<Real> mfpsB = b.GetReportMFPs();
+
+    Scatterer::SetBuildThreads(1);   // Restore the default.
+
+    CHECK(mfpsA.size() == mfpsB.size());
+    for (std::size_t i = 0; i < mfpsA.size(); ++i) {
+      CHECK_MSG(mfpsA[i] == mfpsB[i],
+               "spec " << s << " GetReportMFPs()[" << i << "]: threads=1 "
+               << mfpsA[i] << " threads=7 " << mfpsB[i]);
+    }
+
+  }
+
+}
+
+
+TEST(area_p_frame_residual) {
+
+  // The take-off-angle grid's equal-weight bias makes the realized P
+  // rate depend on an otherwise-meaningless frame-orientation choice
+  // (docs/toa-quadrature-bias.md, "Frame orientation for P incidence");
+  // area weighting should shrink that spurious spread by roughly two
+  // orders of magnitude, landing within 1e-3 of the exact (frame-
+  // independent) rate at every frame angle, while the unweighted spread
+  // stays large (> 4e-2).
+  //
+  // Also writes build/toa_quadrature_pframe.txt, logging every frame
+  // angle's equal- and area-weighted MFP, plus the exact MFP, per layer.
+
+  const S2::TesselSphere & d6 = UseTOADegree(6);
+
+  struct Layer {
+    const char * name;
+    Real vp, vs, a, az, kappa, thetaDeg;
+  };
+  const Layer layers[2] = {
+    {"crust",  6.40, 3.63, 5.0, 0.5, 0.3, 60.0},
+    {"mantle", 8.07, 4.63, 7.0, 0.7, 0.5, 89.0},
+  };
+  const Real phiDeg = 20.0;
+  const int N = 24;
+
+  std::ofstream out("build/toa_quadrature_pframe.txt");
+  out << "# layer rot_deg equal_mfp area_mfp\n";
+
+  for (int li = 0; li < 2; ++li) {
+    const Layer & L = layers[li];
+
+    ScatterParams sp = LopNorCrust(L.a, L.a, L.az, L.kappa, 0.01, L.vp, L.vs);
+    Scatterer s(sp, Scatterer::SAMPLER_GENERAL);
+    const R3::XYZ dir = Dir(L.thetaDeg, phiDeg);
+
+    Real mfpA[N], mfpE[N];
+    R3::XYZ pol0(0,0,0);
+    for (int i = 0; i < N; ++i) {
+      const R3::OrthoAxes polAA(L.thetaDeg * Geometry::DtoR,
+                               phiDeg * Geometry::DtoR,
+                               2.0 * Geometry::Pi * i / N);
+      const R3::XYZ pol = polAA.S1();
+      if (i == 0) {pol0 = pol;}
+      mfpA[i] = 1.0 / s.IntegratedRate(RAY_P, dir, pol, d6, &d6.SolidAngles());
+      mfpE[i] = 1.0 / s.IntegratedRate(RAY_P, dir, pol, d6);
+      out << L.name << " " << (360.0 * i / N) << " "
+          << mfpE[i] << " " << mfpA[i] << "\n";
+    }
+
+    Real minA = mfpA[0], maxA = mfpA[0];
+    Real minE = mfpE[0], maxE = mfpE[0];
+    for (int i = 1; i < N; ++i) {
+      minA = std::min(minA, mfpA[i]); maxA = std::max(maxA, mfpA[i]);
+      minE = std::min(minE, mfpE[i]); maxE = std::max(maxE, mfpE[i]);
+    }
+    CHECK_MSG(maxA / minA - 1.0 < 1e-3,
+             L.name << ": area-mode frame spread " << (maxA/minA - 1.0)
+             << " should be < 1e-3");
+    CHECK_MSG(maxE / minE - 1.0 > 4e-2,
+             L.name << ": equal-mode frame spread " << (maxE/minE - 1.0)
+             << " should be > 4e-2 (discriminating the two quadratures)");
+
+    const Real exact = 1.0 / ExactRate(sp, RAY_P, dir, pol0, 1000, 1000);
+    out << L.name << " exact " << exact << "\n";
+
+    for (int i = 0; i < N; ++i) {
+      CHECK_MSG(std::fabs(mfpA[i] / exact - 1.0) < 1e-3,
+               L.name << " i=" << i << ": area mfp=" << mfpA[i]
+               << " exact=" << exact);
+    }
+
+  }
+
+  out.close();
 
 }
 

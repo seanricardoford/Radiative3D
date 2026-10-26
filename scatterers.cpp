@@ -927,12 +927,19 @@ Scatterer::AttemptAxisymmetricScatter(raytype intype, const R3::XYZ & loc,
 //          each term weighted by the anisotropic/isotropic spectrum
 //          ratio instead of assuming it is 1.
 //
+//          'solidAngles', if non-null, replaces that equal-weighted
+//          average with an area-weighted one -- see IntegrateRows() --
+//          and must be the same size as 'dirs' or this throws
+//          std::logic_error. A thin wrapper around
+//          IntegrateRateAndDipole() that discards the dipole.
+//
 Real Scatterer::IntegratedRate(raytype intype, const R3::XYZ & dir,
                                const R3::XYZ & pol,
-                               const S2::S2Set & dirs) const {
+                               const S2::S2Set & dirs,
+                               const std::vector<Real> * solidAngles) const {
 
   Real rate, dipole;
-  IntegrateRateAndDipole(intype, dir, pol, dirs, rate, dipole);
+  IntegrateRateAndDipole(intype, dir, pol, dirs, rate, dipole, solidAngles);
   return rate;
 
 }
@@ -990,9 +997,38 @@ void Scatterer::BuildReportRows(const S2::S2Set & dirs, unsigned threads,
 //          loop -- so a call's result never depends on how (or on how
 //          many threads) 'rows' was built.
 //
+//          'solidAngles' selects the quadrature: null (TOA_EQUAL) runs
+//          today's loop, completely unchanged -- same expressions, same
+//          k-ascending summation order as before this method took a
+//          'solidAngles' argument. This file is compiled with GCC's
+//          default -ffp-contract=fast, which is free to fuse any
+//          multiply immediately followed by an add into a single FMA
+//          instruction; inserting a weight factor into that loop, even
+//          behind an 'if' that is always false in TOA_EQUAL mode, could
+//          still change which multiplications the compiler chooses to
+//          fuse and shift the default mode's output by a rounding
+//          ulp -- enough to break byte-identity with 319c8dd. The
+//          TOA_AREA case below is therefore a separate loop, never the
+//          one above, reusing only the shared setup (c1/c2, k_in, AA)
+//          both cases need.
+//
+//          Non-null 'solidAngles' (TOA_AREA, or any other explicit
+//          per-direction quadrature over 'dirs'): its size must equal
+//          dirs.size() (std::logic_error if not -- a silent out-of-
+//          bounds read would otherwise follow), and each direction k's
+//          term is scaled by w_k = (*solidAngles)[k] * n/(4*Pi), 'n'
+//          here being THIS call's dirs.size() -- not the class-level
+//          nTOA, since 'dirs' is often ReportDirs(), a fixed degree-6
+//          set independent of the run's --toa-degree:
+//
+//              rate   = Sum_k w_k*Sum_conv(G*AnisoRatio) / n
+//              dipole = Sum w_k*G*AnisoRatio*cos(psi)
+//                       / Sum w_k*G*AnisoRatio   (0 when that sum is 0)
+//
 void Scatterer::IntegrateRows(raytype intype, const R3::XYZ & dir,
                               const R3::XYZ & pol, const S2::S2Set & dirs,
                               const std::vector<GRow> & rows,
+                              const std::vector<Real> * solidAngles,
                               Real & rate, Real & dipole) const {
 
   out_types_e c1, c2;
@@ -1007,28 +1043,65 @@ void Scatterer::IntegrateRows(raytype intype, const R3::XYZ & dir,
   const R3::OrthoAxes AA(dirTP.Theta(), dirTP.Phi(), rot);  // Same
                               // construction as Phonon::Transform().
 
-  Real sumRate = 0;
-  Real sumDip  = 0;
   const std::size_t n = dirs.size();
-  for (std::size_t k = 0; k < n; k++) {
 
-    const Real costh = rows[k].CosPsi;
-    const R3::XYZ e_out = AA.Express(dirs[k].XYZ());
+  if (solidAngles == nullptr) {
 
-    for (int ci = 0; ci < 2; ci++) {
-      const out_types_e conv = convs[ci];
-      const Real k_out = (kOutTypes[conv] == RAY_P) ?
-                          mParams.GetKP() : mParams.GetKS();
-      const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
-      const Real w = rows[k].G[conv] * mParams.AnisoRatio(m);
-      sumRate += w;
-      sumDip  += w * costh;
+    Real sumRate = 0;
+    Real sumDip  = 0;
+    for (std::size_t k = 0; k < n; k++) {
+
+      const Real costh = rows[k].CosPsi;
+      const R3::XYZ e_out = AA.Express(dirs[k].XYZ());
+
+      for (int ci = 0; ci < 2; ci++) {
+        const out_types_e conv = convs[ci];
+        const Real k_out = (kOutTypes[conv] == RAY_P) ?
+                            mParams.GetKP() : mParams.GetKS();
+        const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
+        const Real w = rows[k].G[conv] * mParams.AnisoRatio(m);
+        sumRate += w;
+        sumDip  += w * costh;
+      }
+
     }
 
-  }
+    rate = sumRate / (Real) n;
+    dipole = (sumRate > 0) ? (sumDip / sumRate) : 0.0;
 
-  rate = sumRate / (Real) n;
-  dipole = (sumRate > 0) ? (sumDip / sumRate) : 0.0;
+  } else {
+
+    if (solidAngles->size() != n) {
+      throw std::logic_error(
+        "Scatterer::IntegrateRows: solidAngles size does not match dirs "
+        "size");
+    }
+    const Real scale = (Real) n / (4.0 * Geometry::Pi);
+
+    Real sumRate = 0;
+    Real sumDip  = 0;
+    for (std::size_t k = 0; k < n; k++) {
+
+      const Real wk = (*solidAngles)[k] * scale;
+      const Real costh = rows[k].CosPsi;
+      const R3::XYZ e_out = AA.Express(dirs[k].XYZ());
+
+      for (int ci = 0; ci < 2; ci++) {
+        const out_types_e conv = convs[ci];
+        const Real k_out = (kOutTypes[conv] == RAY_P) ?
+                            mParams.GetKP() : mParams.GetKS();
+        const R3::XYZ m = e_out.ScaledBy(k_out) + dir.ScaledBy(-k_in);
+        const Real w = wk * rows[k].G[conv] * mParams.AnisoRatio(m);
+        sumRate += w;
+        sumDip  += w * costh;
+      }
+
+    }
+
+    rate = sumRate / (Real) n;
+    dipole = (sumRate > 0) ? (sumDip / sumRate) : 0.0;
+
+  }
 
 }
 
@@ -1052,7 +1125,10 @@ void Scatterer::IntegrateRows(raytype intype, const R3::XYZ & dir,
 //          direction, i.e. dirs[k].z() in the take-off-angle frame
 //          (dirs[] is conventionally expressed with its own +z as the
 //          forward direction -- the same convention ComputeDipoles()
-//          relies on for the isotropic case).
+//          relies on for the isotropic case). When 'solidAngles' is
+//          non-null, both sums are area-weighted instead -- see
+//          IntegrateRows() -- and 'solidAngles' must be the same size
+//          as 'dirs' or IntegrateRows() throws std::logic_error.
 //
 //          Builds one GRow per direction of 'dirs' (BuildReportRows(),
 //          using GetBuildThreads() workers) and hands them to the same
@@ -1064,11 +1140,12 @@ void Scatterer::IntegrateRows(raytype intype, const R3::XYZ & dir,
 void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
                                        const R3::XYZ & pol,
                                        const S2::S2Set & dirs,
-                                       Real & rate, Real & dipole) const {
+                                       Real & rate, Real & dipole,
+                                       const std::vector<Real> * solidAngles) const {
 
   std::vector<GRow> rows;
   BuildReportRows(dirs, GetBuildThreads(), rows);
-  IntegrateRows(intype, dir, pol, dirs, rows, rate, dipole);
+  IntegrateRows(intype, dir, pol, dirs, rows, solidAngles, rate, dipole);
 
 }
 
@@ -1086,8 +1163,15 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
 //          2026-10-16-anisotropic-scale-lengths-design.md, "Output and
 //          reporting".
 //
+//          Always built with solid angles (TesselSphere's third
+//          argument), in both quadrature modes -- about 0.66 MB and a
+//          few ms, once per process -- so ComputeReportStats() can
+//          integrate it area-weighted whenever Get_TOA_Quadrature() ==
+//          TOA_AREA, without this lazily-built set needing to know the
+//          mode in advance.
+//
 const S2::TesselSphere & Scatterer::ReportDirs() {
-  static S2::TesselSphere dirs(S2::TESS_ICO, 6);
+  static S2::TesselSphere dirs(S2::TESS_ICO, 6, true);
   return dirs;
 }
 
@@ -1135,6 +1219,13 @@ const S2::TesselSphere & Scatterer::ReportDirs() {
 //          superpowers/specs/2026-10-17-axisymmetric-sampler-
 //          performance-design.md, decision 2).
 //
+//          Every IntegrateRows() call below is handed ReportDirs()'s
+//          SolidAngles() when Get_TOA_Quadrature() == TOA_AREA, or
+//          nullptr (today's equal-weighted integration) otherwise --
+//          ReportDirs() always carries solid angles (see its own header
+//          comment) regardless of mode, so this is a simple mode check,
+//          not a rebuild.
+//
 void Scatterer::ComputeReportStats() {
 
   const S2::TesselSphere & dirs = ReportDirs();
@@ -1142,6 +1233,9 @@ void Scatterer::ComputeReportStats() {
 
   std::vector<GRow> rows;
   BuildReportRows(dirs, threads, rows);
+
+  const std::vector<Real> * solidAngles =
+    (Get_TOA_Quadrature() == TOA_AREA) ? &dirs.SolidAngles() : nullptr;
 
   const R3::XYZ E(1,0,0), N(0,1,0), U(0,0,1);
 
@@ -1194,11 +1288,11 @@ void Scatterer::ComputeReportStats() {
   ParallelFor(0, numStates, threads, [&](Index i) {
     if (i < 9) {
       IntegrateRows(axis[i].in, axis[i].dir, axis[i].pol, dirs, rows,
-                   rate[i], dip[i]);
+                   solidAngles, rate[i], dip[i]);
     } else {
       const Index j = i - 9;
       IntegrateRows(angle[j].in, angle[j].dir, angle[j].pol, dirs, rows,
-                   r8[j], d8[j]);
+                   solidAngles, r8[j], d8[j]);
     }
   });
 

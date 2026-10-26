@@ -89,9 +89,14 @@ int main(int argc, char *argv[]) {
 
     std::cout << "@@ __EVENT_SOURCE_TEST__" << std::endl;
 
-    S2::S2Set * pTOAA   // Degree-3 Tesselsphere for pattern-testing
+    S2::TesselSphere * pTOAA   // Degree-3 Tesselsphere for pattern-testing
       = new S2::TesselSphere(S2::TESS_ICO, 3);
-    PhononSource::Set_TOA_Array(pTOAA);
+    PhononSource::Set_TOA_Array(pTOAA);   // --event-test always uses
+                                          // TOA_EQUAL (the default):
+                                          // it displays per-direction
+                                          // pattern values, which an
+                                          // area-weighted quadrature
+                                          // would distort.
 
     PhononSource S
       = ShearDislocation(MParams.EventSourceMT,

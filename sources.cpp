@@ -5,6 +5,7 @@
 #include <iomanip>
 #include <cmath>
 #include <cstdlib>      /* rand(), srand(), RAND_MAX, exit() */
+#include <stdexcept>    /* std::logic_error */
 #include "sources.hpp"
 #include "phonons.hpp"
 
@@ -21,11 +22,65 @@ using namespace std;
 //
 int PhononSource::nTOA = 0;
 S2::S2Set * PhononSource::pTOA = NULL;
+PhononSource::toa_quadrature_e
+  PhononSource::cm_TOAQuadrature = PhononSource::TOA_EQUAL;
+const std::vector<Real> * PhononSource::cm_pTOASolidAngles = NULL;
+Real PhononSource::cm_TOAAreaScale = 0.0;
 
 
 //////
 // Static Methods:
 //
+
+//////
+// METHOD:  PhononSource :: Set_TOA_Array()                   [static]
+//
+// PURPOSE: Points every subsequently-constructed PhononSource at 'toa'
+//          and records the requested quadrature mode. Replaces the
+//          former inline Set_TOA_Array(S2::S2Set*), which just set
+//          pTOA and nTOA; this version additionally fixes TOA_AREA's
+//          scale factor and solid-angle pointer, and validates before
+//          doing anything else: TOA_AREA requires toa->HasSolidAngles()
+//          (TOAWeight() has no Omega_k to read otherwise), and a call
+//          that fails that check throws std::logic_error, leaving
+//          pTOA, nTOA, the mode and cm_TOAAreaScale exactly as they
+//          were before the call -- a rejected mode switch must never
+//          be able to leave the class half-updated.
+//
+void PhononSource::Set_TOA_Array(S2::TesselSphere * toa,
+                                 toa_quadrature_e quad) {
+
+  if (quad == TOA_AREA && !toa->HasSolidAngles()) {
+    throw std::logic_error(
+      "PhononSource::Set_TOA_Array: TOA_AREA requires a TesselSphere "
+      "built with solid angles (TesselSphere(algo, degree, true))");
+  }
+
+  pTOA = toa;
+  nTOA = pTOA->size();
+  cm_TOAQuadrature = quad;
+  cm_pTOASolidAngles = toa->HasSolidAngles() ? &toa->SolidAngles() : NULL;
+  cm_TOAAreaScale = (Real) nTOA / (4.0 * Geometry::Pi);
+
+}
+
+
+//////
+// METHOD:  PhononSource :: TOAWeight()                       [static]
+//
+// PURPOSE: The class-level take-off-angle array's quadrature weight for
+//          index k -- see this method's declaration in sources.hpp for
+//          the two modes' formulas. In TOA_AREA mode, cm_pTOASolidAngles
+//          is guaranteed non-null (Set_TOA_Array() validated it before
+//          allowing TOA_AREA to be set), so it is dereferenced
+//          unconditionally here.
+//
+Real PhononSource::TOAWeight(Index k) {
+
+  if (cm_TOAQuadrature == TOA_EQUAL) {return (Real) 1.0;}
+  return (*cm_pTOASolidAngles)[k] * cm_TOAAreaScale;
+
+}
 
 //////
 // Constructors:
