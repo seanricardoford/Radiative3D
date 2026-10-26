@@ -15,14 +15,19 @@ Measured by running `BASELINE_EXE=/tmp/r3d-baseline/main tests/benchmark_aniso.s
 `65128c6` that only adds `CMP_SEED_BASE` itself, so it exercises the same
 production code as `65128c6`), and `tests/test_anisotropy_unit.sh
 near_axi_cost`, snapshotted as
-`docs/data/aniso-near-axi-cost-2026-10-25.txt` (that file's own header
-names the exact command and commit). `TEST(near_axi_cost)` sets no fixed
-seed, so a rerun -- especially as part of the full, unfiltered test suite,
-where earlier tests have already drawn from the same random stream --
-varies by roughly 1-3% from the committed snapshot; the snapshot, not the
-live `build/` file (which a later test run overwrites), is this section's
-source of record. All numbers in this section come from those captured
-outputs; nothing here is estimated.
+`docs/anisotropy-near-axi-cost-2026-10-25.txt` (that file's own header
+names the exact command and commit). That exact filtered command is
+reproducible: `random.hpp`'s `RandomUniform()` falls back to a
+`thread_local` engine fixed-seeded `0x7261643364` whenever no
+`RandomContext` is active, which is always true entering a standalone
+`near_axi_cost` run, so rerunning `tests/test_anisotropy_unit.sh
+near_axi_cost` alone reproduces the snapshot byte-for-byte. Running the
+full, unfiltered test suite instead gives slightly different values
+(roughly 1-3%), because earlier tests draw from that same fallback stream
+first; the snapshot, not the live `build/` file (which a full-suite run
+overwrites with those different values), is this section's source of
+record. All numbers in this section come from those captured outputs;
+nothing here is estimated.
 
 ### Host, compiler, and workload
 
@@ -288,9 +293,9 @@ standalone (that argument runs only this one test in the process, per
 near-axisymmetric-general `Scatterer`s, so it exercises the same
 production code as `65128c6`, the last commit to touch it), and
 snapshotted immediately afterward, before any further test run, to
-`docs/data/aniso-near-axi-cost-2026-10-25.txt` (ruling R12) -- not cited
+`docs/anisotropy-near-axi-cost-2026-10-25.txt` (ruling R12) -- not cited
 from the live `build/aniso_near_axi_cost.txt`, which a later, unfiltered
-test-suite run would overwrite with a different sample. Mean tentative
+test-suite run would overwrite with different values. Mean tentative
 collisions and mean draws per real event, n=5000 trials per state, at
 take-off-angle degree 7, for three `(ax, ay, az)` km specs (axisymmetric
 vs. the matching `ay*(1+1e-5)` near-axisymmetric general-sampler medium).
@@ -299,13 +304,17 @@ take-off-angle) table (see the comment above `MeasureCollisionCost` in
 `tests/anisotropy_tests.cpp`); the general sampler's draws always equal its
 tentative collisions, while the axisymmetric sampler's cheap top-level
 bin-rate test thins most tentative collisions before they become draws --
-most of why it needs far fewer tentative collisions overall.
-`TEST(near_axi_cost)` sets no fixed seed, so the table below is one
-representative sample, not a reproducible reference value: rerunning it --
-particularly as part of the full test suite, where earlier tests have
-already drawn from the same random stream -- shifts every number by
-roughly 1-3%, consistent with the very similar, but not identical, numbers
-quoted under "Unit level" above and in earlier task reports.
+most of why it needs far fewer tentative collisions overall. This exact
+filtered command is reproducible: `random.hpp`'s `RandomUniform()` falls
+back to a `thread_local` engine fixed-seeded `0x7261643364` whenever no
+`RandomContext` is active (always true entering a standalone run here), so
+the table below reproduces byte-for-byte on a rerun of the same filtered
+command. Running the full, unfiltered test suite instead shifts every
+number by roughly 1-3%, because earlier tests in that process draw from
+the same fallback stream first -- consistent with the very similar, but
+not identical, numbers quoted under "Unit level" above and in earlier task
+reports (which came from full-suite or otherwise differently-ordered
+runs).
 
 #### Spec (1, 1, 0.5)
 

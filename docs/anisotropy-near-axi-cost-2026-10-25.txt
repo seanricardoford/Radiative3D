@@ -1,4 +1,4 @@
-# Captured by: tests/test_anisotropy_unit.sh near_axi_cost, at commit e227bb7, 2026-10-25 (production code unchanged since 65128c6; unseeded -- a rerun varies by roughly 1-3%)
+# Captured by: tests/test_anisotropy_unit.sh near_axi_cost, at commit e227bb7, 2026-10-25 (production code unchanged since 65128c6). This exact filtered command is reproducible: random.hpp's RandomUniform() falls back to a thread_local engine fixed-seeded 0x7261643364 whenever no RandomContext is active, which is always true entering a standalone near_axi_cost run, so rerunning this command alone reproduces this file byte-for-byte. Running the full, unfiltered test suite instead (`tests/test_anisotropy_unit.sh` with no argument) gives slightly different values (roughly 1-3%), because earlier tests draw from that same fallback stream first.
 # spec state raytype theta chi sampler mean_tentative mean_draws
 (1,1,0.5) 0 P 0 0 AXI 1.1874 1.1874
 (1,1,0.5) 0 P 0 0 GENERAL 2.596 2.596
