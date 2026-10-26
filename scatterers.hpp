@@ -507,7 +507,8 @@ public:
   void IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
                               const R3::XYZ & pol, const S2::S2Set & dirs,
                               Real & rate, Real & dipole,
-                              const std::vector<Real> * solidAngles = nullptr) const;
+                              const std::vector<Real> * solidAngles =
+                                nullptr) const;
                       // Computes the same 'rate' as IntegratedRate(),
                       // plus the dipole moment of the corresponding
                       // integrated scattering pattern, Sum(cos(psi)*G)

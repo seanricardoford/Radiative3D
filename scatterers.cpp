@@ -1141,7 +1141,8 @@ void Scatterer::IntegrateRateAndDipole(raytype intype, const R3::XYZ & dir,
                                        const R3::XYZ & pol,
                                        const S2::S2Set & dirs,
                                        Real & rate, Real & dipole,
-                                       const std::vector<Real> * solidAngles) const {
+                                       const std::vector<Real> *
+                                         solidAngles) const {
 
   std::vector<GRow> rows;
   BuildReportRows(dirs, GetBuildThreads(), rows);
