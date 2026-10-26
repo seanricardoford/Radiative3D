@@ -47,6 +47,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -2197,11 +2198,123 @@ TEST(axi_geometry_cache_mismatch_rotation) {
 }
 
 
+TEST(axi_geometry_cache_survives_build_exception) {
+
+  // Ledger M3: an exception during BuildAxiGeometry() (aniso_axi.cpp)
+  // must not leave a partial entry in GetOrBuildAxiGeometry()'s cache
+  // under a fingerprint that a later, correct build at the same
+  // take-off-angle count would then wrongly reuse. Neither of
+  // BuildAxiGeometry()'s own throws is reachable through AxiProposal's
+  // public constructor with real take-off-angle data (the non-
+  // icosahedral guard in AxiProposal's own constructor runs *before*
+  // the geometry cache is ever touched, by design, so it can't
+  // demonstrate cache poisoning either way; the mirror-cell "no match"
+  // throw depends only on a canonical, always-exactly-symmetric
+  // TesselSphere built from 'coarseDeg' alone, never from the caller's
+  // actual directions, so no take-off-angle set that survives the
+  // non-icosahedral guard can trigger it) -- see
+  // AxiProposal_TestForceNextGeometryBuildToThrow()'s doc comment
+  // (aniso_axi.hpp) for why this test uses that one-shot hook instead.
+  //
+  // Take-off-angle count: a fresh TESS_ICO degree-3 set (1,280
+  // directions). No other test in this file builds an AxiProposal at
+  // this size (UseTOADegree() is never called with 3 elsewhere; the one
+  // other degree-3 TesselSphere in this file, in
+  // axi_kernel_matches_reference, feeds PrepareBoundRep()/BoundRatio()
+  // directly, never an AxiProposal), so GetOrBuildAxiGeometry() has
+  // never built this size before -- the forced throw below is a
+  // genuine first-time cache miss, not a fingerprint mismatch against
+  // an existing entry.
+  S2::S2Set toa;
+  {
+    const S2::TesselSphere freshToa(S2::TESS_ICO, 3);
+    for (Index i = 0; i < (Index) freshToa.size(); ++i) {
+      toa.push_back(S2::ThetaPhi(freshToa[i].Theta(), freshToa[i].Phi()));
+    }
+  }
+
+  ScatterParams sp = LopNorCrust(2, 2, 0.5);
+  std::vector<ProbDist> pdists;
+  BuildIsoPDists(sp, toa, pdists);
+
+  AxiProposal_TestForceNextGeometryBuildToThrow();
+  bool threw = false;
+  try {
+    AxiProposal axiFail(sp, toa, pdists);
+    (void) axiFail;
+  } catch (const std::logic_error &) {
+    threw = true;
+  }
+  CHECK_MSG(threw, "forced geometry build failure should propagate out "
+           "of AxiProposal's constructor");
+
+  // The real check: a second, unforced build at the exact same
+  // take-off-angle set must succeed and produce a fully working
+  // AxiProposal. If the cache had been poisoned by the failed build
+  // above (the pre-fix bug), this would either throw (MxPerm/MyPerm
+  // sized for a different build, or empty) or silently read back
+  // zeroed/undersized data.
+  bool threwSecond = false;
+  AxiProposal * axiOk = 0;
+  try {
+    axiOk = new AxiProposal(sp, toa, pdists);
+  } catch (...) {
+    threwSecond = true;
+  }
+  CHECK_MSG(!threwSecond, "a correct build at the same take-off-angle "
+           "count, after a forced failure, must not throw");
+
+  if (axiOk != 0) {
+    CHECK(axiOk->NumCells() > 0);
+    // Exercise a bound query at every cell -- a partial or zeroed cache
+    // entry is the likeliest way a surviving regression would still
+    // misbehave silently rather than throw or size-mismatch outright.
+    const R3::XYZ u_c(0.0, 0.0, 1.0);
+    for (Index cell = 0; cell < axiOk->NumCells(); ++cell) {
+      const Real v = axiOk->AcceptanceBound(RAY_P, u_c, 0, cell);
+      CHECK_MSG(v >= 0.0, "cell " << cell << ": negative bound " << v);
+    }
+    delete axiOk;
+  }
+
+}
+
+
 //////////////////////////////////////////////////////////////////////////
 // &&&&                                                              ****
 // ****  TASK 3 TESTS: Parallel construction, bit-identical tables   ****
 // ****                                                              ****
 //
+
+// ::: struct ThrowingSpawn ::: (ledger I1 test support)
+//
+//   A ParallelFor() thread-spawn strategy -- parallel_for_detail::
+//   DefaultSpawn's counterpart (parallel.hpp) -- that throws
+//   std::system_error on its 'failAtCall'-th invocation (0-based)
+//   instead of constructing a std::thread, so
+//   test_parallel_for_survives_spawn_failure (below) can force,
+//   deterministically, the std::thread-construction failure ledger I1
+//   hardens ParallelFor against, without needing to actually exhaust
+//   the host's real OS thread limit (the only way that failure arises
+//   in production -- see ParallelFor's class-level doc comment,
+//   parallel.hpp). Passed to the test-only ParallelForSpawn() entry
+//   point, never to the public, four-argument ParallelFor().
+struct ThrowingSpawn {
+  unsigned failAtCall;     // 0-based spawn attempt to fail.
+  mutable unsigned calls;  // Spawning runs single-threaded (the calling
+                           // thread's own loop in ParallelForSpawn), so
+                           // this needs no synchronization.
+  explicit ThrowingSpawn(unsigned k) : failAtCall(k), calls(0) {}
+  template <class Worker>
+  std::thread operator()(Worker & w) const {
+    if (calls++ == failAtCall) {
+      throw std::system_error(
+        std::make_error_code(std::errc::resource_unavailable_try_again),
+        "ParallelFor test hook: forced thread spawn failure");
+    }
+    return std::thread(w);
+  }
+};
 
 TEST(parallel_for_covers_and_rethrows) {
 
@@ -2393,6 +2506,97 @@ static void CheckAxiTablesThreadInvariant(const ScatterParams & sp) {
   }
 
 }
+
+
+TEST(parallel_for_survives_spawn_failure) {
+
+  // Ledger I1: if std::thread construction throws partway through
+  // ParallelFor's spawn loop, ParallelFor must not let that reach the
+  // caller while it still holds already-started, un-joined threads --
+  // std::thread's destructor calls std::terminate() in that case,
+  // turning a resource-limit error (the production cause: an
+  // unreasonably large --threads value exceeding the OS thread-creation
+  // limit, since main.cpp accepts --threads up to UINT_MAX with no
+  // upper-bound check) into an abort with no diagnostic. This test
+  // forces that failure deterministically via the test-only
+  // ParallelForSpawn() entry point and ThrowingSpawn (above), instead of
+  // actually exhausting the host's real OS thread limit. If
+  // ParallelFor's fix regressed, this test would not report a CHECK
+  // failure -- std::terminate() would abort the whole test binary before
+  // reaching any CHECK_MSG below -- so merely completing this test is
+  // itself part of what it checks.
+  //
+  // Per-index coverage, every index visited exactly once, at several
+  // (threads, fail-at-call) combinations -- including failing on the
+  // very first spawn attempt (failAt=0: zero real threads ever start,
+  // the calling thread alone must drain everything) and failing after
+  // a few threads have already started (failAt=2: those threads keep
+  // running concurrently with the calling thread's own drain):
+  const unsigned threadCounts[] = {4, 16, 64};
+  const unsigned failAtCalls[]  = {0, 2};
+  for (std::size_t ti = 0; ti < sizeof(threadCounts)/sizeof(threadCounts[0]); ++ti) {
+    for (std::size_t fi = 0; fi < sizeof(failAtCalls)/sizeof(failAtCalls[0]); ++fi) {
+      const unsigned threads = threadCounts[ti];
+      const unsigned failAt  = failAtCalls[fi];
+      if (failAt >= threads) {continue;}  // Nothing to skip past.
+
+      const Index n = 1000;
+      std::vector<std::atomic<int> > hits(n);
+      for (Index i = 0; i < n; ++i) {hits[i].store(0);}
+
+      ParallelForSpawn((Index) 0, n, threads, [&](Index i) {
+        hits[i].fetch_add(1);
+      }, ThrowingSpawn(failAt));
+
+      for (Index i = 0; i < n; ++i) {
+        CHECK_MSG(hits[i].load() == 1,
+                 "threads=" << threads << " failAt=" << failAt
+                 << " index=" << i << " hit-count=" << hits[i].load());
+      }
+    }
+  }
+
+  // The forced spawn failure must not itself surface as an exception to
+  // the caller (parallel.hpp's class-level doc comment: the call
+  // completes "with fewer effective workers", not an error) -- distinct
+  // from a genuine body(i) exception, which must still propagate exactly
+  // as parallel_for_covers_and_rethrows (above) already checks with the
+  // default spawn strategy; ParallelForSpawn() shares that exact same
+  // body/exception-handling code, parametrized only on how threads get
+  // spawned, so this exercises the one combination that test couldn't
+  // reach (a body(i) exception *and* a spawn failure in the same call).
+  {
+    bool threw = false;
+    try {
+      ParallelForSpawn((Index) 0, (Index) 1000, 8u,
+                       [&](Index) {}, ThrowingSpawn(1));
+    } catch (...) {
+      threw = true;
+    }
+    CHECK_MSG(!threw, "a forced thread-spawn failure must not itself "
+             "propagate out of ParallelFor");
+  }
+  {
+    bool threw = false;
+    std::string what;
+    try {
+      ParallelForSpawn((Index) 0, (Index) 1000, 8u, [&](Index i) {
+        if (i == 500) {throw std::logic_error("boom");}
+      }, ThrowingSpawn(1));
+    } catch (const std::logic_error & e) {
+      threw = true;
+      what = e.what();
+    } catch (...) {
+      threw = true;
+      what = "<unexpected exception type>";
+    }
+    CHECK_MSG(threw, "a genuine body(i) exception must still propagate "
+             "even when a thread-spawn failure also occurred");
+    CHECK_MSG(what == "boom", "what()=\"" << what << "\"");
+  }
+
+}
+
 
 TEST(axi_tables_thread_invariant) {
   CheckAxiTablesThreadInvariant(LopNorCrust(2, 2, 0.5));

@@ -282,21 +282,34 @@ public:
 
   struct RepSoA {
     std::vector<Real> Mx, My, Mz, Mr, Rho, M2Lo, M2Hi, Numer;
+    void Resize(std::size_t n);
+    void AssignOne(std::size_t i, const BoundRep & rep);
     void Assign(const std::vector<BoundRep> & reps);
   };                  // Structure-of-arrays BoundRep: one array set per
                       // (k_in,k_out) pair, feeding RatioRun() below so
                       // its loop over representatives reads flat,
                       // contiguous Real arrays (letting GCC vectorize
                       // it) instead of an array of BoundRep structs.
-                      // Assign() copies 'reps' column-wise with no
-                      // arithmetic, so it cannot itself introduce any
-                      // rounding difference. Exposed publicly, like
-                      // BoundRep/BinCap above, purely so
+                      // Resize()/AssignOne() let the AxiProposal
+                      // constructor fill a RepSoA one representative at
+                      // a time, directly from PrepareBoundRep()'s
+                      // return value, with no intermediate
+                      // vector<BoundRep> array ever allocated (ledger
+                      // I2: see the constructor's own comment on why
+                      // that matters for peak build memory). Assign()
+                      // -- Resize() plus a loop of AssignOne(), kept for
                       // tests/anisotropy_tests.cpp's
-                      // test_axi_ratio_run_matches_scalar can build one
-                      // directly and exercise RatioRun() against
-                      // BoundRatio() -- BuildBinTable() is still the
-                      // only production caller.
+                      // test_axi_ratio_run_matches_scalar, which builds
+                      // a RepSoA directly from a std::vector<BoundRep>
+                      // to exercise RatioRun() against BoundRatio() --
+                      // and AssignOne() both copy column-wise with no
+                      // arithmetic, so neither can itself introduce any
+                      // rounding difference. Exposed publicly, like
+                      // BoundRep/BinCap above, purely for that test;
+                      // BuildBinTable() is still the only production
+                      // reader of a RepSoA, and the AxiProposal
+                      // constructor (aniso_axi.cpp) the only production
+                      // writer.
 
   template <bool AhGeAz>
   static void RatioRun(const RepSoA & reps, Index lo, Index hi,
@@ -416,6 +429,36 @@ private:
 
 }; // class AxiProposal
 ////
+
+//////
+// TEST SUPPORT (tests/anisotropy_tests.cpp only; ledger M3):
+//
+//   AxiProposal's take-off-angle-set geometry cache
+//   (GetOrBuildAxiGeometry(), aniso_axi.cpp) is a function-local static,
+//   so a test cannot reach it, or the exception a corrupted build might
+//   throw partway through, directly -- and no take-off-angle set
+//   reachable through AxiProposal's public constructor actually triggers
+//   either of BuildAxiGeometry()'s own throws today: the non-icosahedral
+//   guard (AxiProposal's constructor, "toa.size() is not a multiple of
+//   mNumCells") runs *before* the geometry cache is ever touched, by
+//   design, so it cannot demonstrate a cache-poisoning bug either way;
+//   and the mirror-cell "no match" throw depends only on a canonical,
+//   always-exactly-symmetric TesselSphere built from 'coarseDeg' alone
+//   (never from the caller's actual take-off-angle data), so it cannot
+//   be triggered by any take-off-angle set that survives the
+//   non-icosahedral guard. This one-shot, self-disarming hook lets a
+//   test simulate "BuildAxiGeometry() throws" regardless, right after its
+//   Fingerprint field is set but before anything else is -- the same
+//   partially-populated state a throw during the real (now unreachable)
+//   mirror-match failure would have left, just earlier -- to check that
+//   GetOrBuildAxiGeometry() never leaves a partial, fingerprint-matching
+//   entry in its cache for a throw to have caused --
+//   test_axi_geometry_cache_survives_build_exception
+//   (tests/anisotropy_tests.cpp). Costs one atomic load per
+//   geometry-cache-miss build (not per representative or cell) when
+//   armed, and nothing when not: false by default, and production code
+//   never calls the arming function below.
+void AxiProposal_TestForceNextGeometryBuildToThrow();
 
 ///
 #endif //#ifndef ANISO_AXI_H_

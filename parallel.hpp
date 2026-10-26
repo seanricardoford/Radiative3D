@@ -36,11 +36,37 @@
 //   reference build: the single-call-site version below is the one
 //   that does). Giving body(i) a single call site -- 'worker' is
 //   called directly, inline, for the no-thread case, instead of being
-//   bypassed -- removes the discrepancy entirely: see
+//   bypassed -- fixed that specific discrepancy: see
 //   test_axi_tables_thread_invariant and test_report_stats_thread_
 //   invariant (tests/anisotropy_tests.cpp), which exist specifically
 //   to catch a regression here. Do not reintroduce a separate inline
 //   loop as a "simplification".
+//
+//   What a single call site does NOT do, by itself, is guarantee
+//   thread-count-independent rounding in general (ledger M1). GCC still
+//   compiles 'worker' twice at the object-code level even with one
+//   source call site -- once inlined directly into ParallelFor's own
+//   frame for the inline path, once as the out-of-line function
+//   std::thread's machinery invokes (std::thread::_State_impl<...>::
+//   _M_run()) for the threaded path -- and the optimizer is free to
+//   make different fused-multiply-add decisions in those two
+//   separately-compiled copies of the identical source lambda, for the
+//   same underlying reason it once could at two textually different
+//   call sites. A caller whose body(i) contains floating-point
+//   arithmetic that contraction could affect needs its own, additional
+//   guarantee of no contraction, independent of this file: aniso_axi.cpp's
+//   ParallelFor callers get theirs from a per-file -ffp-contract=off
+//   Makefile flag covering that whole translation unit (both the inline
+//   and threaded copies of every lambda it hands to ParallelFor, under
+//   GCC and under clang alike -- see aniso_axi.cpp's own comments on
+//   R3D_EXACT_FP_ATTR and BoundRatio()); scatterers.cpp's ParallelFor
+//   callers need no such flag because their per-index bodies call only
+//   out-of-line functions (GSATO(), IntegrateRows()) and otherwise do
+//   only integer indexing and plain stores -- no inline floating-point
+//   arithmetic contraction could touch. ParallelFor itself makes no
+//   promise either way: ensuring body(i)'s compiled code is
+//   contraction-safe, if it needs to be, is each caller's own
+//   responsibility.
 //
 // IMPLEMENTATION NOTE -- indices are claimed in contiguous chunks, from
 // a 64-bit cursor:
@@ -125,8 +151,46 @@
 //          first or the order in which indices happened to finish. Any
 //          exception from a higher-numbered index is discarded.
 //
-template <class Body>
-void ParallelFor(Index begin, Index end, unsigned threads, Body body) {
+//          If std::thread construction itself fails partway through
+//          spawning the worker pool (ledger I1) -- as opposed to a
+//          body(i) call throwing -- that is likewise never left to
+//          reach the caller as a std::terminate(): spawning simply
+//          stops, the threads already started keep running, the
+//          calling thread joins in as one more worker so the full
+//          range [begin,end) still gets claimed and run exactly once
+//          regardless (claiming is atomic and index-disjoint, so this
+//          is safe concurrently with the running threads), and only
+//          then are the started threads joined. The call still
+//          completes -- or still throws, but only a genuine body(i)
+//          exception per the paragraph above -- with fewer effective
+//          workers than 'threads' asked for, which the "does not
+//          depend on 'threads'" guarantee above already covers.
+//
+// ::: namespace parallel_for_detail ::: / ::: struct DefaultSpawn :::
+//
+//   DefaultSpawn is the normal thread-spawn strategy: spawn(w) just
+//   constructs and returns std::thread(w), exactly what the pre-ledger-I1
+//   spawn loop did directly. It is the only Spawn ParallelForSpawn()
+//   (below) is ever instantiated with from production code -- the public,
+//   four-argument ParallelFor() always passes it. A second Spawn exists
+//   only in tests/anisotropy_tests.cpp (test_parallel_for_survives_spawn_
+//   failure): a functor whose operator() counts its own calls and throws
+//   std::system_error on a chosen one instead of constructing a thread,
+//   so that test can force the std::thread-construction failure ledger
+//   I1 hardens against (see ParallelFor's own class-level doc comment
+//   above) deterministically, without actually exhausting the host's
+//   real OS thread limit. Production code must always call the plain,
+//   four-argument ParallelFor() below, never ParallelForSpawn() directly.
+namespace parallel_for_detail {
+  struct DefaultSpawn {
+    template <class Worker>
+    std::thread operator()(Worker & w) const {return std::thread(w);}
+  };
+}//end namespace parallel_for_detail
+
+template <class Body, class Spawn>
+void ParallelForSpawn(Index begin, Index end, unsigned threads, Body body,
+                      Spawn spawn) {
 
   if (end <= begin) {return;}
   const Index n = end - begin;
@@ -152,8 +216,9 @@ void ParallelFor(Index begin, Index end, unsigned threads, Body body) {
   std::mutex excMtx;
 
   // The sole call site for body(i) -- see the IMPLEMENTATION NOTE
-  // above for why 'runInline' below calls this function directly
-  // rather than using a separate loop.
+  // above for why the inline-drain code below (reached either because
+  // 'runInline' or because thread spawning failed partway through)
+  // calls this function directly rather than using a separate loop.
   auto worker = [&]() {
     while (true) {
       const Cursor lo = cursor.fetch_add(grain);
@@ -179,22 +244,62 @@ void ParallelFor(Index begin, Index end, unsigned threads, Body body) {
     }
   };
 
-  if (runInline) {
-    worker();
-  } else {
-    std::vector<std::thread> pool;
+  std::vector<std::thread> pool;
+  bool runWorkerInline = runInline;
+
+  if (!runInline) {
     pool.reserve(nThreads);
     for (unsigned t = 0; t < nThreads; t++) {
-      pool.emplace_back(worker);
+      try {
+        pool.push_back(spawn(worker));
+      } catch (...) {
+        // Thread creation itself failed (ledger I1) -- observed cause:
+        // the OS thread-creation limit (EAGAIN from pthread_create under
+        // libstdc++/libc++) reached by an unreasonably large '--threads'
+        // value, since main.cpp accepts --threads up to UINT_MAX with no
+        // upper-bound check and Model::Model passes it straight to
+        // SetBuildThreads; the test-only 'spawn' above can also force
+        // this deterministically. 'pool' holds zero or more already-
+        // started *joinable* threads at this point -- if this exception
+        // were left to propagate now, unwinding out of this function
+        // would destroy 'pool' while it still held joinable threads, and
+        // std::thread's destructor calls std::terminate() in that case,
+        // turning a resource-limit error into an abort with no
+        // diagnostic, in place of the clean "** Error ... Exiting" exit
+        // RunSimulation's own std::thread usage already produces for the
+        // same underlying failure (model.cpp). Stop spawning more
+        // threads (further attempts would most likely fail the same
+        // way); the threads already started keep running on their own,
+        // claiming chunks exactly as they would have anyway. Run
+        // 'worker' inline on the calling thread too, below, so the work
+        // still completes -- safe to do concurrently with the already-
+        // running threads, since claiming is atomic and index-disjoint
+        // -- then join every thread that did start. This never raises
+        // the std::thread construction failure to the caller: the call
+        // completes (or throws only a genuine body(i) exception, per
+        // the class-level doc comment above) as if 'threads' had simply
+        // been smaller to begin with.
+        runWorkerInline = true;
+        break;
+      }
     }
-    for (std::vector<std::thread>::iterator it = pool.begin();
-        it != pool.end(); ++it) {
-      it->join();
-    }
+  }
+
+  if (runWorkerInline) {worker();}
+
+  for (std::vector<std::thread>::iterator it = pool.begin();
+      it != pool.end(); ++it) {
+    it->join();
   }
 
   if (failException) {std::rethrow_exception(failException);}
 
+}//
+
+template <class Body>
+void ParallelFor(Index begin, Index end, unsigned threads, Body body) {
+  ParallelForSpawn(begin, end, threads, body,
+                   parallel_for_detail::DefaultSpawn());
 }//
 
 ///

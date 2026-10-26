@@ -151,8 +151,18 @@ anyway : $(objects)
 	$(CPP) $^ -o $(OUT_EXEC) $(FLAGS)
 
 test_objects := $(filter-out $(objdir)/main.o,$(objects))
+## -ffp-contract=off here too (ledger M1/M2, discovered while fixing it):
+## ruling R-P1's frozen oracles (ReferenceBound3db253a etc.) are literal,
+## verbatim transcriptions of aniso_axi.cpp expressions, checked against
+## today's restructured kernel at near-exact (down to 1e-12 relative, or
+## exact ==) tolerances -- test_axi_kernel_matches_reference's edge cases
+## broke at that tolerance once aniso_axi.o alone stopped contracting:
+## the same source line (e.g. 't.ScaledBy(k_out) + zhat.ScaledBy(-k_in)')
+## need not compile to the same code in two different translation units
+## under two different fp-contract settings, even though it's the same
+## text. Compiling this file the same way restores that.
 $(objdir)/anisotropy_tests : tests/anisotropy_tests.cpp $(test_objects) $(scatterers_hpp) $(ecs_hpp) $(phonons_hpp) $(parallel_hpp)
-	$(CPP) tests/anisotropy_tests.cpp $(test_objects) -I. $(FLAGS) -o $@
+	$(CPP) tests/anisotropy_tests.cpp $(test_objects) -I. $(FLAGS) -ffp-contract=off -o $@
 .PHONY : anisotropy-tests
 anisotropy-tests : directories $(objdir)/anisotropy_tests
 
@@ -188,8 +198,24 @@ $(objdir)/events.o : events.cpp $(events_hpp) $(phonons_hpp) $(dataout_hpp) $(co
 $(objdir)/scatparams.o : scatparams.cpp $(scatparams_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@
 
+## -ffp-contract=off (ledger M1/M2): this file's AxiProposal geometry/
+## bound-table construction hands several per-index lambdas containing
+## inline floating-point arithmetic to ParallelFor() (parallel.hpp),
+## which compiles each one twice (once inlined into the calling thread,
+## once as the out-of-line function std::thread's machinery invokes) --
+## two separately-compiled copies of the same source that the optimizer
+## is otherwise free to fuse multiply-adds in differently, which would
+## make a build's result depend on thread count. This flag is a
+## standard, portable option (not a GCC extension), honored identically
+## by GCC and clang, so it closes that gap under both compilers this
+## file is built with, file-wide, in place of hardening each lambda
+## individually. Anisotropic construction code only: this file produces
+## no phonon-propagation output, and isotropic-region output is
+## untouched by this flag (aniso_axi.cpp is reached only through
+## anisotropic ScatterParams). See parallel.hpp's and this file's own
+## BoundRatio()/RatioRun() comments for the history this flag generalizes.
 $(objdir)/aniso_axi.o : aniso_axi.cpp $(aniso_axi_hpp) $(parallel_hpp) $(comd)
-	$(CPP) -c $< $(FLAGS) -o $@
+	$(CPP) -c $< $(FLAGS) -ffp-contract=off -o $@
 
 $(objdir)/scatterers.o : scatterers.cpp $(scatterers_hpp) $(phonons_hpp) $(parallel_hpp) $(comd)
 	$(CPP) -c $< $(FLAGS) -o $@

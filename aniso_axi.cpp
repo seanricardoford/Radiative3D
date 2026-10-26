@@ -1,6 +1,8 @@
 // aniso_axi.cpp
 //
 #include <algorithm>    /* std::min, std::max */
+#include <atomic>       /* std::atomic: AxiProposal_TestForceNextGeometry
+                          BuildToThrow()'s one-shot test flag (ledger M3) */
 #include <cmath>        /* sin, cos, acos, atan2, sqrt, pow, floor, log */
 #include <cstdint>      /* std::uint64_t: FingerprintOf() chunking */
 #include <map>          /* std::map: geometry cache, keyed by TOA count */
@@ -30,6 +32,13 @@ namespace {
   // because Scatterer::out_types_e is a private implementation detail
   // of Scatterer: GPP=0, GPS=1, GSP=2, GSS=3.
   const raytype kConvOutRT[4] = {RAY_P, RAY_S, RAY_P, RAY_S};
+
+  // Test support only (ledger M3; see AxiProposal_TestForceNextGeometry
+  // BuildToThrow()'s doc comment, aniso_axi.hpp): one-shot flag checked
+  // early in BuildAxiGeometry(), below. False (the production state)
+  // costs one relaxed atomic load per geometry-cache-miss build; never
+  // set outside tests/anisotropy_tests.cpp.
+  std::atomic<bool> gTestForceGeometryBuildThrow(false);
 
   inline Index Pow4(int n) {
     Index p = 1;
@@ -260,6 +269,25 @@ namespace {
     geom.Fingerprint = fp;
     geom.RepsPerCell = repsPerCell;
 
+    if (gTestForceGeometryBuildThrow.exchange(false, std::memory_order_relaxed)) {
+      // Test support only (ledger M3; AxiProposal_TestForceNextGeometry
+      // BuildToThrow(), aniso_axi.hpp): fires right after Fingerprint is
+      // set but before any of the rest of 'geom' is populated -- the
+      // same partial state the review found the (now-fixed)
+      // GetOrBuildAxiGeometry() bug could publish into its cache: a
+      // throw here, before this function's own real throws could ever
+      // fire (the mirror-match "no match" throw, unreachable in
+      // practice -- see that hook's own doc comment -- would leave
+      // 'geom' much further along, after RepCenters/RepRadius/MxPerm are
+      // already filled; this earlier point is the strictest case: a
+      // correctly-fingerprinted entry with *none* of the rest of its
+      // data yet written). Simulates "the build throws" without
+      // depending on a real failure path reachable from this file's
+      // actual inputs.
+      throw std::logic_error(
+        "AxiProposal test hook: forced geometry build failure");
+    }
+
     // Representative directions (for bound construction only):
     geom.RepCenters.resize(numReps);
     geom.RepRadius.assign(numReps, 0.0);
@@ -372,6 +400,25 @@ namespace {
   //   every case -- the constructor keeps it as a local for exactly as
   //   long as it uses the result.
   //
+  //   ledger M3: on a true miss, BuildAxiGeometry() builds into a local
+  //   ('built', below) and that local is adopted into the cache only
+  //   after the build returns normally -- cache[toaSize] (which
+  //   default-constructs an empty entry the moment it is first
+  //   evaluated) is therefore not touched at all until a build has
+  //   already succeeded. An earlier version called
+  //   'BuildAxiGeometry(..., cache[toaSize])' directly, inserting the
+  //   (still-empty) entry *before* the build ran: BuildAxiGeometry()
+  //   sets its output's Fingerprint field first thing, before any of its
+  //   own throwing code, so a throw partway through (its mirror-match
+  //   "no match" throw, or a bad_alloc) left a partial entry in the
+  //   cache already stamped with a *matching* Fingerprint -- a later,
+  //   correct construction at the same take-off-angle count would then
+  //   have reused that partial entry (test_axi_geometry_cache_survives_
+  //   build_exception, tests/anisotropy_tests.cpp, using the test-only
+  //   forced-throw hook described in aniso_axi.hpp, since no real
+  //   take-off-angle set reaches either of BuildAxiGeometry()'s own
+  //   throws from here -- see that hook's own doc comment).
+  //
   const CachedAxiGeometry & GetOrBuildAxiGeometry(const S2::S2Set & toa,
                                                   unsigned threads,
                                                   CachedAxiGeometry & scratch) {
@@ -393,8 +440,15 @@ namespace {
       return scratch;
     }
 
+    CachedAxiGeometry built;
+    BuildAxiGeometry(toa, toaSize, fp, threads, built);
+    // Reached only after a successful build: adopt it into the cache
+    // now, not before. 'cache[toaSize]' default-constructs its (empty)
+    // entry right here, so a throw above never touches 'cache' at all --
+    // a retry after a caught exception starts from no entry for this
+    // size, never a partial one.
     CachedAxiGeometry & slot = cache[toaSize];
-    BuildAxiGeometry(toa, toaSize, fp, threads, slot);
+    slot = std::move(built);
     return slot;
   }
 
@@ -406,6 +460,12 @@ namespace {
 // ****  CLASS:  AxiProposal                                         ****
 // ****                                                              ****
 //
+
+// Test support only (ledger M3; see aniso_axi.hpp's own doc comment on
+// this function, and GetOrBuildAxiGeometry()/BuildAxiGeometry() above).
+void AxiProposal_TestForceNextGeometryBuildToThrow() {
+  gTestForceGeometryBuildThrow.store(true, std::memory_order_relaxed);
+}
 
 //////
 // CONSTRUCTOR:  AxiProposal()
@@ -496,41 +556,42 @@ AxiProposal::AxiProposal(const ScatterParams & par, const S2::S2Set & toa,
   // -- P bins use (kP,kP) and (kP,kS); S bins use (kS,kP) and (kS,kS) --
   // instead of once per (representative, bin) as the old ComputeBound()
   // did. Independent across representatives (each task writes only its
-  // own repsPP[i]/repsPS[i]/repsSP[i]/repsSS[i]), so this runs via
+  // own column i of soaPP/soaPS/soaSP/soaSS), so this runs via
   // ParallelFor on up to 'threads' workers (Task 4b). See
   // PrepareBoundRep()/BoundRatio() and BuildBinTable() below.
+  //
+  // ledger I2: PrepareBoundRep()'s return value is written straight into
+  // RepSoA column i (RepSoA::AssignOne(), aniso_axi.hpp) inside this
+  // same ParallelFor body -- there is no vector<BoundRep> here at all,
+  // let alone one kept alive alongside the RepSoA arrays it would feed.
+  // An earlier version filled four vector<BoundRep> temporaries here,
+  // then copied each into its RepSoA with a separate, later Assign()
+  // call, inside a scope meant to free the vector<BoundRep> side before
+  // the RepSoA side's own use further down -- but the four Assign()
+  // calls (each needing its vector<BoundRep> and its RepSoA alive
+  // simultaneously, to copy one into the other) ran *inside* that same
+  // scope, so for their duration both ~21 MB array sets (four arrays
+  // each -- one per (k_in,k_out) pair -- 8 bytes/field * 8 fields *
+  // numReps; numReps capped at kRepDegree's 81,920) were live at once, a
+  // ~42 MB peak the scoping braces only ever shortened, never removed
+  // (see .superpowers/sdd/2026-10-17-axisymmetric-sampler-performance/
+  // final-fix-report.md for the measured/derived peak). Below, only the
+  // RepSoA arrays are ever allocated for this step -- ~21 MB total, the
+  // irreducible cost of data BuildBinTable()/RatioRun() need regardless
+  // -- comfortably inside the ~32 MB/scatterer budget (docs/superpowers/
+  // specs/2026-10-17-axisymmetric-sampler-performance-design.md).
   const Index numReps = (Index) geom.RepCenters.size();
   RepSoA soaPP, soaPS, soaSP, soaSS;
-  {
-    // Scoped so the four vector<BoundRep> temporaries below (~5 MB each
-    // at kRepDegree's 81,920 representatives) are freed as soon as their
-    // data is copied into the RepSoA arrays above (also ~5 MB each),
-    // rather than staying alive alongside them for the rest of the
-    // constructor: keeping both sets live through the 450-bin loop
-    // further down would cost ~42 MB of temporaries, over the ~32 MB/
-    // scatterer budget (docs/superpowers/specs/2026-10-17-axisymmetric-
-    // sampler-performance-design.md); freed here, only one ~21 MB set is
-    // ever live at a time.
-    std::vector<BoundRep> repsPP(numReps), repsPS(numReps),
-                          repsSP(numReps), repsSS(numReps);
-    ParallelFor(0, numReps, threads, [&](Index i) {
-      const R3::XYZ & t = geom.RepCenters[i];
-      const Real      r = geom.RepRadius[i];
-      repsPP[i] = PrepareBoundRep(t, r, mKP, mKP, mAMin);
-      repsPS[i] = PrepareBoundRep(t, r, mKP, mKS, mAMin);
-      repsSP[i] = PrepareBoundRep(t, r, mKS, mKP, mAMin);
-      repsSS[i] = PrepareBoundRep(t, r, mKS, mKS, mAMin);
-    });
-
-    // Structure-of-arrays copies of the four BoundRep vectors above, fed
-    // to BuildBinTable()/RatioRun() instead of the vector<BoundRep>
-    // arrays themselves so that function's hot loop reads flat,
-    // contiguous Real arrays and can vectorize (see aniso_axi.hpp's
-    // RepSoA/RatioRun doc comments). Assign() is a plain column-wise
-    // copy, so this adds no arithmetic and so no rounding difference.
-    soaPP.Assign(repsPP); soaPS.Assign(repsPS);
-    soaSP.Assign(repsSP); soaSS.Assign(repsSS);
-  }
+  soaPP.Resize(numReps); soaPS.Resize(numReps);
+  soaSP.Resize(numReps); soaSS.Resize(numReps);
+  ParallelFor(0, numReps, threads, [&](Index i) {
+    const R3::XYZ & t = geom.RepCenters[i];
+    const Real      r = geom.RepRadius[i];
+    soaPP.AssignOne(i, PrepareBoundRep(t, r, mKP, mKP, mAMin));
+    soaPS.AssignOne(i, PrepareBoundRep(t, r, mKP, mKS, mAMin));
+    soaSP.AssignOne(i, PrepareBoundRep(t, r, mKS, mKP, mAMin));
+    soaSS.AssignOne(i, PrepareBoundRep(t, r, mKS, mKS, mAMin));
+  });
 
   // Per-cell isotropic sums S(conv,cell), hoisted out of the bin loop:
   // they depend only on conv and cell, never on the incidence bin, so
@@ -712,19 +773,49 @@ AxiProposal::BinCap AxiProposal::MakeBinCap(const R3::XYZ & u_c, Real delta) {
 // This function and RatioRun() (below) carry a matching GCC
 // optimize("fp-contract=off") attribute so neither ever contracts a
 // multiply-add into a fused instruction: GCC's default for this file's
-// build flags is -ffp-contract=fast (confirmed by -Q --help=optimizers),
-// and disassembly showed BOTH this scalar function and RatioRun's
-// vectorized loop already contain real fmadd/fmsub/fnmsub(/NEON
-// fmla/fmls) instructions under that default -- just not, for at least
-// one representative/bin found by test_axi_ratio_run_matches_scalar
-// (tests/anisotropy_tests.cpp), the *same* ones, so the two rounded
-// differently for that input. Forcing both to fully expand every
-// multiply-add (never fusing) removes the ambiguity: per IEEE 754,
-// scalar and SIMD add/sub/mul/div/sqrt are each required to round
-// identically lane-for-lane, so two functions evaluating the same
-// source expressions with no fused contraction anywhere are
-// bit-identical by construction, independent of whether either one
-// vectorizes. See the exactness note on RatioRun() below.
+// build flags used to be -ffp-contract=fast (confirmed by -Q
+// --help=optimizers), and disassembly showed BOTH this scalar function
+// and RatioRun's vectorized loop already contain real fmadd/fmsub/
+// fnmsub(/NEON fmla/fmls) instructions under that default -- just not,
+// for at least one representative/bin found by
+// test_axi_ratio_run_matches_scalar (tests/anisotropy_tests.cpp), the
+// *same* ones, so the two rounded differently for that input. Forcing
+// both to fully expand every multiply-add (never fusing) removes the
+// ambiguity: per IEEE 754, scalar and SIMD add/sub/mul/div/sqrt are each
+// required to round identically lane-for-lane, so two functions
+// evaluating the same source expressions with no fused contraction
+// anywhere are bit-identical by construction, independent of whether
+// either one vectorizes. See the exactness note on RatioRun() below.
+//
+// UPDATE (ledger M1/M2): this attribute is no longer this file's only
+// defense against contraction, and the sentence above describing this
+// file's "default" build flags is now only history. The Makefile
+// compiles the whole of aniso_axi.cpp with -ffp-contract=off -- a
+// per-file flag both GCC and clang honor identically, unlike this
+// attribute, which is a GCC-only extension -- because the hazard this
+// comment describes for BoundRatio/RatioRun turned out to apply, in
+// principle, to every per-index lambda this file hands to ParallelFor()
+// (parallel.hpp): giving body(i) a single source call site
+// (parallel.hpp's own IMPLEMENTATION NOTE) stops the compiler from
+// choosing contraction independently at two *textually* different call
+// sites, but GCC still compiles each lambda's body twice at the
+// object-code level -- once inlined into ParallelFor's calling thread,
+// once as the out-of-line function std::thread's machinery invokes --
+// and nothing stopped those two compiled copies from contracting
+// differently, the same bug this function and RatioRun() were
+// individually hardened against (confirmed present, before this file-
+// wide flag, in the 450-bin lambda's theta/chi/delta/u_c arithmetic, the
+// representative-radius lambda, the mirror-match lambda, and
+// FingerprintOf()'s lambda). The file-wide flag closes that for all of
+// them at once, under both compilers this file is built with. This
+// function's own attribute is kept rather than pruned: its
+// fp-contract=off is now redundant with the file flag under GCC, but its
+// no-math-errno/no-trapping-math terms are not -- RatioRun's
+// sqrt()-containing loop still needs them to vectorize under GCC -- and
+// under clang the attribute itself still expands to nothing (see the
+// #else below), so clang's BoundRatio()/RatioRun() now get their
+// no-contraction guarantee from the file flag alone, with no vectorizer
+// hint needed (correctness here never depended on vectorizing).
 #if defined(__GNUC__) && !defined(__clang__)
 #define R3D_EXACT_FP_ATTR \
   __attribute__((optimize("no-math-errno","no-trapping-math","fp-contract=off")))
@@ -787,26 +878,39 @@ Real AxiProposal::BoundRatio(const BoundRep & rep, const BinCap & cap,
 
 
 //////
-// METHOD:  AxiProposal :: RepSoA :: Assign()
+// METHOD:  AxiProposal :: RepSoA :: Resize() / AssignOne() / Assign()
 //
-//   Column-wise copy of 'reps' into the eight parallel arrays: no
-//   arithmetic, so this cannot itself be a source of any rounding
-//   difference between RatioRun() and BoundRatio().
+//   Resize() presizes all eight parallel arrays; AssignOne() writes one
+//   representative's BoundRep into column 'i' of all eight, with no
+//   arithmetic, so it cannot itself be a source of any rounding
+//   difference between RatioRun() and BoundRatio(). The AxiProposal
+//   constructor calls Resize() once, then AssignOne() per representative
+//   from inside a ParallelFor (ledger I2: see the constructor's own
+//   comment), never allocating an intermediate std::vector<BoundRep>.
+//   Assign() -- Resize() plus a loop of AssignOne() -- reproduces the
+//   combined effect for tests/anisotropy_tests.cpp's
+//   test_axi_ratio_run_matches_scalar, which needs to build a RepSoA
+//   directly from a std::vector<BoundRep>; no production code calls it.
 //
-void AxiProposal::RepSoA::Assign(const std::vector<BoundRep> & reps) {
-  const std::size_t n = reps.size();
+void AxiProposal::RepSoA::Resize(std::size_t n) {
   Mx.resize(n); My.resize(n); Mz.resize(n); Mr.resize(n);
   Rho.resize(n); M2Lo.resize(n); M2Hi.resize(n); Numer.resize(n);
-  for (std::size_t i = 0; i < n; i++) {
-    Mx[i]    = reps[i].MHat.x();
-    My[i]    = reps[i].MHat.y();
-    Mz[i]    = reps[i].MHat.z();
-    Mr[i]    = reps[i].Mr;
-    Rho[i]   = reps[i].Rho;
-    M2Lo[i]  = reps[i].M2Lo;
-    M2Hi[i]  = reps[i].M2Hi;
-    Numer[i] = reps[i].Numer;
-  }
+}//
+
+void AxiProposal::RepSoA::AssignOne(std::size_t i, const BoundRep & rep) {
+  Mx[i]    = rep.MHat.x();
+  My[i]    = rep.MHat.y();
+  Mz[i]    = rep.MHat.z();
+  Mr[i]    = rep.Mr;
+  Rho[i]   = rep.Rho;
+  M2Lo[i]  = rep.M2Lo;
+  M2Hi[i]  = rep.M2Hi;
+  Numer[i] = rep.Numer;
+}//
+
+void AxiProposal::RepSoA::Assign(const std::vector<BoundRep> & reps) {
+  Resize(reps.size());
+  for (std::size_t i = 0; i < reps.size(); i++) {AssignOne(i, reps[i]);}
 }//
 //
 
@@ -814,12 +918,16 @@ void AxiProposal::RepSoA::Assign(const std::vector<BoundRep> & reps) {
 // GCC's auto-vectorizer needs permission to reorder the libm-adjacent
 // comparisons/selects below without worrying about errno or trapping FP
 // exceptions (neither of which this codebase ever inspects); combined,
-// here, with the same fp-contract=off as BoundRatio() above, for the
-// exactness reasons given there. Granted locally, via a function
-// attribute, rather than globally via a command-line flag, so it
-// affects only these two definitions. Clang (and anything else) gets
-// the unannotated definition: the attribute is a GCC extension, and
-// this loop vectorizes under Clang's defaults anyway.
+// here, with fp-contract=off, for the exactness reasons given above.
+// Granted locally, via a function attribute, because the errno/
+// trapping-math terms are GCC vectorizer hints with no file-wide
+// equivalent in the Makefile -- unlike fp-contract=off itself, which is
+// now *also* set file-wide (see the UPDATE note above BoundRatio()), so
+// removing this attribute entirely would cost only vectorization under
+// GCC, never exactness. Clang (and anything else) gets the unannotated
+// definition: the attribute is a GCC extension, this loop vectorizes
+// under Clang's defaults anyway, and Clang's own no-contraction
+// guarantee now comes from the same file-wide flag as BoundRatio()'s.
 //
 //////
 // METHOD:  AxiProposal :: RatioRun()                          [static]
