@@ -195,7 +195,9 @@ mean(Ω)/Ω_k modulation described in Mechanism, above.
   (integrals) in a code path separate from the unweighted `TOA_EQUAL`
   arithmetic. `ReportDirs()` now always builds its fixed degree-6 set
   with solid angles, and `ComputeReportStats()` passes them through in
-  `area` mode.
+  `area` mode. `PrintAllScatteringStats()`, in the same file, prints the
+  third provenance line, `#  TOA quadrature: area`, in the scatterer-dump
+  header.
 - `events.cpp` -- `ShearDislocation`'s constructor reads
   `Get_TOA_Quadrature()` once and, in `area` mode, multiplies each ray
   type's per-direction squared amplitude by `TOAWeight(ctr)` before
@@ -211,11 +213,15 @@ mean(Ω)/Ω_k modulation described in Mechanism, above.
   sampler's majorant -- also unchanged code, inheriting the weighted
   tables the same way.
 - `cmdline.hpp`, `main.cpp`, `model.hpp`/`model.cpp` -- add the
-  `--toa-quadrature=equal|area` option (`OPT_TOAQUAD`) and the three
-  provenance lines (Consequences, below). `--event-test` (`main.cpp`)
-  always builds its own degree-3 `TesselSphere` in `TOA_EQUAL` mode
-  regardless of the command-line option, since it displays per-direction
-  pattern values that a weighted table would distort.
+  `--toa-quadrature=equal|area` option (`OPT_TOAQUAD`) and two of the
+  three provenance lines (`TOA Quadrature: area` in the parameter echo,
+  and `(Area-weighted take-off-angle quadrature.)` under the take-off-
+  angle count; the third is the `scatterers.cpp` bullet's
+  `PrintAllScatteringStats()` line above -- see Consequences, below, for
+  all three together). `--event-test` (`main.cpp`) always builds its own
+  degree-3 `TesselSphere` in `TOA_EQUAL` mode regardless of the
+  command-line option, since it displays per-direction pattern values
+  that a weighted table would distort.
 
 ## Consequences
 
