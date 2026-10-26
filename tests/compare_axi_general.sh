@@ -67,12 +67,33 @@ set -eu
 # about this test should depend on wall-clock time). The observed
 # labelling is NOT separately added to the N permutations tested (a
 # label relabelling drawn at random could by chance reproduce it, but it
-# is not forced in) -- with CMP_PERMUTATIONS=1000 (or the smoke test's
+# is not forced in) -- with CMP_PERMUTATIONS=2000 (or the smoke test's
 # 200) either convention changes p by at most 1/N, which does not matter
-# at the 0.01 gate. Computed independently for A-vs-G and A-vs-A'.
+# at this run's (Bonferroni-corrected, see "Exit status" below) gate.
+# Computed independently for A-vs-G and A-vs-A'.
 #
 # Exit status: nonzero if any simulation run fails, or if either
-# p-value (A-vs-G or A-vs-A') is < 0.01 for any config.
+# p-value (A-vs-G or A-vs-A') is below this run's Bonferroni-corrected
+# per-test significance threshold for any config -- 0.01 divided by the
+# number of p-values the run actually computes (2 per config in
+# CMP_CONFIGS, whatever its size: 0.01/16 = 0.000625 for the default 8
+# configs), printed in the output header as "Per-test significance
+# threshold" -- rather than the flat, uncorrected 0.01 each individual
+# comparison nominally uses (ledger I5: see the CMP_PERMUTATIONS entry
+# below for why the permutation count changed alongside this).
+#
+# Family-wise error rate (ledger I5): left uncorrected, a default run's
+# 16 comparisons (2 per config x 8 configs), each at a nominal
+# alpha=0.01, would fail at least one GATE on fully correct code about
+# 1-0.99^16 ~= 15% of the time -- and the shipped code's default seed set
+# hit exactly this: `cmp2-full.out` recorded p(A,G)=0.0040 for lopnor
+# eps=0.01 r=10 (GATE under the old, uncorrected 0.01), confirmed a fluke
+# rather than a sampler defect by two fresh CMP_SEED_BASE sets in
+# `cmp3-fresh.out` (p=0.9095 and p=0.3075) -- the chance of some config's
+# minimum p-value over 16 tests reaching <=0.0040 under the null is
+# itself about 6% (1-(1-0.004)^16). Under the Bonferroni-corrected
+# threshold this file now applies (0.01/16 = 0.000625 for the default
+# 8-config run), `cmp2-full.out`'s recorded p(A,G)=0.0040 passes.
 #
 # Environment, with defaults:
 #   CMP_DEGREE               --toa-degree for all runs.      Default: 7
@@ -92,7 +113,24 @@ set -eu
 #   CMP_THREADS               --threads for all runs, or "auto" for the
 #                             logical CPU count.              Default: auto
 #   CMP_PERMUTATIONS          Random relabellings per comparison per
-#                             config.                         Default: 1000
+#                             config. Must stay large enough that this
+#                             permutation test's own resolution floor,
+#                             1/(CMP_PERMUTATIONS+1) (the smallest
+#                             attainable p-value, by the usual
+#                             permutation-test convention), sits below
+#                             the run's Bonferroni-corrected per-test
+#                             threshold above -- otherwise no config
+#                             could ever GATE, however real a
+#                             discrepancy, which would be worse than
+#                             merely stricter. 2000 clears the default
+#                             8-config run's threshold (0.01/16 =
+#                             0.000625) with floor 1/2001 ~= 0.0004998; a
+#                             smaller CMP_CONFIGS needs fewer permutations
+#                             (one config's 0.01/2 = 0.005 threshold only
+#                             needs CMP_PERMUTATIONS >= 200, this
+#                             variable's prior default -- see the smoke
+#                             test below), a larger one needs more.
+#                                                             Default: 2000
 #   CMP_CONFIGS               Which (scenario, eps, r) configs to run;
 #                             see syntax below.
 #                             Default: all eight of {lopnor, crustpinch}
@@ -125,7 +163,7 @@ CMP_LOPNOR_PHONONS=${CMP_LOPNOR_PHONONS:-250000}
 CMP_CRUSTPINCH_PHONONS=${CMP_CRUSTPINCH_PHONONS:-50000}
 CMP_REPLICATES=${CMP_REPLICATES:-8}
 CMP_THREADS=${CMP_THREADS:-auto}
-CMP_PERMUTATIONS=${CMP_PERMUTATIONS:-1000}
+CMP_PERMUTATIONS=${CMP_PERMUTATIONS:-2000}
 CMP_SEED_BASE_DEFAULT=596
 CMP_SEED_BASE=${CMP_SEED_BASE:-$CMP_SEED_BASE_DEFAULT}
 
@@ -137,6 +175,18 @@ CMP_CONFIGS=${CMP_CONFIGS:-$CMP_CONFIGS_DEFAULT}
 
 LCG_SEED=20261017   # Fixed (not time-based) seed for window_stat()'s
                     # permutation LCG; see the header comment above.
+
+# Family-wise significance threshold (ledger I5): 0.01 divided by the
+# number of p-values this run actually computes -- 2 per CMP_CONFIGS
+# token (A-vs-G and A-vs-A') -- rather than comparing each one against
+# the flat 0.01 every individual comparison nominally uses. Counted with
+# awk's NF (word count) on $CMP_CONFIGS, the same whitespace-splitting
+# the "for _cag_cfg in $CMP_CONFIGS" loop below uses, so this always
+# matches the number of configs actually run. See the header comment's
+# "Exit status" and "CMP_PERMUTATIONS" entries above for why.
+GATE_N_CONFIGS=$(printf '%s\n' "$CMP_CONFIGS" | awk '{print NF}')
+GATE_N_PVALUES=$((2 * GATE_N_CONFIGS))
+GATE_THRESHOLD=$(awk -v n="$GATE_N_PVALUES" 'BEGIN{printf "%.8f", 0.01/n}')
 
 if [ "$CMP_REPLICATES" -lt 2 ]; then
   echo "ERROR: CMP_REPLICATES must be >= 2 (need a sample variance per group)" >&2
@@ -434,6 +484,7 @@ if [ "$CMP_SEED_BASE" != "$CMP_SEED_BASE_DEFAULT" ]; then
   HEADER_LINE="$HEADER_LINE, Seed base: $CMP_SEED_BASE"
 fi
 echo "$HEADER_LINE"
+echo "Per-test significance threshold (Bonferroni, 0.01 / $GATE_N_PVALUES p-values this run): $GATE_THRESHOLD"
 echo ""
 echo "| Scenario | eps | r | windows | p(A,G) | p(A,A') | median s (A) | median s (G) | G/A time ratio |"
 echo "|---|---|---:|---:|---:|---:|---:|---:|---:|"
@@ -478,12 +529,14 @@ for _cag_cfg in $CMP_CONFIGS; do
   med_G=$(median_of "$work/G.times")
   ratio=$(awk -v a="$med_A" -v g="$med_G" 'BEGIN{printf "%.3f", g/a}')
 
-  if awk -v p="$p_AG" 'BEGIN{exit !(p<0.01)}'; then
-    echo "  GATE: p(A,G)=$p_AG < 0.01 for scenario=$_cag_scenario eps=$_cag_eps r=$_cag_r" >&2
+  if awk -v p="$p_AG" -v t="$GATE_THRESHOLD" 'BEGIN{exit !(p<t)}'; then
+    echo "  GATE: p(A,G)=$p_AG < $GATE_THRESHOLD (Bonferroni: 0.01/$GATE_N_PVALUES)" \
+         "for scenario=$_cag_scenario eps=$_cag_eps r=$_cag_r" >&2
     GATE_FAIL=1
   fi
-  if awk -v p="$p_AA" 'BEGIN{exit !(p<0.01)}'; then
-    echo "  GATE: p(A,A')=$p_AA < 0.01 for scenario=$_cag_scenario eps=$_cag_eps r=$_cag_r" >&2
+  if awk -v p="$p_AA" -v t="$GATE_THRESHOLD" 'BEGIN{exit !(p<t)}'; then
+    echo "  GATE: p(A,A')=$p_AA < $GATE_THRESHOLD (Bonferroni: 0.01/$GATE_N_PVALUES)" \
+         "for scenario=$_cag_scenario eps=$_cag_eps r=$_cag_r" >&2
     GATE_FAIL=1
   fi
 
