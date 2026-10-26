@@ -330,6 +330,22 @@ void process_option(CmdOpt & opt, ModelParams & params,
 
 
   ////////////////////////////////////////////////////////////////////
+  case CmdOpt::OPT_TOAQUAD:     // *** Take-Off Angle Quadrature Mode:
+                                // ***
+    {
+      Text value = opt.PopValue_Text();
+      if (value == "equal") {
+        params.TOA_Quadrature = PhononSource::TOA_EQUAL;
+      } else if (value == "area") {
+        params.TOA_Quadrature = PhononSource::TOA_AREA;
+      } else {
+        throw(Runtime("take-off-angle quadrature must be 'equal' or 'area'"));
+      }
+    }
+    break;
+
+
+  ////////////////////////////////////////////////////////////////////
   case CmdOpt::OPT_COMPSELECT:  // *** Grid-Compiled Model Selector:
                                 // ***
     //

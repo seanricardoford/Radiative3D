@@ -1443,6 +1443,9 @@ void Scatterer::PrintAllScatteringStats() {     // STATIC METHOD
            ((cm_NoDeflect_b) ? "MFPs, Deflections" : "MFPs") :
            ((cm_NoDeflect_b) ? "Deflections" : "None"))
        << std::endl;
+  if (Get_TOA_Quadrature() == TOA_AREA) {
+    cout << "#  TOA quadrature: area" << std::endl;
+  }
   cout << "#  "
        << "    nu    eps        a    kappa         el       gam0    "
        << "     address      MFP (P)    MFP (S)      DM (P)    DM (S)";

@@ -126,10 +126,14 @@ void ModelParams::Output() const
 
   ModelParams def;
 
-  std::cout 
-    << "TOA_Degree: " << TOA_Degree << setw(30) 
-    << ((TOA_Degree==def.TOA_Degree) ? "(default)" : "") << endl
-    << "Frequency: " <<  Frequency << setw(31) 
+  std::cout
+    << "TOA_Degree: " << TOA_Degree << setw(30)
+    << ((TOA_Degree==def.TOA_Degree) ? "(default)" : "") << endl;
+  if (TOA_Quadrature == PhononSource::TOA_AREA) {
+    std::cout << "TOA Quadrature: area" << endl;
+  }
+  std::cout
+    << "Frequency: " <<  Frequency << setw(31)
     << ((Frequency == def.Frequency) ? "(default)" : "") << endl
     << "Number of Phonons: " << NumPhonons << setw(22)
     << ((NumPhonons == def.NumPhonons) ? "(default)" : "") << endl
@@ -299,13 +303,18 @@ Model::Model(const ModelParams & par) {
 
   std::cout << "@@ __DISCRETIZING_TOA__" << std::endl;
 
-  mpTOA_Array = new S2::TesselSphere(S2::TESS_ICO,par.TOA_Degree);
+  mpTOA_Array = new S2::TesselSphere(S2::TESS_ICO, par.TOA_Degree,
+                 par.TOA_Quadrature == PhononSource::TOA_AREA);
   std::cout << "|\n";
-  std::cout 
-    << "|" << std::setw(8) << mpTOA_Array->size() 
+  std::cout
+    << "|" << std::setw(8) << mpTOA_Array->size()
     << "  Take-off angles initialized for event and scattering sources.\n";
   std::cout
     << "|          (TesselSphere of degree " << par.TOA_Degree << ".)\n";
+  if (par.TOA_Quadrature == PhononSource::TOA_AREA) {
+    std::cout
+      << "|          (Area-weighted take-off-angle quadrature.)\n";
+  }
   std::cout << "|\n";
 
 
@@ -317,7 +326,7 @@ Model::Model(const ModelParams & par) {
   //           angles array:
   //
 
-  PhononSource::Set_TOA_Array(mpTOA_Array);
+  PhononSource::Set_TOA_Array(mpTOA_Array, par.TOA_Quadrature);
 
   //
   //           The Phonon class needs to know the maximum sim-time to

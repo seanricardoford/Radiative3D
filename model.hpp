@@ -121,6 +121,11 @@ public:
   int               TOA_Degree;  // Determines number of Take-off
                                  //  Angles on which to define event
                                  //  source functions
+  PhononSource::toa_quadrature_e
+                TOA_Quadrature;  // Quadrature mode (TOA_EQUAL or
+                                 //  TOA_AREA) used to weight the take-
+                                 //  off-angle array; see sources.hpp.
+                                 //  Default TOA_EQUAL.
   long              NumPhonons;  // Number of phonons to cast
   unsigned           NumThreads; // Worker override; zero means automatic
   std::uint64_t      RandomSeed; // Seed used by simulation random streams
@@ -174,6 +179,7 @@ public:
     EventSourceMT    ( Tensor::USGS(0,-1,1,0,0,0) ),
     EventSourceLoc   ( 0,0,-1              ),
     TOA_Degree       ( 7                   ),
+    TOA_Quadrature   ( PhononSource::TOA_EQUAL ),
     NumPhonons       ( 10                  ), // 
     NumThreads       ( 0                   ),
     RandomSeed       ( 0                   ),

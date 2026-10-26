@@ -35,6 +35,7 @@ public:
     OPT_NUMBER,         // Number of Phonons
     OPT_TTLIVE,         // Phonon Time-to-Live
     OPT_TOA,            // Take-off angle degree
+    OPT_TOAQUAD,        // Take-off angle quadrature mode
     OPT_THREADS,        // Simulation worker count
     OPT_SEED,           // Simulation random seed
 
@@ -267,6 +268,8 @@ CmdOpt::OpMap CmdOpt::init_map() {
   map["--timetolive"] =          OPT_TTLIVE;  //  ''
   map["-A"] =                       OPT_TOA;  // Take-off Angle degree
   map["--toa-degree"] =             OPT_TOA;  //  ''
+  map["--toa-quadrature"] =     OPT_TOAQUAD;  // Take-off angle quadrature
+                                              //  mode (equal|area)
   map["--threads"] =                OPT_THREADS;
   map["--seed"] =                   OPT_SEED;
 
