@@ -331,8 +331,7 @@ void process_option(CmdOpt & opt, ModelParams & params,
 
   ////////////////////////////////////////////////////////////////////
   case CmdOpt::OPT_TOAQUAD:     // *** Take-Off Angle Quadrature Mode:
-                                // ***
-    {
+    {                           // ***
       Text value = opt.PopValue_Text();
       if (value == "equal") {
         params.TOA_Quadrature = PhononSource::TOA_EQUAL;
