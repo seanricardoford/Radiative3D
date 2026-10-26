@@ -7,6 +7,10 @@ main.exe
 
 # Runtime output
 data/
+build/
 *.octv
 *.dat
 *.runrcpt
+
+# macos
+.DS_Store
