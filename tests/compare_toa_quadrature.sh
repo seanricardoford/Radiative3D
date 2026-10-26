@@ -17,11 +17,12 @@ set -eu
 #                                                             Default: 7
 #   TQ_REPLICATES            K, replicates per mode per config. Must be
 #                             >= 2 (need a sample variance per group).
-#                                                             Default: 4
+#                                                             Default: 12
 #   TQ_THREADS               --threads for every run, or "auto" for the
 #                             logical CPU count.              Default: auto
-#   TQ_SEED_BASE              Base seed added to k*2^32 for each replicate
-#                             (see "Seeds" below).            Default: 596
+#   TQ_SEED_BASE              Base seed added to (i*2K + k)*2^32 for each
+#                             configuration i / replicate k (see "Seeds"
+#                             below).                         Default: 596
 #   TQ_LOPNOR_PHONONS         --num-phonons for lopnor runs.   Default: 200000
 #   TQ_CRUSTPINCH_PHONONS     --num-phonons for crustpinch runs. Default: 50000
 #   TQ_CONFIGS                Which (scenario, variant) configs to run for
@@ -40,17 +41,27 @@ set -eu
 # e.g. TQ_CONFIGS="lopnor:iso", is how the smoke test below exercises the
 # script cheaply.
 #
-# Seeds: replicate k = 1..K of a config runs in equal mode with seed
-# TQ_SEED_BASE + k*2^32; replicate k = K+1..2K runs in area mode (same
-# formula). 2^32 is far larger than any phonon count used here, so
-# MixRandomSeed(seed ^ phonon_id) (model.cpp) never lets two replicates'
-# per-phonon streams collide (doc/MANUAL.md's --seed entry). Computed
-# with awk ('%.0f' on an IEEE double), exact as long as the sum stays
-# under 2^53 -- true for every TQ_SEED_BASE/TQ_REPLICATES combination
-# this script's own validation (below) allows, so (unlike
-# tests/compare_axi_general.sh's seed_for(), which must also tolerate a
-# TQ_SEED_BASE near 2^64) no arbitrary-precision arithmetic is needed
-# here.
+# Seeds: for the configuration at 0-based position i in TQ_CONFIGS,
+# replicate k = 1..K of that config runs in equal mode with seed
+# TQ_SEED_BASE + (i*2K + k)*2^32; replicate k = K+1..2K runs in area mode
+# (same formula). The i*2K term gives every configuration its own block
+# of seeds, disjoint from every other configuration's, so no two
+# configurations -- and, within one configuration, no two replicates or
+# modes -- ever draw from the same seed; this matters because the energy
+# table below treats different configurations as statistically
+# independent samples. 2^32 is far larger than any phonon count used
+# here, so MixRandomSeed(seed ^ phonon_id) (model.cpp) never lets two
+# replicates' per-phonon streams collide (doc/MANUAL.md's --seed entry).
+# Computed with awk ('%.0f' on an IEEE double), exact as long as the
+# result stays under 2^53 -- enforced below by rejecting any
+# TQ_SEED_BASE/TQ_REPLICATES/config-count combination whose largest seed
+# would reach or exceed it, so (unlike tests/compare_axi_general.sh's
+# seed_for(), which must also tolerate a TQ_SEED_BASE near 2^64) no
+# arbitrary-precision arithmetic is needed here. The degree-9 build check
+# (below) is not one of TQ_CONFIGS's own configurations; it reuses this
+# same seed_for() with i=0, which collapses the formula back to plain
+# TQ_SEED_BASE + k*2^32, since its three replicates per cell never need
+# to be independent of the energy/MFP configurations above.
 #
 # Energy table, per config: K equal-mode and K area-mode runs are each
 # reduced, via extract_total_energy() below, to one "station energy"
@@ -94,7 +105,7 @@ set -eu
 # depends only on construction order, not on --toa-quadrature), so row i
 # of one matches row i of the other. Each printed row holds the matched
 # pair's a (really ax; column 3), ay, az and mode (columns 12-14; "-" for
-# an isotropic row, which has no those columns) and, for both MFP(P) and
+# an isotropic row, which has none of those columns) and, for both MFP(P) and
 # MFP(S) (columns 8 and 9), the equal value, the area value, and the
 # percent change (area/equal - 1)*100.
 #
@@ -133,7 +144,7 @@ cd "$ROOT"
 . "$ROOT/tests/aniso_lib.sh"
 
 TQ_DEGREE=${TQ_DEGREE:-7}
-TQ_REPLICATES=${TQ_REPLICATES:-4}
+TQ_REPLICATES=${TQ_REPLICATES:-12}
 TQ_THREADS=${TQ_THREADS:-auto}
 TQ_SEED_BASE=${TQ_SEED_BASE:-596}
 TQ_LOPNOR_PHONONS=${TQ_LOPNOR_PHONONS:-200000}
@@ -158,6 +169,26 @@ case "$TQ_SEED_BASE" in
     ;;
 esac
 
+# Reject a TQ_SEED_BASE/TQ_REPLICATES/TQ_CONFIGS combination whose largest
+# seed (configuration index TQ_NUM_CONFIGS-1, k=2K; see the header
+# comment's "Seeds" section) would reach 2^53, where seed_for()'s
+# IEEE-double arithmetic (below) stops being exact.
+TQ_NUM_CONFIGS=$(set -- $TQ_CONFIGS; echo $#)
+awk -v base="$TQ_SEED_BASE" -v n="$TQ_NUM_CONFIGS" -v k="$TQ_REPLICATES" '
+  BEGIN {
+    max_seed = base + n*2*k*4294967296
+    if (max_seed >= 9007199254740992) {
+      printf "ERROR: TQ_SEED_BASE=%s, TQ_REPLICATES=%s and %d TQ_CONFIGS " \
+             "entries would use seeds up to %.0f, at or above 2^53 " \
+             "(9007199254740992), where seed arithmetic in this script " \
+             "stops being exact; reduce TQ_SEED_BASE, TQ_REPLICATES, or " \
+             "the number of TQ_CONFIGS entries\n", \
+             base, k, n, max_seed > "/dev/stderr"
+      exit 1
+    }
+  }
+' || exit 1
+
 if [ "$TQ_THREADS" = "auto" ]; then
   TQ_THREADS=$(auto_threads)
 fi
@@ -180,10 +211,15 @@ K=$TQ_REPLICATES
 # Helpers
 # ---------------------------------------------------------------------
 
-# seed_for K_OFFSET -> prints TQ_SEED_BASE + K_OFFSET*2^32 as an exact
-# unsigned integer (see the header comment's "Seeds" section).
+# seed_for CFG_INDEX K_OFFSET -> prints TQ_SEED_BASE +
+# (CFG_INDEX*2K + K_OFFSET)*2^32 as an exact unsigned integer (see the
+# header comment's "Seeds" section). K here is $K (TQ_REPLICATES, set
+# above). The degree-9 build check (below) is not one of TQ_CONFIGS's own
+# configurations; it calls this with CFG_INDEX=0, collapsing the formula
+# back to plain TQ_SEED_BASE + K_OFFSET*2^32.
 seed_for() {
-  awk -v base="$TQ_SEED_BASE" -v k="$1" 'BEGIN{printf "%.0f", base + k*4294967296}'
+  awk -v base="$TQ_SEED_BASE" -v cfgidx="$1" -v koff="$2" -v repk="$K" \
+      'BEGIN{printf "%.0f", base + (cfgidx*2*repk + koff)*4294967296}'
 }
 
 # phonons_for_scenario SCENARIO -> prints the configured phonon count.
@@ -554,6 +590,7 @@ echo "|---|---:|---:|---:|---:|---:|"
 : > "$work/mfp_table_body"
 : > "$work/energy_detail_body"
 
+cfg_index=0
 for cfg in $TQ_CONFIGS; do
   fields=$(tq_config_fields "$cfg")
   set -- $fields
@@ -562,7 +599,7 @@ for cfg in $TQ_CONFIGS; do
   model=$(model_for_variant "$scenario" "$variant")
   phonons=$(phonons_for_scenario "$scenario")
 
-  echo "Config: $cfg (scenario=$scenario variant=$variant, K=$K)" >&2
+  echo "Config: $cfg (scenario=$scenario variant=$variant, K=$K, index=$cfg_index)" >&2
 
   : > "$work/eq.list"
   : > "$work/ar.list"
@@ -571,7 +608,7 @@ for cfg in $TQ_CONFIGS; do
 
   k=1
   while [ "$k" -le "$K" ]; do
-    seed=$(seed_for "$k")
+    seed=$(seed_for "$cfg_index" "$k")
     outdir=$(mktemp -d "$work/run.XXXXXX")
     echo "  Running equal k=$k seed=$seed..." >&2
     run_case "$scenario" "$outdir" "$phonons" "$model" "$seed" equal "$TQ_DEGREE"
@@ -585,7 +622,7 @@ for cfg in $TQ_CONFIGS; do
   kend=$((2 * K))
   k=$((K + 1))
   while [ "$k" -le "$kend" ]; do
-    seed=$(seed_for "$k")
+    seed=$(seed_for "$cfg_index" "$k")
     outdir=$(mktemp -d "$work/run.XXXXXX")
     echo "  Running area k=$k seed=$seed..." >&2
     run_case "$scenario" "$outdir" "$phonons" "$model" "$seed" area "$TQ_DEGREE"
@@ -611,6 +648,7 @@ for cfg in $TQ_CONFIGS; do
 
   # Free this config's run directories before the next one.
   rm -rf "$work"/run.* "$work/eq.list" "$work/ar.list"
+  cfg_index=$((cfg_index + 1))
 done
 
 echo ""
@@ -678,7 +716,7 @@ EOF
       : > "$work/bc.rss"
       k=1
       while [ "$k" -le "$BUILD_REPS" ]; do
-        seed=$(seed_for "$k")
+        seed=$(seed_for 0 "$k")
         outdir=$(mktemp -d "$work/bcrun.XXXXXX")
         echo "  Build check: variant=$variant_label mode=$mode k=$k seed=$seed..." >&2
         run_case lopnor "$outdir" 0 "$model" "$seed" "$mode" "$BUILD_DEGREE" "$TIME_WRAPPER"
