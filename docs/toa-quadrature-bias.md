@@ -9,15 +9,16 @@ and how each is validated.
 
 ## Status
 
-Opt-in, on branch `quadrature` (cut from `anisotropy` at commit
-`319c8dd`): `--toa-quadrature=equal|area`, default `equal`. `equal` mode
-is unchanged -- byte-identical to the behavior this note has always
-described, for isotropic and anisotropic runs alike
-(`.superpowers/sdd/2026-10-25-toa-area-quadrature/global-constraints.md`).
-Design ruling R9 (the `2026-10-16`/`2026-10-17` specs) accepted the
-mechanism below as a known, documented bias rather than fixing it; this
-branch implements the fix found feasible by the `2026-10-25` design
-spec's spike as the new `area` mode
+The `--toa-quadrature=equal|area` option is opt-in, default `equal`,
+added by the `2026-10-25-toa-area-quadrature` plan (cut from `anisotropy`
+at commit `319c8dd`). `equal` mode is unchanged -- byte-identical to the
+behavior this note has always described, for isotropic and anisotropic
+runs alike (`docs/superpowers/plans/2026-10-25-toa-area-quadrature.md`'s
+Global Constraints section). Design ruling R9 (the `2026-10-16`/
+`2026-10-17` specs) accepted the mechanism below as a known, documented
+bias rather than fixing it; the `2026-10-25-toa-area-quadrature` plan
+implements the fix found feasible by its design spec's spike as the new
+`area` mode
 (`docs/superpowers/specs/2026-10-25-toa-area-quadrature-design.md`,
 decisions 1-9). `area` is not the default -- that remains a separate
 decision for project review (the same spec's non-goals).
@@ -47,13 +48,20 @@ see Isotropic effect, Anisotropic effect, and Event source, below.
 ## Isotropic effect
 
 The offset is the same for every incidence direction and consistent
-between rate and pattern. Examples: Lop Nor crust S +1.11%, P −0.04%;
-`a` = 2 km P +0.62%, S +0.78%.
+between rate and pattern. Examples, from the equal-mode numpy prototype
+(Provenance, below, not this repository's code): Lop Nor crust S +1.11%,
+P −0.04%; `a` = 2 km P +0.62%, S +0.78%.
 
 `area_iso_mfp_exact` (`tests/anisotropy_tests.cpp`) measures this same
 kind of offset directly against an exact 2-D numerical integral, for
 both quadratures, at take-off-angle degrees 5-7
-(`docs/toa-quadrature-runs-2026-10/toa_quadrature_iso.txt`):
+(`docs/toa-quadrature-runs-2026-10/toa_quadrature_iso.txt`). Its first
+row below (`a` = 0.5, `kappa` = 0.3, the same Lop Nor crust velocities
+and `kappa` as the prototype's S +1.11% example above) is an
+independent, in-repo measurement of the same quantity by a different
+method (`ExactRate()`'s own numerical quadrature against `Scatterer`,
+not the prototype); the two agree closely (+1.0893% here) but are not
+expected to match to more digits than that:
 
 | a | kappa | degree | P equal | P area | S equal | S area |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -72,8 +80,13 @@ requires the *equal* column to exceed 3e-3 at the second point (actual
 0.618% P, 0.786% S), confirming the two quadratures are actually
 discriminated rather than both happening to be small. Area weighting's
 error keeps falling with degree because, unlike the fixed per-direction
-bias equal weighting leaves in place, it is a pure discretization
-residual of the Ω_k computation itself.
+bias equal weighting leaves in place, it is the O(h²) error of the
+one-point-per-triangle quadrature rule -- evaluating the integrand once,
+at each triangle's center, rather than averaging it over the triangle --
+not a residual of the Ω_k computation itself, which is exact. That
+one-point rule's error is why it falls by about 4x with each additional
+degree: subdivision halves each triangle's linear size h, so the O(h²)
+error quarters.
 
 ## Anisotropic effect
 
@@ -206,9 +219,13 @@ mean(Ω)/Ω_k modulation described in Mechanism, above.
   sums and in-cell draws read `mPDists`, which already carries the
   weighting applied by `PopulateProbDists` above, so they inherit it with
   no code change; its bounds (`BoundRatio()`/`AcceptanceBound()`, a ratio
-  of a cell's proposal weight to that cell's `mPDists` sum) stay
-  numerically unchanged in either mode. `area_axi_bounds_valid` and
-  `area_axi_matches_general` confirm this.
+  of a cell's proposal weight to that cell's `mPDists` sum) stay valid in
+  either mode; for a cell whose weight comes from the `kWeightFloor`
+  floor rather than `BoundRatio()` (`BuildBinTable()`, `aniso_axi.cpp`),
+  the floor itself scales with the weighted `mPDists` sums, so the
+  bound's value does change between modes there -- always looser, never
+  invalid. `area_axi_bounds_valid` and `area_axi_matches_general`
+  confirm this.
 - `GetRandomScatteredRelativePhonon` (`scatterers.cpp`) and the general
   sampler's majorant -- also unchanged code, inheriting the weighted
   tables the same way.
@@ -306,36 +323,47 @@ provenance lines verbatim, and `--event-test` ignoring the option
 
 A manual script, `tests/compare_toa_quadrature.sh`, compares replicate
 runs (`equal` against `area`) of Lop Nor and crust pinch, isotropic and
-axisymmetric r=4, at take-off-angle degree 7 (K=4 replicates per mode,
-seed base 596, 24 threads). Full output is
+axisymmetric r=4, at take-off-angle degree 7 (K=12 replicates per mode,
+seed base 596, 24 threads, each configuration drawing from its own
+independent seed block so no two configurations -- or modes -- ever
+share a seed; see that script's header comment, "Seeds"). Full output is
 `docs/toa-quadrature-runs-2026-10/compare-toa-quadrature.out`; see that
 directory's `README.md` for the complete provenance and run parameters.
 
 **Energy table.** For each configuration and station, r_s = mean(station
-energy, area)/mean(station energy, equal) across the K=4 replicates,
+energy, area)/mean(station energy, equal) across the K=12 replicates,
 with SE(r_s) from first-order error propagation on the two means'
 standard errors (`tests/compare_toa_quadrature.sh`'s header comment), and
 z = (r_s − 1)/SE(r_s). A matching "all stations" row, R, applies the same
 ratio to each replicate's whole-scenario total instead of one station.
 
-At the whole-scenario level, none of the four configurations' "all
-stations" ratios are resolved at 2 SE: lopnor:iso z=+1.67, lopnor:axi4
-z=+1.66, crustpinch:iso z=−1.89, crustpinch:axi4 z=−1.79 (all |z|<2).
-With only K=4 replicates, this run cannot distinguish a genuine few-
-percent scenario-wide energy shift from replicate noise.
+At the whole-scenario level, three of the four configurations are not
+resolved at 2 SE: R = 1.0043 ± 0.0287 for lopnor:iso (z=+0.150), 1.0018 ±
+0.0307 for lopnor:axi4 (z=+0.058), and 0.9958 ± 0.0668 for crustpinch:iso
+(z=−0.063) -- consistent with no net scenario-wide shift, though each
+SE is wide enough that a few-percent shift still cannot be excluded. The
+fourth is resolved well past 3 SE: crustpinch:axi4's R = 0.8521 ± 0.0426
+(z=−3.475), `area` mode's total scenario energy about 14.8% lower than
+`equal` mode's.
 
-At the individual-station level, most of the 80 station-rows (16+16+24+
-24, one set per configuration) are likewise consistent with noise, but
-two are not: lopnor:iso station 1 moved from a mean energy of 0.2718 to
-0.3266 (r=1.202, z=+5.61), and crustpinch:iso station 23 moved from
-1.207e-4 to 5.991e-5 (r=0.496, z=−3.98) -- both low-amplitude stations,
-where a few phonons changing direction bin is a large fraction of a
-small total. No other station-row, in any of the four configurations,
-reaches |z|=3 (the next-largest magnitudes are 2.93 in lopnor:axi4 and
-2.75 in crustpinch:axi4). These two individual moves are real at this
-replicate count, but they do not establish a scenario-wide pattern: most
-stations' z stay under 2, and the "all stations" rows above show no
-resolved net shift.
+At the individual-station level, 17 of the 80 station-rows (16+16+24+24,
+one set per configuration) have |z| >= 2, and 4 reach |z| >= 3 (1 in
+lopnor:iso, 1 in lopnor:axi4, 0 in crustpinch:iso, 2 in crustpinch:axi4
+-- the same count the energy table's "flagged" column gives). At K=12
+per mode, z behaves approximately like a Student-t variate with 11 to 22
+degrees of freedom (Welch's two-sample bounds for two groups of n=12
+each: n−1=11 when one mode's variance dominates the other's, up to
+2n−2=22 when the two variances match); the corresponding two-sided tail
+probabilities, P(|T| >= 2) ≈ 0.058-0.071 and P(|T| >= 3) ≈ 0.0066-0.012,
+put the noise expectation across 80 rows at about 4.6-5.7 rows with
+|z| >= 2 and about 0.5-1.0 with |z| >= 3 -- both well below the observed
+17 and 4. The three largest-energy stations in crustpinch:axi4 (stations
+0, 8 and 16, each near 1.08-1.09 mean equal-mode energy, more than an
+order of magnitude above every other station in that scenario) are all
+among the |z| >= 2 rows, all with the same (negative) sign (z=−4.089,
+−2.379, −3.059). lopnor:iso and lopnor:axi4's station-level z's are
+predominantly positive (15 of 16, and 13 of 16, respectively), even
+though neither configuration's whole-scenario R above is resolved.
 
 **MFP table.** From the first run of each mode (not replicated, so no
 SE): across the isotropic layers, P mean free paths move by −0.33% to
@@ -346,14 +374,14 @@ per-region shifts (S always shrinking, P usually growing slightly) is
 consistent with the isotropic and anisotropic per-degree findings above.
 
 **Degree-9 build check.** Lop Nor at degree 9, 24 threads, median of 3
-runs: `area` mode's build time is 0.29 s slower for an isotropic model
-(3.810 s to 4.100 s) and 0.32 s slower for the full 20-region
-axisymmetric model (4.470 s to 4.790 s) -- both "a few tenths of a
+runs: `area` mode's build time is 0.26 s slower for an isotropic model
+(3.780 s to 4.040 s) and 0.33 s slower for the full 20-region
+axisymmetric model (4.380 s to 4.710 s) -- both "a few tenths of a
 second," as expected (design spec feasibility spike: "about 0.2 s" for
 the solid-angle computation alone). The exact extra storage at degree 9
 is 41.9 MB (20·4^9 = 5,242,880 directions × 8 bytes;
 `docs/toa-quadrature-runs-2026-10/README.md`); the build check's measured
-maximum-RSS deltas (+78.0 MB for the isotropic variant, +28.6 MB for the
+maximum-RSS deltas (+52.9 MB for the isotropic variant, +71.1 MB for the
 20-region axisymmetric one) are noisier than this exact figure, swamped
 by several-GB-process allocator noise at only 3 replicates per cell --
 see that README's "Fix round 1" section for the full accounting. The

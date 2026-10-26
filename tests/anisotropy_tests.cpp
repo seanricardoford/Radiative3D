@@ -4521,14 +4521,32 @@ TEST(quadrature_mode_switch) {
   // mode and SolidAngles()[k]*(N/(4*Pi)) in TOA_AREA mode, summing to N
   // either way; and a rejected Set_TOA_Array() call (missing solid
   // angles) must leave the array, mode and weights completely
-  // unchanged.
+  // unchanged. 'plain' is deliberately a different degree (2, not 3)
+  // from 'withSA': if a bug let the rejected call below swap the active
+  // array anyway, that would change nTOA and every weight, so a
+  // same-degree 'plain' (as a prior version of this test used) could
+  // leave such a bug unnoticed.
 
-  S2::TesselSphere plain(S2::TESS_ICO, 3);
+  S2::TesselSphere plain(S2::TESS_ICO, 2);
   S2::TesselSphere withSA(S2::TESS_ICO, 3, true);
 
   struct WeightProbe : public PhononSource {
     static Real W(Index k) {return TOAWeight(k);}
+    static int N() {return nTOA;}
   };
+
+  // Set_TOA_Array() points the class-level array at whichever
+  // TesselSphere it was last (successfully) given; both spheres above
+  // live on the stack, so if this test throws (a failed CHECK, below)
+  // before that pointer is back on UseTOADegree()'s own heap-owned
+  // cache, a later test that doesn't call UseTOADegree() itself would
+  // inherit a dangling pointer once 'plain'/'withSA' are destroyed.
+  // This guard's destructor restores the usual degree-5 TOA_EQUAL state
+  // on every exit -- success or a CHECK failure alike -- and, being
+  // declared after both spheres, runs before they are destroyed.
+  struct RestoreDegree5 {
+    ~RestoreDegree5() {UseTOADegree(5);}
+  } restoreDegree5;
 
   PhononSource::Set_TOA_Array(&withSA, PhononSource::TOA_AREA);
   CHECK(PhononSource::Get_TOA_Quadrature() == PhononSource::TOA_AREA);
@@ -4556,13 +4574,22 @@ TEST(quadrature_mode_switch) {
            "a Set_TOA_Array() call rejected for missing solid angles "
            "must leave the previous mode (TOA_AREA) unchanged");
 
+  // The rejection must leave the array and its weights untouched too,
+  // not just the mode: re-check nTOA (via the probe) and every W(k)
+  // against withSA's own area weights, exactly as above. Since 'plain'
+  // is a different size than 'withSA' and was never given solid angles,
+  // a wrongly-swapped array could not pass either check.
+  CHECK(WeightProbe::N() == (int) withSA.size());
+  for (std::size_t k = 0; k < withSA.size(); ++k) {
+    CHECK(NearRel(WeightProbe::W((Index) k),
+                 withSA.SolidAngles()[k] * areaScale, 1e-14));
+  }
+
   PhononSource::Set_TOA_Array(&withSA);   // quad defaults to TOA_EQUAL.
   CHECK(PhononSource::Get_TOA_Quadrature() == PhononSource::TOA_EQUAL);
   for (std::size_t k = 0; k < withSA.size(); ++k) {
     CHECK(WeightProbe::W((Index) k) == 1.0);
   }
-
-  UseTOADegree(5);   // Leave the usual state for later tests.
 
 }
 

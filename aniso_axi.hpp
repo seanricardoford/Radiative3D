@@ -419,9 +419,17 @@ private:
                                          // AcceptanceBound()) are ratios
                                          // of a cell's proposal weight to
                                          // that same cell's mPDists sum,
-                                         // so they stay valid, and
-                                         // numerically unchanged, in
-                                         // either mode.
+                                         // so they stay valid in either
+                                         // mode; where kWeightFloor
+                                         // (BuildBinTable(), aniso_axi.
+                                         // cpp) sets that weight instead
+                                         // of BoundRatio(), the floor
+                                         // itself scales with the
+                                         // (now-weighted) mPDists sums,
+                                         // so the bound's numeric value
+                                         // does change between modes
+                                         // there -- always looser, never
+                                         // invalid.
 
   Index mToaSize;
   Index mNumCells;

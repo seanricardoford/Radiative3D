@@ -297,9 +297,11 @@ void Triangle::populate_lists() {
     // evaluated on THIS triangle's own three vertices -- not on the
     // quadrisection nodes q1,q2,q3, which populate_lists() never
     // touches and which don't even exist yet when degree==0 (subdivide()
-    // computes them only when degree>0). A throwaway prototype
-    // confirmed this reproduces the expected whole-sphere and
-    // per-triangle statistics; see task-1-brief.md.
+    // computes them only when degree>0). This reproduces the expected
+    // whole-sphere and per-triangle statistics: tests/anisotropy_tests.
+    // cpp's tessel_solid_angles checks the whole set sums to 4*pi at
+    // every degree and, at degree >= 6, that the leaf-to-leaf spread
+    // (min/mean, max/mean, rms) has settled into a fixed pattern.
     const R3::XYZ v1(n1.x(), n1.y(), n1.z());
     const R3::XYZ v2(n2.x(), n2.y(), n2.z());
     const R3::XYZ v3(n3.x(), n3.y(), n3.z());
